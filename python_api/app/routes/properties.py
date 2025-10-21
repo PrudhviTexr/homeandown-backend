@@ -328,34 +328,39 @@ async def create_property(property_data: dict):
         if 'longitude' in property_data and (property_data['longitude'] is None or property_data['longitude'] == '' or property_data['longitude'] == 'NA'):
             property_data['longitude'] = None
         
-        # Auto-populate location fields from pincode
+        # Auto-populate location fields from pincode (suggested values, editable)
         if property_data.get('zip_code'):
             try:
                 from ..services.location_service import LocationService
                 location_data = await LocationService.get_pincode_location_data(property_data['zip_code'])
                 
                 if location_data.get('auto_populated'):
-                    # Auto-populate location fields
+                    suggested_fields = location_data.get('suggested_fields', {})
+                    
+                    # Auto-populate empty fields with suggested values (but allow editing)
                     if not property_data.get('country'):
-                        property_data['country'] = location_data.get('country')
+                        property_data['country'] = suggested_fields.get('country')
                     if not property_data.get('state'):
-                        property_data['state'] = location_data.get('state')
+                        property_data['state'] = suggested_fields.get('state')
                     if not property_data.get('district'):
-                        property_data['district'] = location_data.get('district')
+                        property_data['district'] = suggested_fields.get('district')
                     if not property_data.get('mandal'):
-                        property_data['mandal'] = location_data.get('mandal')
+                        property_data['mandal'] = suggested_fields.get('mandal')
                     if not property_data.get('city'):
-                        property_data['city'] = location_data.get('city')
+                        property_data['city'] = suggested_fields.get('city')
+                    if not property_data.get('address'):
+                        property_data['address'] = suggested_fields.get('address')
                     
-                    # Auto-set coordinates
-                    if location_data.get('latitude') and location_data.get('longitude'):
+                    # Auto-set coordinates if not provided
+                    if suggested_fields.get('latitude') and suggested_fields.get('longitude'):
                         if property_data.get('latitude') is None:
-                            property_data['latitude'] = location_data['latitude']
+                            property_data['latitude'] = suggested_fields['latitude']
                         if property_data.get('longitude') is None:
-                            property_data['longitude'] = location_data['longitude']
+                            property_data['longitude'] = suggested_fields['longitude']
                     
-                    print(f"[PROPERTIES] Auto-populated location fields from pincode {property_data['zip_code']}")
-                    print(f"[PROPERTIES] Location: {location_data.get('city')}, {location_data.get('district')}, {location_data.get('state')}")
+                    print(f"[PROPERTIES] Auto-populated suggested location fields from pincode {property_data['zip_code']}")
+                    print(f"[PROPERTIES] Suggested Location: {suggested_fields.get('city')}, {suggested_fields.get('district')}, {suggested_fields.get('state')}")
+                    print(f"[PROPERTIES] Suggested Address: {suggested_fields.get('address')}")
             except Exception as location_error:
                 print(f"[PROPERTIES] Failed to auto-populate location from pincode: {location_error}")
         
@@ -1306,3 +1311,38 @@ async def get_pincode_location(pincode: str):
     except Exception as e:
         print(f"[PROPERTIES] Error fetching pincode location: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch pincode location: {str(e)}")
+
+@router.get("/pincode/{pincode}/suggestions", tags=["properties"])
+async def get_pincode_suggestions(pincode: str):
+    """Get suggested field values for a pincode - for form auto-population"""
+    try:
+        print(f"[PROPERTIES] Fetching suggestions for pincode: {pincode}")
+        
+        from ..services.location_service import LocationService
+        
+        # Get complete location data
+        location_data = await LocationService.get_pincode_location_data(pincode)
+        
+        if not location_data.get('auto_populated'):
+            raise HTTPException(status_code=404, detail=f"No location data found for pincode {pincode}")
+        
+        # Return only the suggested fields for easy frontend integration
+        suggestions = {
+            "pincode": pincode,
+            "suggestions": location_data.get('suggested_fields', {}),
+            "map_data": {
+                "coordinates": location_data.get('coordinates'),
+                "map_bounds": location_data.get('map_bounds')
+            },
+            "editable": True,
+            "message": "These are suggested values. All fields can be edited."
+        }
+        
+        print(f"[PROPERTIES] Successfully fetched suggestions for pincode {pincode}")
+        return suggestions
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[PROPERTIES] Error fetching pincode suggestions: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch pincode suggestions: {str(e)}")
