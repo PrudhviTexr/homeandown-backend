@@ -196,8 +196,9 @@ async def get_properties(
             # Property passed all filters
             filtered_properties.append(enhanced_prop)
 
-        # Fetch images for all properties that don't have them
+        # Fetch images for all properties that don't have them and ensure coordinates
         for prop in filtered_properties:
+            # Handle images
             if not prop.get('images') or len(prop.get('images', [])) == 0:
                 try:
                     image_docs = await db.select("documents", filters={
@@ -216,6 +217,17 @@ async def get_properties(
                             prop['images'] = image_urls
                 except Exception as img_err:
                     print(f"[PROPERTIES] Failed to fetch images for property {prop.get('id')}: {img_err}")
+            
+            # Ensure coordinates are never null to prevent map crashes
+            if prop.get('latitude') is None or prop.get('longitude') is None:
+                # Default coordinates for Hyderabad, India
+                default_lat = 17.3850
+                default_lon = 78.4867
+                
+                if prop.get('latitude') is None:
+                    prop['latitude'] = default_lat
+                if prop.get('longitude') is None:
+                    prop['longitude'] = default_lon
 
         print(f"[PROPERTIES] Returning {len(filtered_properties)} filtered properties")
         return filtered_properties
@@ -330,6 +342,19 @@ async def create_property(property_data: dict):
                     print(f"[PROPERTIES] Auto-set coordinates from pincode {property_data['zip_code']}: {lat}, {lon}")
             except Exception as coord_error:
                 print(f"[PROPERTIES] Failed to get coordinates: {coord_error}")
+        
+        # Set default coordinates for Hyderabad if still missing (to prevent map crashes)
+        if property_data.get('latitude') is None or property_data.get('longitude') is None:
+            # Default coordinates for Hyderabad, India
+            default_lat = 17.3850
+            default_lon = 78.4867
+            
+            if property_data.get('latitude') is None:
+                property_data['latitude'] = default_lat
+            if property_data.get('longitude') is None:
+                property_data['longitude'] = default_lon
+            
+            print(f"[PROPERTIES] Set default coordinates for Hyderabad: {default_lat}, {default_lon}")
         
         # Remove sections from property_data as it's handled separately
         sections_data = property_data.pop('sections', None)
@@ -718,6 +743,19 @@ async def get_property(property_id: str):
             except Exception as img_err:
                 print(f"[PROPERTIES] Failed to fetch images from documents: {img_err}")
         
+        # Ensure coordinates are never null to prevent map crashes
+        if property_data.get('latitude') is None or property_data.get('longitude') is None:
+            # Default coordinates for Hyderabad, India
+            default_lat = 17.3850
+            default_lon = 78.4867
+            
+            if property_data.get('latitude') is None:
+                property_data['latitude'] = default_lat
+            if property_data.get('longitude') is None:
+                property_data['longitude'] = default_lon
+            
+            print(f"[PROPERTIES] Set default coordinates for property {property_id}: {default_lat}, {default_lon}")
+        
         return property_data
         
     except HTTPException:
@@ -769,6 +807,19 @@ async def update_property(property_id: str, update_data: dict):
         
         # Update timestamp
         update_data['updated_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
+        
+        # Handle coordinates - ensure they're never null to prevent map crashes
+        if 'latitude' in update_data and (update_data['latitude'] is None or update_data['latitude'] == '' or update_data['latitude'] == 'NA'):
+            update_data['latitude'] = None
+        if 'longitude' in update_data and (update_data['longitude'] is None or update_data['longitude'] == '' or update_data['longitude'] == 'NA'):
+            update_data['longitude'] = None
+        
+        # Set default coordinates if both are missing (to prevent map crashes)
+        if (update_data.get('latitude') is None and update_data.get('longitude') is None):
+            # Default coordinates for Hyderabad, India
+            update_data['latitude'] = 17.3850
+            update_data['longitude'] = 78.4867
+            print(f"[PROPERTIES] Set default coordinates for update: {update_data['latitude']}, {update_data['longitude']}")
         
         # Remove sections from update_data as it's handled separately
         sections_data = update_data.pop('sections', None)
