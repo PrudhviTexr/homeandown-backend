@@ -19,15 +19,18 @@ supabase/
 # Test reports (frontend related)
 test_reports/
 
-# Scripts (frontend related)
+# Scripts (frontend related) - exclude root scripts, allow python_api/scripts
 scripts/
+!python_api/scripts/
 
 # Postman collections (if not backend specific)
 postman/
 
-# Root level files (frontend related)
+# Root level files (frontend related) - exclude root README/render, allow python_api versions
 README.md
 render.yaml
+!python_api/README.md
+!python_api/render.yaml
 
 # Python cache files
 __pycache__/
