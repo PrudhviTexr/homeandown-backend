@@ -332,7 +332,7 @@ async def create_property(property_data: dict):
         if (property_data.get('latitude') is None or property_data.get('longitude') is None) and property_data.get('zip_code'):
             try:
                 from ..services.location_service import LocationService
-                coordinates = LocationService.get_coordinates_from_pincode(property_data['zip_code'])
+                coordinates = await LocationService.get_coordinates_from_pincode(property_data['zip_code'])
                 if coordinates:
                     lat, lon = coordinates
                     if property_data.get('latitude') is None:
@@ -1267,3 +1267,40 @@ async def create_property_review(property_id: str, data: dict):
         raise HTTPException(status_code=500, detail=f"Error creating review: {str(e)}")
 
         raise HTTPException(status_code=500, detail=f"Error fetching contact: {str(e)}")
+
+@router.get("/pincode/{pincode}", tags=["properties"])
+async def get_pincode_location(pincode: str):
+    """Get coordinates and location details for a pincode"""
+    try:
+        print(f"[PROPERTIES] Fetching location for pincode: {pincode}")
+        
+        from ..services.location_service import LocationService
+        
+        # Get coordinates
+        coordinates = await LocationService.get_coordinates_from_pincode(pincode)
+        
+        if not coordinates:
+            raise HTTPException(status_code=404, detail=f"No location found for pincode {pincode}")
+        
+        lat, lon = coordinates
+        
+        # Get additional location details from postal API
+        location_details = await LocationService.get_pincode_details(pincode)
+        
+        response_data = {
+            "pincode": pincode,
+            "latitude": lat,
+            "longitude": lon,
+            "coordinates": [lat, lon],  # For map centering
+            "location_details": location_details,
+            "map_bounds": LocationService.calculate_pincode_bounds(lat, lon)
+        }
+        
+        print(f"[PROPERTIES] Successfully fetched location for pincode {pincode}: {lat}, {lon}")
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[PROPERTIES] Error fetching pincode location: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch pincode location: {str(e)}")
