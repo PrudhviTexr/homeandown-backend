@@ -133,6 +133,7 @@ class LocationService:
     def _get_from_nominatim(pincode: str) -> Optional[Tuple[float, float]]:
         """Get coordinates from OpenStreetMap Nominatim API (free)"""
         try:
+            print(f"[LOCATION] Trying Nominatim API for pincode {pincode}")
             response = requests.get(
                 f"https://nominatim.openstreetmap.org/search",
                 params={
@@ -141,41 +142,64 @@ class LocationService:
                     'format': 'json',
                     'limit': 1
                 },
-                headers={'User-Agent': 'HomeAndOwn/1.0'},
-                timeout=10
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
+                timeout=15
             )
+            
+            print(f"[LOCATION] Nominatim response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
+                print(f"[LOCATION] Nominatim response data: {data}")
                 if data and len(data) > 0:
                     lat = float(data[0]['lat'])
                     lon = float(data[0]['lon'])
-                    return (lat, lon)
+                    if lat != 0 and lon != 0:
+                        print(f"[LOCATION] Nominatim found coordinates for {pincode}: {lat}, {lon}")
+                        return (lat, lon)
+                else:
+                    print(f"[LOCATION] Nominatim returned empty results for {pincode}")
+            else:
+                print(f"[LOCATION] Nominatim returned status {response.status_code}: {response.text}")
         except Exception as e:
-            print(f"[LOCATION] Nominatim API error: {e}")
+            print(f"[LOCATION] Nominatim API error for {pincode}: {e}")
         return None
     
     @staticmethod
     def _get_from_postalpincode(pincode: str) -> Optional[Tuple[float, float]]:
         """Get coordinates from PostalPincode API"""
         try:
+            print(f"[LOCATION] Trying PostalPincode API for pincode {pincode}")
             response = requests.get(
                 f"https://api.postalpincode.in/pincode/{pincode}",
-                timeout=10
+                timeout=15,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             )
+            
+            print(f"[LOCATION] PostalPincode response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
+                print(f"[LOCATION] PostalPincode response data: {data}")
                 if data and len(data) > 0 and data[0].get('Status') == 'Success':
                     post_office = data[0]['PostOffice'][0]
                     city = post_office.get('District', '')
                     state = post_office.get('State', '')
                     
+                    print(f"[LOCATION] PostalPincode found city: {city}, state: {state}")
+                    
                     # Use city and state to get coordinates
                     if city and state:
-                        return LocationService._get_coordinates_from_city_state(city, state)
+                        coords = LocationService._get_coordinates_from_city_state(city, state)
+                        if coords:
+                            print(f"[LOCATION] PostalPincode found coordinates via city/state: {coords}")
+                            return coords
+                else:
+                    print(f"[LOCATION] PostalPincode returned unsuccessful status: {data}")
+            else:
+                print(f"[LOCATION] PostalPincode returned status {response.status_code}: {response.text}")
         except Exception as e:
-            print(f"[LOCATION] PostalPincode API error: {e}")
+            print(f"[LOCATION] PostalPincode API error for {pincode}: {e}")
         return None
     
     @staticmethod
@@ -203,6 +227,7 @@ class LocationService:
         """Get coordinates from city and state using Nominatim"""
         try:
             query = f"{city}, {state}, India"
+            print(f"[LOCATION] Geocoding city/state: {query}")
             response = requests.get(
                 f"https://nominatim.openstreetmap.org/search",
                 params={
@@ -210,16 +235,25 @@ class LocationService:
                     'format': 'json',
                     'limit': 1
                 },
-                headers={'User-Agent': 'HomeAndOwn/1.0'},
-                timeout=10
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
+                timeout=15
             )
+            
+            print(f"[LOCATION] City/State geocoding response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
+                print(f"[LOCATION] City/State geocoding response data: {data}")
                 if data and len(data) > 0:
                     lat = float(data[0]['lat'])
                     lon = float(data[0]['lon'])
-                    return (lat, lon)
+                    if lat != 0 and lon != 0:
+                        print(f"[LOCATION] City/State geocoding found coordinates: {lat}, {lon}")
+                        return (lat, lon)
+                else:
+                    print(f"[LOCATION] City/State geocoding returned empty results")
+            else:
+                print(f"[LOCATION] City/State geocoding returned status {response.status_code}: {response.text}")
         except Exception as e:
             print(f"[LOCATION] City/State geocoding error: {e}")
         return None
@@ -425,18 +459,26 @@ class LocationService:
         try:
             print(f"[LOCATION] Fetching complete location data for pincode: {pincode}")
             
+            # Try the postal pincode API first
             response = requests.get(
                 f"https://api.postalpincode.in/pincode/{pincode}",
-                timeout=10
+                timeout=15,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             )
+            
+            print(f"[LOCATION] API Response Status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
+                print(f"[LOCATION] API Response Data: {data}")
+                
                 if data and len(data) > 0 and data[0].get('Status') == 'Success':
                     post_office = data[0]['PostOffice'][0]
+                    print(f"[LOCATION] Post Office Data: {post_office}")
                     
-                    # Get coordinates
+                    # Get coordinates using multiple methods
                     coordinates = await LocationService.get_coordinates_from_pincode(pincode)
+                    print(f"[LOCATION] Coordinates: {coordinates}")
                     
                     # Create a comprehensive address from the location data
                     address_parts = []
@@ -483,21 +525,97 @@ class LocationService:
                     
                     print(f"[LOCATION] Successfully fetched location data for pincode {pincode}")
                     return location_data
-                    
+                else:
+                    print(f"[LOCATION] API returned unsuccessful status: {data}")
+            else:
+                print(f"[LOCATION] API returned status {response.status_code}: {response.text}")
+                
         except Exception as e:
             print(f"[LOCATION] Error fetching complete location data: {e}")
-            
-            # Fallback: Use hardcoded data for common pincodes
-            fallback_data = LocationService._get_fallback_pincode_data(pincode)
-            if fallback_data:
-                print(f"[LOCATION] Using fallback data for pincode {pincode}")
-                return fallback_data
         
+        # If postal API fails, try alternative geocoding methods
+        print(f"[LOCATION] Trying alternative geocoding methods for pincode {pincode}")
+        try:
+            # Try to get coordinates and reverse geocode
+            coordinates = await LocationService.get_coordinates_from_pincode(pincode)
+            if coordinates:
+                # Try to reverse geocode to get location details
+                reverse_data = await LocationService._reverse_geocode_coordinates(coordinates[0], coordinates[1])
+                if reverse_data:
+                    location_data = {
+                        "pincode": pincode,
+                        "country": reverse_data.get('country', 'India'),
+                        "state": reverse_data.get('state', ''),
+                        "district": reverse_data.get('district', ''),
+                        "mandal": reverse_data.get('mandal', ''),
+                        "city": reverse_data.get('city', ''),
+                        "address": reverse_data.get('address', ''),
+                        "latitude": coordinates[0],
+                        "longitude": coordinates[1],
+                        "coordinates": coordinates,
+                        "map_bounds": LocationService.calculate_pincode_bounds(coordinates[0], coordinates[1]),
+                        "auto_populated": True,
+                        "editable_fields": True,
+                        "suggested_fields": {
+                            "country": reverse_data.get('country', 'India'),
+                            "state": reverse_data.get('state', ''),
+                            "district": reverse_data.get('district', ''),
+                            "mandal": reverse_data.get('mandal', ''),
+                            "city": reverse_data.get('city', ''),
+                            "address": reverse_data.get('address', ''),
+                            "latitude": coordinates[0],
+                            "longitude": coordinates[1]
+                        }
+                    }
+                    print(f"[LOCATION] Successfully fetched location data via reverse geocoding for pincode {pincode}")
+                    return location_data
+        except Exception as e:
+            print(f"[LOCATION] Reverse geocoding failed: {e}")
+        
+        # Last resort: Return error with pincode info
         return {
             "pincode": pincode,
-            "error": "Unable to fetch location data",
-            "auto_populated": False
+            "error": f"No location data found for pincode {pincode}",
+            "auto_populated": False,
+            "suggested_fields": {
+                "country": "India",
+                "state": "",
+                "district": "",
+                "mandal": "",
+                "city": "",
+                "address": "",
+                "latitude": None,
+                "longitude": None
+            }
         }
+    
+    @staticmethod
+    async def _reverse_geocode_coordinates(lat: float, lon: float) -> Optional[Dict[str, Any]]:
+        """Reverse geocode coordinates to get location details"""
+        try:
+            # Use Nominatim for reverse geocoding
+            response = requests.get(
+                f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&addressdetails=1",
+                timeout=10,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                address = data.get('address', {})
+                
+                return {
+                    'country': address.get('country', 'India'),
+                    'state': address.get('state', ''),
+                    'district': address.get('county', '') or address.get('district', ''),
+                    'mandal': address.get('suburb', '') or address.get('village', ''),
+                    'city': address.get('city', '') or address.get('town', '') or address.get('village', ''),
+                    'address': data.get('display_name', '')
+                }
+        except Exception as e:
+            print(f"[LOCATION] Reverse geocoding error: {e}")
+        
+        return None
     
     @staticmethod
     def _get_fallback_pincode_data(pincode: str) -> Optional[Dict[str, Any]]:
