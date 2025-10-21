@@ -396,19 +396,72 @@ class LocationService:
                 if data and len(data) > 0 and data[0].get('Status') == 'Success':
                     post_office = data[0]['PostOffice'][0]
                     return {
-                        "district": post_office.get('District', ''),
+                        "country": post_office.get('Country', 'India'),
                         "state": post_office.get('State', ''),
-                        "city": post_office.get('Name', ''),
+                        "district": post_office.get('District', ''),
+                        "mandal": post_office.get('Name', ''),  # Name field is actually mandal
+                        "city": post_office.get('Name', ''),  # For city field
                         "region": post_office.get('Region', ''),
                         "division": post_office.get('Division', ''),
                         "circle": post_office.get('Circle', ''),
-                        "taluk": post_office.get('Taluk', ''),
-                        "country": post_office.get('Country', 'India')
+                        "block": post_office.get('Block', ''),
+                        "branch_type": post_office.get('BranchType', ''),
+                        "delivery_status": post_office.get('DeliveryStatus', '')
                     }
         except Exception as e:
             print(f"[LOCATION] Error fetching pincode details: {e}")
         
         return {}
+    
+    @staticmethod
+    async def get_pincode_location_data(pincode: str) -> Dict[str, Any]:
+        """Get complete location data for property form auto-population"""
+        try:
+            print(f"[LOCATION] Fetching complete location data for pincode: {pincode}")
+            
+            response = requests.get(
+                f"https://api.postalpincode.in/pincode/{pincode}",
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data and len(data) > 0 and data[0].get('Status') == 'Success':
+                    post_office = data[0]['PostOffice'][0]
+                    
+                    # Get coordinates
+                    coordinates = await LocationService.get_coordinates_from_pincode(pincode)
+                    
+                    location_data = {
+                        "pincode": pincode,
+                        "country": post_office.get('Country', 'India'),
+                        "state": post_office.get('State', ''),
+                        "district": post_office.get('District', ''),
+                        "mandal": post_office.get('Name', ''),  # Name field is mandal
+                        "city": post_office.get('Name', ''),  # For city field
+                        "region": post_office.get('Region', ''),
+                        "division": post_office.get('Division', ''),
+                        "circle": post_office.get('Circle', ''),
+                        "block": post_office.get('Block', ''),
+                        "latitude": coordinates[0] if coordinates else None,
+                        "longitude": coordinates[1] if coordinates else None,
+                        "coordinates": coordinates if coordinates else None,
+                        "map_bounds": LocationService.calculate_pincode_bounds(coordinates[0], coordinates[1]) if coordinates else None,
+                        "auto_populated": True,
+                        "fields_locked": ["country", "state", "district", "mandal", "city", "latitude", "longitude"]
+                    }
+                    
+                    print(f"[LOCATION] Successfully fetched location data for pincode {pincode}")
+                    return location_data
+                    
+        except Exception as e:
+            print(f"[LOCATION] Error fetching complete location data: {e}")
+        
+        return {
+            "pincode": pincode,
+            "error": "Unable to fetch location data",
+            "auto_populated": False
+        }
     
     @staticmethod
     def calculate_pincode_bounds(lat: float, lon: float, radius_km: float = 5.0) -> Dict[str, float]:
