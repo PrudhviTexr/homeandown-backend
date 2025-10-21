@@ -333,10 +333,10 @@ async def create_property(property_data: dict):
             try:
                 from ..services.location_service import LocationService
                 location_data = await LocationService.get_pincode_location_data(property_data['zip_code'])
-                
+
                 if location_data.get('auto_populated'):
                     suggested_fields = location_data.get('suggested_fields', {})
-                    
+
                     # Auto-populate empty fields with suggested values (but allow editing)
                     if not property_data.get('country'):
                         property_data['country'] = suggested_fields.get('country')
@@ -350,19 +350,21 @@ async def create_property(property_data: dict):
                         property_data['city'] = suggested_fields.get('city')
                     if not property_data.get('address'):
                         property_data['address'] = suggested_fields.get('address')
-                    
+
                     # Auto-set coordinates if not provided
                     if suggested_fields.get('latitude') and suggested_fields.get('longitude'):
                         if property_data.get('latitude') is None:
                             property_data['latitude'] = suggested_fields['latitude']
                         if property_data.get('longitude') is None:
                             property_data['longitude'] = suggested_fields['longitude']
-                    
+
                     print(f"[PROPERTIES] Auto-populated suggested location fields from pincode {property_data['zip_code']}")
                     print(f"[PROPERTIES] Suggested Location: {suggested_fields.get('city')}, {suggested_fields.get('district')}, {suggested_fields.get('state')}")
                     print(f"[PROPERTIES] Suggested Address: {suggested_fields.get('address')}")
             except Exception as location_error:
                 print(f"[PROPERTIES] Failed to auto-populate location from pincode: {location_error}")
+                # Don't fail property creation if pincode lookup fails
+                # Just log the error and continue
         
         # Set default coordinates for Hyderabad if still missing (to prevent map crashes)
         if property_data.get('latitude') is None or property_data.get('longitude') is None:

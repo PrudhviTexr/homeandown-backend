@@ -178,7 +178,8 @@ async def create_inquiry(inquiry: InquiryRequest):
         
         # Auto-assign agent based on property
         from ..services.agent_assignment import AgentAssignmentService
-        assignment_result = await AgentAssignmentService.assign_agent_to_inquiry(created.get('id'), inquiry.property_id)
+        inquiry_id = created[0]["id"] if created and len(created) > 0 else inquiry_data["id"]
+        assignment_result = await AgentAssignmentService.assign_agent_to_inquiry(inquiry_id, inquiry.property_id)
         if assignment_result.get('success'):
             print(f"[RECORDS] Agent assigned to inquiry: {assignment_result.get('message')}")
         else:
@@ -310,9 +311,27 @@ async def create_inquiry(inquiry: InquiryRequest):
         raise HTTPException(status_code=500, detail=f"Failed to create inquiry: {str(e)}")
 
 @router.post("/bookings")
-async def create_booking(booking: BookingRequest, request: Request):
+async def create_booking(booking_data: dict, request: Request):
     try:
-        print(f"[RECORDS] Creating booking for property: {booking.property_id}")
+        print(f"[RECORDS] Creating booking for property: {booking_data.get('property_id')}")
+        print(f"[RECORDS] Received booking data: {booking_data}")
+        
+        # Validate required fields
+        required_fields = ['property_id', 'name', 'email', 'booking_date', 'booking_time']
+        missing_fields = []
+        
+        for field in required_fields:
+            if not booking_data.get(field):
+                missing_fields.append(field)
+        
+        if missing_fields:
+            print(f"[RECORDS] Missing required fields: {missing_fields}")
+            raise HTTPException(status_code=400, detail=f"Missing required fields: {', '.join(missing_fields)}")
+        
+        # Handle preferred_time field (frontend sends this instead of booking_time)
+        if 'preferred_time' in booking_data and not booking_data.get('booking_time'):
+            booking_data['booking_time'] = booking_data['preferred_time']
+            print(f"[RECORDS] Mapped preferred_time to booking_time: {booking_data['booking_time']}")
         
         # Try to get user_id from authentication if available
         user_id = None
@@ -334,17 +353,17 @@ async def create_booking(booking: BookingRequest, request: Request):
         if not user_id:
             try:
                 # Check if user already exists with this email
-                existing_users = await db.select("users", filters={"email": booking.email})
+                existing_users = await db.select("users", filters={"email": booking_data['email']})
                 if existing_users:
                     user_id = existing_users[0]["id"]
-                    print(f"[RECORDS] Found existing user for email: {booking.email}")
+                    print(f"[RECORDS] Found existing user for email: {booking_data['email']}")
                 else:
                     # Create a temporary user record for anonymous bookings
                     temp_user_data = {
                         "id": str(uuid.uuid4()),
-                        "email": booking.email,
-                        "first_name": booking.name.split()[0] if booking.name else "Guest",
-                        "last_name": " ".join(booking.name.split()[1:]) if booking.name and len(booking.name.split()) > 1 else "",
+                        "email": booking_data['email'],
+                        "first_name": booking_data['name'].split()[0] if booking_data['name'] else "Guest",
+                        "last_name": " ".join(booking_data['name'].split()[1:]) if booking_data['name'] and len(booking_data['name'].split()) > 1 else "",
                         "user_type": "buyer",
                         "status": "active",
                         "verification_status": "verified",
@@ -361,32 +380,32 @@ async def create_booking(booking: BookingRequest, request: Request):
                 # Fallback: use a default UUID
                 user_id = "00000000-0000-0000-0000-000000000000"
         
-        booking_data = {
+        booking_record = {
             "id": str(uuid.uuid4()),
-            "property_id": booking.property_id,
+            "property_id": booking_data['property_id'],
             "user_id": user_id,
-            "name": booking.name,
-            "email": booking.email,
-            "phone": booking.phone,
-            "booking_date": booking.booking_date,
-            "booking_time": booking.booking_time,
-            "notes": booking.notes,
+            "name": booking_data['name'],
+            "email": booking_data['email'],
+            "phone": booking_data.get('phone', ''),
+            "booking_date": booking_data['booking_date'],
+            "booking_time": booking_data['booking_time'],
+            "notes": booking_data.get('notes', ''),
             "status": "pending",
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()
         }
         
-        created = await db.insert("bookings", booking_data)
+        created = await db.insert("bookings", booking_record)
         
         # Get property details to find the owner/agent
         property_details = None
         try:
-            properties = await db.select("properties", filters={"id": booking.property_id})
+            properties = await db.select("properties", filters={"id": booking_data['property_id']})
             if properties:
                 property_details = properties[0]
                 # Assign agent to booking if property has an agent
                 if property_details.get("agent_id"):
-                    booking_data["agent_id"] = property_details["agent_id"]
+                    booking_record["agent_id"] = property_details["agent_id"]
         except Exception as prop_error:
             print(f"[RECORDS] Error fetching property details: {prop_error}")
         
@@ -397,15 +416,15 @@ async def create_booking(booking: BookingRequest, request: Request):
             
             if property_details:
                 property_title = property_details.get('title', 'Property')
-                booker_name = booking.name or "Guest User"
-                booker_email = booking.email or "guest@example.com"
+                booker_name = booking_data['name'] or "Guest User"
+                booker_email = booking_data['email'] or "guest@example.com"
                 
                 # Send confirmation email to booker
                 confirmation_html = booking_confirmation_email(
                     booker_name,
                     property_title,
-                    booking.booking_date,
-                    booking.booking_time
+                    booking_data['booking_date'],
+                    booking_data['booking_time']
                 )
                 await send_email(
                     to=booker_email,
