@@ -65,6 +65,9 @@ class LocationService:
                     return (float(lat), float(lon))
         except Exception as e:
             print(f"[LOCATION] Database error for pincode {pincode}: {e}")
+            # If table doesn't exist, return None to trigger web API fetch
+            if "does not exist" in str(e) or "relation" in str(e):
+                print(f"[LOCATION] Table pincode_locations doesn't exist, will fetch from web APIs")
         return None
     
     @staticmethod
@@ -121,6 +124,9 @@ class LocationService:
             return True
         except Exception as e:
             print(f"[LOCATION] Failed to store coordinates for pincode {pincode}: {e}")
+            # If table doesn't exist, just skip storing and continue
+            if "does not exist" in str(e) or "relation" in str(e):
+                print(f"[LOCATION] Table pincode_locations doesn't exist, skipping database storage")
             return False
     
     @staticmethod
