@@ -176,65 +176,6 @@ async def create_inquiry(inquiry: InquiryRequest):
         created = await db.insert("inquiries", inquiry_data)
         print(f"[RECORDS] Inquiry created successfully: {created}")
         
-        # Auto-assign agent based on property
-        from ..services.agent_assignment import AgentAssignmentService
-        inquiry_id = created[0]["id"] if created and len(created) > 0 else inquiry_data["id"]
-        assignment_result = await AgentAssignmentService.assign_agent_to_inquiry(inquiry_id, inquiry.property_id)
-        if assignment_result.get('success'):
-            print(f"[RECORDS] Agent assigned to inquiry: {assignment_result.get('message')}")
-        else:
-            print(f"[RECORDS] Agent assignment failed: {assignment_result.get('error')}")
-        
-        # Send email notifications
-        try:
-            from ..services.email import send_email
-            from ..services.templates import inquiry_confirmation_email, inquiry_notification_email
-            
-            # Get property details for email
-            property_data = await db.select("properties", filters={"id": inquiry.property_id})
-            if property_data:
-                property_info = property_data[0]
-                property_title = property_info.get('title', 'Property')
-                
-                # Send confirmation email to inquirer
-                confirmation_html = inquiry_confirmation_email(
-                    inquiry.name, 
-                    property_title, 
-                    inquiry.property_id, 
-                    inquiry.message
-                )
-                await send_email(
-                    to=inquiry.email,
-                    subject="Inquiry Sent Successfully - Home & Own",
-                    html=confirmation_html
-                )
-                print(f"[RECORDS] Confirmation email sent to: {inquiry.email}")
-                
-                # Send notification email to property owner
-                owner_data = await db.select("users", filters={"id": property_info.get('owner_id')})
-                if owner_data:
-                    owner_info = owner_data[0]
-                    owner_name = f"{owner_info.get('first_name', '')} {owner_info.get('last_name', '')}".strip()
-                    owner_email = owner_info.get('email')
-                    
-                    if owner_email:
-                        notification_html = inquiry_notification_email(
-                            owner_name,
-                            inquiry.name,
-                            inquiry.email,
-                            property_title,
-                            inquiry.message
-                        )
-                        await send_email(
-                            to=owner_email,
-                            subject=f"New Inquiry for {property_title} - Home & Own",
-                            html=notification_html
-                        )
-                        print(f"[RECORDS] Notification email sent to property owner: {owner_email}")
-        except Exception as email_error:
-            print(f"[RECORDS] Email sending failed: {email_error}")
-            # Don't fail the inquiry creation if email fails
-        
         # Get property details to find the owner/agent
         property_details = None
         try:
@@ -247,7 +188,19 @@ async def create_inquiry(inquiry: InquiryRequest):
         except Exception as prop_error:
             print(f"[RECORDS] Error fetching property details: {prop_error}")
         
-        # Email notifications
+        # Auto-assign agent based on property
+        try:
+            from ..services.agent_assignment import AgentAssignmentService
+            inquiry_id = created[0]["id"] if created and len(created) > 0 else inquiry_data["id"]
+            assignment_result = await AgentAssignmentService.assign_agent_to_inquiry(inquiry_id, inquiry.property_id)
+            if assignment_result.get('success'):
+                print(f"[RECORDS] Agent assigned to inquiry: {assignment_result.get('message')}")
+            else:
+                print(f"[RECORDS] Agent assignment failed: {assignment_result.get('error')}")
+        except Exception as assignment_error:
+            print(f"[RECORDS] Agent assignment error: {assignment_error}")
+        
+        # Send email notifications
         try:
             # Send to admin
             subject_admin, html_admin = inquiry_email(True, inquiry.name or "", property_details, inquiry.property_id)
@@ -446,8 +399,8 @@ async def create_booking(booking_data: dict, request: Request):
                             booker_name,
                             booker_email,
                             property_title,
-                            booking.booking_date,
-                            booking.booking_time
+                            booking_data['booking_date'],
+                            booking_data['booking_time']
                         )
                         await send_email(
                             to=owner_email,
@@ -462,16 +415,16 @@ async def create_booking(booking_data: dict, request: Request):
         # Get additional details for response
         response_data = {
             "success": True,
-            "id": created[0]["id"] if created else booking_data["id"],
-            "property_name": property_details.get("title", f"Property #{booking.property_id}") if property_details else f"Property #{booking.property_id}",
+            "id": created[0]["id"] if created else booking_record["id"],
+            "property_name": property_details.get("title", f"Property #{booking_data['property_id']}") if property_details else f"Property #{booking_data['property_id']}",
             "agent_name": None,
             "agent_email": None
         }
         
         # Get agent details if assigned
-        if booking_data.get("agent_id"):
+        if booking_record.get("agent_id"):
             try:
-                agent_users = await db.select("users", filters={"id": booking_data["agent_id"]})
+                agent_users = await db.select("users", filters={"id": booking_record["agent_id"]})
                 if agent_users:
                     agent = agent_users[0]
                     response_data["agent_name"] = f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip()
