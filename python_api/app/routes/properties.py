@@ -700,7 +700,8 @@ async def update_property(property_id: str, update_data: dict):
                 # Check if it's a valid UUID
                 if isinstance(value, str) and value:
                     # Skip if it's already None or empty
-                    if value in ['', 'null', 'undefined', 'NA']:
+                    if value in ['', 'null', 'undefined', 'NA', 'homeandown']:
+                        print(f"[PROPERTIES] Setting {field} to None for invalid value: {value}")
                         update_data[field] = None
                         continue
                     # Validate UUID format
@@ -708,11 +709,8 @@ async def update_property(property_id: str, update_data: dict):
                         import uuid as uuid_lib
                         uuid_lib.UUID(value)
                     except (ValueError, AttributeError) as e:
-                        print(f"[PROPERTIES] Invalid UUID for {field}: {value}")
-                        raise HTTPException(
-                            status_code=400, 
-                            detail=f"Invalid UUID for field '{field}': '{value}'. Expected valid UUID format."
-                        )
+                        print(f"[PROPERTIES] Invalid UUID for {field}: {value}, setting to None")
+                        update_data[field] = None
         
         # Update timestamp
         update_data['updated_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
