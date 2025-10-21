@@ -176,6 +176,41 @@ async def ping():
     """A simple endpoint to check if the API is running."""
     return {"pong": dt.datetime.utcnow().isoformat(), "status": "running", "message": "API is working"}
 
+async def ensure_property_images_populated(property_data: dict) -> dict:
+    """Ensure property has images populated from documents table"""
+    try:
+        property_id = property_data.get('id')
+        if not property_id:
+            return property_data
+            
+        # Check if images are already populated
+        if property_data.get('images') and len(property_data.get('images', [])) > 0:
+            return property_data
+            
+        # Fetch images from documents table
+        from .db.supabase_client import db
+        image_docs = await db.select("documents", filters={
+            "entity_type": "property",
+            "entity_id": property_id
+        })
+        
+        if image_docs:
+            image_urls = []
+            for doc in image_docs:
+                file_type = doc.get('file_type', '')
+                if file_type.startswith('image/'):
+                    image_urls.append(doc.get('url'))
+            
+            if image_urls:
+                property_data['images'] = image_urls
+                print(f"[MAIN] Populated {len(image_urls)} images for property {property_id}")
+        
+        return property_data
+        
+    except Exception as e:
+        print(f"[MAIN] Error populating images: {e}")
+        return property_data
+
 @app.get("/debug", tags=["debug"])
 async def debug():
     """Debug endpoint to check API configuration and registered routes."""

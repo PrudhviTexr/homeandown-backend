@@ -849,8 +849,11 @@ async def update_property(property_id: str, update_data: dict):
                 if field in filtered_update_data:
                     print(f"[PROPERTIES] DB {field}: {filtered_update_data[field]} (type: {type(filtered_update_data[field])})")
             
-            result = await db.update("properties", filtered_update_data, {"id": property_id})
-            print(f"[PROPERTIES] Updating fields: {list(filtered_update_data.keys())}")
+            # Remove None values to avoid database issues
+            clean_update_data = {k: v for k, v in filtered_update_data.items() if v is not None}
+            
+            result = await db.update("properties", clean_update_data, {"id": property_id})
+            print(f"[PROPERTIES] Updating fields: {list(clean_update_data.keys())}")
             
             # Handle sections update separately if provided
             if sections_data is not None:
@@ -886,11 +889,45 @@ async def update_property(property_id: str, update_data: dict):
                     # Clear all sections
                     await db.delete("property_sections", {"property_id": property_id})
             
+            # After successful update, fetch and return the updated property with images
+            try:
+                updated_property = await db.select("properties", filters={"id": property_id})
+                if updated_property:
+                    property_data = dict(updated_property[0])
+                    
+                    # Ensure images are populated
+                    if not property_data.get('images') or len(property_data.get('images', [])) == 0:
+                        image_docs = await db.select("documents", filters={
+                            "entity_type": "property",
+                            "entity_id": property_id
+                        })
+                        
+                        if image_docs:
+                            image_urls = []
+                            for doc in image_docs:
+                                file_type = doc.get('file_type', '')
+                                if file_type.startswith('image/'):
+                                    image_urls.append(doc.get('url'))
+                            
+                            if image_urls:
+                                property_data['images'] = image_urls
+                                # Update the property record with the images array
+                                await db.update("properties", {"images": image_urls}, {"id": property_id})
+                    
+                    print(f"[PROPERTIES] Property updated successfully: {property_id}")
+                    return {
+                        "message": "Property updated successfully",
+                        "property": property_data
+                    }
+            except Exception as fetch_error:
+                print(f"[PROPERTIES] Failed to fetch updated property: {fetch_error}")
+            
             print(f"[PROPERTIES] Property updated successfully: {property_id}")
             return {"message": "Property updated successfully"}
             
         except Exception as update_error:
             print(f"[PROPERTIES] Property update failed: {property_id}")
+            print(f"[PROPERTIES] Update error details: {str(update_error)}")
             raise HTTPException(status_code=500, detail=f"Failed to update property: {str(update_error)}")
             
     except HTTPException:
@@ -969,6 +1006,46 @@ async def delete_property(property_id: str):
         print(f"[PROPERTIES] Full traceback:")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error deleting property: {str(e)}")
+
+@router.get("/{property_id}/images")
+async def get_property_images(property_id: str):
+    """Get all images for a property from documents table"""
+    try:
+        print(f"[PROPERTIES] Fetching images for property: {property_id}")
+        
+        # Check if property exists
+        properties = await db.select("properties", filters={"id": property_id})
+        if not properties:
+            raise HTTPException(status_code=404, detail="Property not found")
+        
+        # Fetch images from documents table
+        image_docs = await db.select("documents", filters={
+            "entity_type": "property",
+            "entity_id": property_id
+        })
+        
+        images = []
+        if image_docs:
+            for doc in image_docs:
+                file_type = doc.get('file_type', '')
+                if file_type.startswith('image/'):
+                    images.append({
+                        "id": doc.get('id'),
+                        "url": doc.get('url'),
+                        "name": doc.get('name'),
+                        "file_type": doc.get('file_type'),
+                        "file_size": doc.get('file_size'),
+                        "created_at": doc.get('created_at')
+                    })
+        
+        print(f"[PROPERTIES] Found {len(images)} images for property {property_id}")
+        return {"images": images}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[PROPERTIES] Get images error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching images: {str(e)}")
 
 @router.get("/{property_id}/contact")
 async def get_property_contact(property_id: str, user_role: str = Query(None)):
