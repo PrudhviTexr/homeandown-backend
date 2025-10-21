@@ -196,6 +196,27 @@ async def get_properties(
             # Property passed all filters
             filtered_properties.append(enhanced_prop)
 
+        # Fetch images for all properties that don't have them
+        for prop in filtered_properties:
+            if not prop.get('images') or len(prop.get('images', [])) == 0:
+                try:
+                    image_docs = await db.select("documents", filters={
+                        "entity_type": "property",
+                        "entity_id": prop.get('id')
+                    })
+                    
+                    if image_docs:
+                        image_urls = []
+                        for doc in image_docs:
+                            file_type = doc.get('file_type', '')
+                            if file_type.startswith('image/'):
+                                image_urls.append(doc.get('url'))
+                        
+                        if image_urls:
+                            prop['images'] = image_urls
+                except Exception as img_err:
+                    print(f"[PROPERTIES] Failed to fetch images for property {prop.get('id')}: {img_err}")
+
         print(f"[PROPERTIES] Returning {len(filtered_properties)} filtered properties")
         return filtered_properties
 
@@ -662,6 +683,40 @@ async def get_property(property_id: str):
         except Exception as sec_err:
             print(f"[PROPERTIES] Failed to load sections: {sec_err}")
             property_data['custom_sections'] = []
+        
+        # Fetch property images from documents table if images array is empty
+        if not property_data.get('images') or len(property_data.get('images', [])) == 0:
+            try:
+                print(f"[PROPERTIES] Fetching images from documents table for property: {property_id}")
+                image_docs = await db.select("documents", filters={
+                    "entity_type": "property",
+                    "entity_id": property_id
+                })
+                
+                if image_docs:
+                    # Filter for image files only
+                    image_urls = []
+                    for doc in image_docs:
+                        file_type = doc.get('file_type', '')
+                        if file_type.startswith('image/'):
+                            image_urls.append(doc.get('url'))
+                    
+                    if image_urls:
+                        property_data['images'] = image_urls
+                        print(f"[PROPERTIES] Loaded {len(image_urls)} images from documents table")
+                        
+                        # Update the property record with the images array
+                        try:
+                            await db.update("properties", {"images": image_urls}, {"id": property_id})
+                            print(f"[PROPERTIES] Updated property with images array")
+                        except Exception as update_err:
+                            print(f"[PROPERTIES] Failed to update property with images: {update_err}")
+                    else:
+                        print(f"[PROPERTIES] No image documents found for property")
+                else:
+                    print(f"[PROPERTIES] No documents found for property")
+            except Exception as img_err:
+                print(f"[PROPERTIES] Failed to fetch images from documents: {img_err}")
         
         return property_data
         
