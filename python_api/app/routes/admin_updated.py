@@ -111,19 +111,24 @@ async def list_properties(_=Depends(require_api_key)):
         properties = await db.admin_select("properties")
         users = await db.admin_select("users")
         
+        # Build user map with full names (not IDs)
         user_map = {user['id']: f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() for user in users}
         
         if properties:
             for prop in properties:
                 # Get owner name - check owner_id first, then added_by (who created it)
                 owner_id = prop.get('owner_id') or prop.get('added_by')
-                prop['owner_name'] = user_map.get(owner_id, 'N/A')
+                owner_name = user_map.get(owner_id, 'N/A')
+                # Remove empty strings and set to N/A if no name found
+                prop['owner_name'] = owner_name if owner_name and owner_name.strip() else 'N/A'
                 
                 # Get agent name - check assigned_agent_id first, then agent_id
                 agent_id = prop.get('assigned_agent_id') or prop.get('agent_id')
-                prop['agent_name'] = user_map.get(agent_id, 'Unassigned')
+                agent_name = user_map.get(agent_id, 'Unassigned')
+                # Remove empty strings and set to Unassigned if no name found
+                prop['agent_name'] = agent_name if agent_name and agent_name.strip() else 'Unassigned'
             
-        print(f"[ADMIN] Found {len(properties) if properties else 0} properties")
+        print(f"[ADMIN] Returning {len(properties) if properties else 0} properties with owner/agent names")
         return properties or []
     except Exception as e:
         print(f"[ADMIN] List properties error: {e}")
