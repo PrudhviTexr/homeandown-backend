@@ -80,8 +80,13 @@ async def list_properties(_=Depends(require_api_key)):
         user_map = {user['id']: f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() for user in users}
         if properties:
             for prop in properties:
-                prop['owner_name'] = user_map.get(prop.get('owner_id'), 'N/A')
-                prop['agent_name'] = user_map.get(prop.get('agent_id'), 'Unassigned')
+                # Get owner name - check owner_id first, then added_by (who created it)
+                owner_id = prop.get('owner_id') or prop.get('added_by')
+                prop['owner_name'] = user_map.get(owner_id, 'N/A')
+                
+                # Get agent name - check assigned_agent_id first, then agent_id
+                agent_id = prop.get('assigned_agent_id') or prop.get('agent_id')
+                prop['agent_name'] = user_map.get(agent_id, 'Unassigned')
         return properties or []
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
