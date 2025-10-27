@@ -375,7 +375,38 @@ def inquiry_confirmation_email(inquirer_name: str, property_title: str, property
     """
     return wrap_html(body, "Inquiry Confirmation - Home & Own")
 
+def inquiry_confirmation_email(inquirer_name: str, property_title: str, message: str) -> str:
+    """Email template for inquiry confirmation to the person who sent the inquiry"""
+    body = f"""
+      <h2 style='margin-top:0; color: #1e293b;'>Thank you for your inquiry! 📧</h2>
+      <p style='font-size: 16px;'>Hi <strong>{inquirer_name}</strong>,</p>
+      <p style='font-size: 16px;'>Thank you for your interest in <strong>{property_title}</strong>!</p>
+      
+      <div style='background: #f0f9ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #0ca5e9;'>
+        <h3 style='margin-top:0; color: #1e293b;'>Your Inquiry Details:</h3>
+        <p><strong>Property:</strong> {property_title}</p>
+        <p><strong>Your Message:</strong> {message}</p>
+        <p><strong>Status:</strong> <span style='color: #059669; font-weight: 600;'>Received</span></p>
+      </div>
+      
+      <p style='font-size: 16px;'>What happens next:</p>
+      <ul style='font-size: 16px; color: #374151;'>
+        <li>Our team will review your inquiry within 24 hours</li>
+        <li>The property owner or agent will contact you directly</li>
+        <li>You'll receive updates via email</li>
+      </ul>
+      
+      <div style='text-align:center; margin: 32px 0;'>
+        <a class='btn' href='https://homeandown.com/my-inquiries'>View My Inquiries</a>
+      </div>
+      
+      <p style='font-size: 16px;'>We look forward to helping you find your perfect home!</p>
+      <p style='font-size: 16px;'>The Home & Own Team</p>
+    """
+    return wrap_html(body, "Inquiry Confirmed - Home & Own")
+
 def inquiry_notification_email(property_owner_name: str, inquirer_name: str, inquirer_email: str, property_title: str, message: str) -> str:
+    """Email template for inquiry notification to property owner"""
     body = f"""
       <h2 style='margin-top:0; color: #1e293b;'>New Property Inquiry! 🏠</h2>
       <p style='font-size: 16px;'>Hi <strong>{property_owner_name}</strong>,</p>

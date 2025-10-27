@@ -53,7 +53,9 @@ async def get_properties(
         print(f"  - added_by: {added_by}")
 
         # Build base filters for server-side query
-        base_filters = {}
+        base_filters = {
+            "verified": True  # Only show admin-approved properties
+        }
         if status:
             base_filters['status'] = status
         if featured is not None:
@@ -257,7 +259,7 @@ async def create_property(property_data: dict):
         # Ensure required fields with defaults
         property_data.setdefault('status', 'active')
         property_data.setdefault('featured', False)
-        property_data.setdefault('verified', True)
+        property_data.setdefault('verified', False)  # Properties require admin approval
         property_data.setdefault('priority', 0)
         
         # Handle required fields - set to 'NA' if empty
@@ -338,8 +340,6 @@ async def create_property(property_data: dict):
                     suggested_fields = location_data.get('suggested_fields', {})
 
                     # Auto-populate empty fields with suggested values (but allow editing)
-                    if not property_data.get('country'):
-                        property_data['country'] = suggested_fields.get('country')
                     if not property_data.get('state'):
                         property_data['state'] = suggested_fields.get('state')
                     if not property_data.get('district'):
@@ -483,7 +483,7 @@ async def create_property(property_data: dict):
         
         # Remove fields that don't exist in the database
         fields_to_remove = [
-            'lift_available', 'power_backup', 'washrooms', 'management_type',
+            'country', 'lift_available', 'power_backup', 'washrooms', 'management_type',
             'parking_spaces', 'total_floors_building', 'floor_number', 'balconies_count',
             'built_up_area', 'carpet_area', 'plot_area', 'rate_per_sqft_value',
             'rate_per_sqyd_value', 'maintenance_charges_value', 'security_deposit_value',
@@ -606,6 +606,26 @@ async def create_property(property_data: dict):
                         print(f"[PROPERTIES] Property submission email sent to user: {user_email}")
             except Exception as email_error:
                 print(f"[PROPERTIES] Failed to send property submission email: {email_error}")
+            
+            # Send admin notification for new property submission
+            try:
+                from ..services.admin_notification_service import AdminNotificationService
+                
+                # Get user data for the property owner
+                user_data = {}
+                if property_data.get('added_by'):
+                    try:
+                        users = await db.select("users", filters={"id": property_data.get('added_by')})
+                        if users:
+                            user_data = users[0]
+                    except Exception as user_error:
+                        print(f"[PROPERTIES] Failed to get user data for admin notification: {user_error}")
+                
+                await AdminNotificationService.notify_property_submission(property_data, user_data)
+                print(f"[PROPERTIES] Admin notification sent for new property: {property_data.get('title')}")
+            except Exception as notify_error:
+                print(f"[PROPERTIES] Failed to send admin notification: {notify_error}")
+                # Don't fail property creation if notification fails
             
             return {"id": property_id, "message": "Property created successfully"}
             

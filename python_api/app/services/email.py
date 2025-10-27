@@ -45,8 +45,8 @@ async def send_email(to: str, subject: str, html: str, sender: str | None = None
     resend_key = os.getenv("RESEND_API_KEY") or getattr(settings, "RESEND_API_KEY", None)
     resend_template = os.getenv("RESEND_TEMPLATE_ID") or getattr(settings, "RESEND_TEMPLATE_ID", None)
     
-    # Temporarily disable Resend to test Gmail SMTP
-    resend_key = None
+    # Enable Resend for production use
+    # resend_key = None
     
     if resend_key:
         # If a template id is configured, use Resend Templates API for consistent branding

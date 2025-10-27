@@ -143,12 +143,18 @@ async def create_contact_message(data: dict):
 
 
 @router.get("/bookings")
-async def get_bookings():
+async def get_bookings(user_id: str | None = None, property_id: str | None = None):
     try:
-        print(f"[RECORDS] Fetching all bookings")
-        bookings = await db.select("bookings")
+        print(f"[RECORDS] Fetching bookings user_id={user_id} property_id={property_id}")
+        filters = {}
+        if user_id:
+            filters["user_id"] = user_id
+        if property_id:
+            filters["property_id"] = property_id
+
+        bookings = await db.select("bookings") if not filters else await db.select("bookings", filters=filters)
         print(f"[RECORDS] Found {len(bookings)} bookings")
-        return bookings
+        return bookings or []
     except Exception as e:
         print(f"[RECORDS] Get bookings error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch bookings: {str(e)}")
@@ -191,7 +197,7 @@ async def create_inquiry(inquiry: InquiryRequest):
         # Auto-assign agent based on property
         try:
             from ..services.agent_assignment import AgentAssignmentService
-            inquiry_id = created[0]["id"] if created and len(created) > 0 else inquiry_data["id"]
+            inquiry_id = created["id"] if created else inquiry_data["id"]
             assignment_result = await AgentAssignmentService.assign_agent_to_inquiry(inquiry_id, inquiry.property_id)
             if assignment_result.get('success'):
                 print(f"[RECORDS] Agent assigned to inquiry: {assignment_result.get('message')}")
@@ -202,42 +208,47 @@ async def create_inquiry(inquiry: InquiryRequest):
         
         # Send email notifications
         try:
-            # Send to admin
-            subject_admin, html_admin = inquiry_email(True, inquiry.name or "", property_details, inquiry.property_id)
-            await send_email("info@homeandown.com", subject_admin, html_admin)
-            
-            # Send to property owner/agent if available
-            recipients = []
-            if property_details:
-                if property_details.get("owner_id"):
-                    recipients.append(property_details["owner_id"])
-                if property_details.get("agent_id"):
-                    recipients.append(property_details["agent_id"])
-            
-            for recipient_id in recipients:
+            # Send admin notification for new inquiry
+            try:
+                from ..services.admin_notification_service import AdminNotificationService
+                await AdminNotificationService.notify_inquiry_submission(inquiry_data, property_details)
+                print(f"[RECORDS] Admin notification sent for new inquiry: {inquiry.name}")
+            except Exception as notify_error:
+                print(f"[RECORDS] Failed to send admin notification: {notify_error}")
+                # Fallback to old email system
                 try:
-                    # Get recipient details
-                    users = await db.select("users", filters={"id": recipient_id})
+                    subject_admin, html_admin = inquiry_email(True, inquiry.name or "", property_details, inquiry.property_id)
+                    await send_email("info@homeandown.com", subject_admin, html_admin)
+                    print(f"[RECORDS] Fallback admin email sent")
+                except Exception as fallback_error:
+                    print(f"[RECORDS] Fallback admin email failed: {fallback_error}")
+            
+            # Send to property agent only (not owner)
+            if property_details and property_details.get("agent_id"):
+                try:
+                    # Get agent details
+                    users = await db.select("users", filters={"id": property_details["agent_id"]})
                     if users and users[0].get("email"):
-                        recipient_email = users[0]["email"]
-                        recipient_name = f"{users[0].get('first_name', '')} {users[0].get('last_name', '')}".strip()
-                        subject_recipient, html_recipient = inquiry_email(True, inquiry.name or "", property_details, inquiry.property_id, is_owner=True)
-                        await send_email(recipient_email, subject_recipient, html_recipient)
-                        print(f"[RECORDS] ✅ Sent inquiry notification to {recipient_name}: {recipient_email}")
-                except Exception as recipient_error:
-                    print(f"[RECORDS] Error sending email to recipient {recipient_id}: {recipient_error}")
+                        agent_email = users[0]["email"]
+                        agent_name = f"{users[0].get('first_name', '')} {users[0].get('last_name', '')}".strip()
+                        subject_agent, html_agent = inquiry_email(True, inquiry.name or "", property_details, inquiry.property_id, is_owner=True)
+                        await send_email(agent_email, subject_agent, html_agent)
+                        print(f"[RECORDS] ✅ Sent inquiry notification to agent {agent_name}: {agent_email}")
+                except Exception as agent_error:
+                    print(f"[RECORDS] Error sending email to agent: {agent_error}")
             
             # Send confirmation to user
             if inquiry.email:
                 subject_user, html_user = inquiry_email(False, inquiry.name or "", property_details, inquiry.property_id)
                 await send_email(inquiry.email, subject_user, html_user)
+                print(f"[RECORDS] ✅ Sent confirmation email to user: {inquiry.email}")
         except Exception as email_error:
             print(f"[RECORDS] Email notification error: {email_error}")
         
         # Get additional details for response
         response_data = {
             "success": True,
-            "id": created[0]["id"] if created else inquiry_data["id"],
+            "id": created["id"] if created else inquiry_data["id"],
             "property_name": property_details.get("title", f"Property #{inquiry.property_id}") if property_details else f"Property #{inquiry.property_id}",
             "agent_name": None,
             "agent_email": None
@@ -412,10 +423,19 @@ async def create_booking(booking_data: dict, request: Request):
             print(f"[RECORDS] Email sending failed: {email_error}")
             # Don't fail the booking creation if email fails
         
+        # Send admin notification for new booking
+        try:
+            from ..services.admin_notification_service import AdminNotificationService
+            await AdminNotificationService.notify_booking_submission(booking_record, property_details, user_data)
+            print(f"[RECORDS] Admin notification sent for new booking: {booking_data.get('name')}")
+        except Exception as notify_error:
+            print(f"[RECORDS] Failed to send admin notification: {notify_error}")
+            # Don't fail booking creation if notification fails
+        
         # Get additional details for response
         response_data = {
             "success": True,
-            "id": created[0]["id"] if created else booking_record["id"],
+            "id": created["id"] if created else booking_record["id"],
             "property_name": property_details.get("title", f"Property #{booking_data['property_id']}") if property_details else f"Property #{booking_data['property_id']}",
             "agent_name": None,
             "agent_email": None
@@ -486,6 +506,13 @@ async def create_property(prop: dict, _=Depends(require_api_key)):
         except Exception:
             pass
 
+        # Store images in properties table
+        if property_data.get("images") and isinstance(property_data["images"], list):
+            # Convert list to JSON string for storage
+            import json
+            property_data["images_json"] = json.dumps(property_data["images"])
+            print(f"[RECORDS] Storing {len(property_data['images'])} images in database")
+
         created = None
         insert_err = None
         try:
@@ -542,6 +569,34 @@ async def create_property(prop: dict, _=Depends(require_api_key)):
         print(f"[RECORDS] Create property error: {e}")
         raise HTTPException(status_code=500, detail="Failed to create property")
 
+
+@router.get("/users/{user_id}")
+async def get_user(user_id: str):
+    try:
+        print(f"[RECORDS] Fetching user: {user_id}")
+        users = await db.select("users", filters={"id": user_id})
+        if not users:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user = users[0]
+        # Remove sensitive data
+        user_data = {
+            "id": user.get("id"),
+            "first_name": user.get("first_name"),
+            "last_name": user.get("last_name"),
+            "email": user.get("email"),
+            "phone_number": user.get("phone_number"),
+            "user_type": user.get("user_type"),
+            "status": user.get("status")
+        }
+        
+        print(f"[RECORDS] Found user: {user_data.get('first_name')} {user_data.get('last_name')}")
+        return user_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[RECORDS] Get user error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch user: {str(e)}")
 
 @router.get("/inquiries")
 async def list_user_inquiries(user_id: str | None = None, property_id: str | None = None):

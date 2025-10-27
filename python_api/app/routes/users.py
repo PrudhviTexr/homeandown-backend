@@ -100,6 +100,10 @@ async def update_profile(payload: UpdateProfileRequest, request: Request):
             update_data["address"] = payload.address
         if payload.bio is not None:
             update_data["bio"] = payload.bio
+        if payload.date_of_birth is not None:
+            update_data["date_of_birth"] = payload.date_of_birth
+        if payload.profile_image_url is not None:
+            update_data["profile_image_url"] = payload.profile_image_url
         
         if update_data:
             update_data["updated_at"] = dt.datetime.utcnow().isoformat()
@@ -264,12 +268,17 @@ async def update_user(user_id: str, payload: dict, request: Request):
             update_data["address"] = payload["address"]
         if "bio" in payload:
             update_data["bio"] = payload["bio"]
+        if "date_of_birth" in payload:
+            update_data["date_of_birth"] = payload["date_of_birth"]
+        if "profile_image_url" in payload:
+            update_data["profile_image_url"] = payload["profile_image_url"]
+        if "verification_status" in payload:
+            update_data["verification_status"] = payload["verification_status"]
         
         if update_data:
             update_data["updated_at"] = dt.datetime.utcnow().isoformat()
-            # For now, just log the update instead of updating database
-            print(f"[USERS] User update data: {update_data}")
-            print(f"[USERS] User updated successfully (mock)")
+            await db.update("users", update_data, {"id": user_id})
+            print(f"[USERS] User updated successfully: {update_data}")
         
         return {"success": True, "message": "User updated successfully"}
         

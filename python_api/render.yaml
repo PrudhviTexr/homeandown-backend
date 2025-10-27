@@ -3,6 +3,7 @@ services:
     name: homeandown-api
     env: python
     plan: starter
+    rootDir: python_api
     buildCommand: pip install -r requirements_render.txt
     startCommand: python run_render.py
     envVars:

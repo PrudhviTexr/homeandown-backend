@@ -59,6 +59,8 @@ class UpdateProfileRequest(BaseModel):
     state: str | None = None
     address: str | None = None
     bio: str | None = None
+    date_of_birth: str | None = None
+    profile_image_url: str | None = None
     otp: str | None = None
 
 class PropertyRequest(BaseModel):

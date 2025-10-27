@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import RedirectResponse
 from ..core.security import require_api_key
-from ..db.supabase_client import db, upload_to_storage, get_public_url, ensure_bucket_exists
+from ..db.supabase_client import db
 import os
 import uuid
 import datetime as dt
@@ -11,6 +11,28 @@ router = APIRouter()
 
 def _get_storage_bucket():
     return os.getenv("SUPABASE_STORAGE_BUCKET", "property-images")
+
+async def ensure_bucket_exists(bucket: str, public: bool = True):
+    """Ensure the storage bucket exists in Supabase"""
+    # This is a simplified version. In a real app, you might want to cache this.
+    # Note: Listing buckets might require admin privileges.
+    # The `db` object uses the service key, so it should have the necessary permissions.
+    try:
+        # We can't easily list buckets with the current storage client version to check existence.
+        # So we'll just try to create it. If it exists, it will not throw a fatal error.
+        # A more robust solution might involve checking for a specific error message.
+        await db.supabase_client.storage.create_bucket(bucket, {"public": public})
+        print(f"[DB] Ensured bucket exists (or created): {bucket}")
+        return True
+    except Exception as e:
+        # A bit of a hack: if the bucket already exists, the API might return an error.
+        # We can inspect the error message. A better client library would not require this.
+        if "already exists" in str(e):
+            print(f"[DB] Bucket already exists: {bucket}")
+            return True
+        print(f"[DB] Bucket creation/check failed: {e}")
+        # We don't re-raise here to allow uploads to proceed, assuming the bucket exists.
+        return False
 
 
 @router.post("/upload")
@@ -27,7 +49,6 @@ async def upload_file(
     try:
         print(f"[UPLOAD] Uploading file: {file.filename} for {entity_type}:{entity_id}")
 
-        allowed_types = ("image/png", "image/jpeg", "image/jpg", "application/pdf")
         # allow any image type broadly and pdfs
         if not (file.content_type.startswith("image/") or file.content_type == "application/pdf"):
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {file.content_type}")
@@ -39,29 +60,18 @@ async def upload_file(
         # Path inside bucket: <entity_type>/<entity_id>/<filename>
         object_path = f"{entity_type}/{entity_id}/{filename}"
 
-        # Must use admin client (service role) to upload server-side
-        if not getattr(db, 'supabase_client', None):
-            print("[UPLOAD] Supabase client not available - cannot upload to Supabase Storage")
-            raise HTTPException(status_code=500, detail="Server storage not configured")
-
         bucket = _get_storage_bucket()
-        # Ensure bucket exists (best-effort)
-        try:
-            created = await ensure_bucket_exists(bucket)
-            if not created:
-                print(f"[UPLOAD] Warning: ensure_bucket_exists returned False for bucket {bucket}")
-        except Exception as e:
-            print(f"[UPLOAD] ensure_bucket_exists failed: {e}")
+        await ensure_bucket_exists(bucket)
 
         try:
-            await upload_to_storage(bucket, object_path, content, content_type=file.content_type)
+            await db.upload_to_storage(bucket, object_path, content, content_type=file.content_type)
         except Exception as e:
             print(f"[UPLOAD] Storage upload failed: {e}")
             raise HTTPException(status_code=500, detail="Failed to upload to storage")
 
         # Get public URL
         try:
-            public_url = await get_public_url(bucket, object_path)
+            public_url = await db.get_public_url(bucket, object_path)
         except Exception as e:
             print(f"[UPLOAD] Failed to build public URL: {e}")
             raise HTTPException(status_code=500, detail="Failed to obtain public URL")

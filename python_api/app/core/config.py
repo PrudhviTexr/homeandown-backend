@@ -1,4 +1,21 @@
 import os
+from pathlib import Path
+
+# Try to load environment variables from a local .env (python_api/.env)
+try:
+    from dotenv import load_dotenv
+    env_path = Path(__file__).resolve().parent.parent / '.env'
+    # Load and prefer explicit file if present
+    if env_path.exists():
+        load_dotenv(env_path)
+        print(f"[CONFIG] Loaded environment from: {env_path}")
+    else:
+        # fall back to any .env in cwd
+        load_dotenv()
+        print(f"[CONFIG] No explicit .env at {env_path}; loaded default .env if present")
+except Exception:
+    # If python-dotenv isn't available, continue using OS environment variables
+    print("[CONFIG] python-dotenv not available or failed to load; using OS environment variables")
 
 class Settings:
     # Supabase Configuration (Database Only)

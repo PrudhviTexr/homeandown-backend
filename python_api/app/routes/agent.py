@@ -114,9 +114,15 @@ async def get_agent_inquiries(
         
         print(f"[AGENT] Fetching inquiries for user: {user_id}")
         
-        # Get agent's assigned property IDs
-        properties = await db.select("properties", filters={"agent_id": user_id})
-        property_ids = [p.get("id") for p in (properties or [])]
+        # Get agent's assigned property IDs - check both agent_id and assigned_agent_id
+        properties_agent_id = await db.select("properties", filters={"agent_id": user_id})
+        properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id})
+        
+        # Combine both lists and remove duplicates
+        all_properties = (properties_agent_id or []) + (properties_assigned_id or [])
+        property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
+        
+        print(f"[AGENT] Found {len(property_ids)} assigned properties")
         
         if not property_ids:
             return {"success": True, "inquiries": [], "total": 0}
@@ -129,7 +135,7 @@ async def get_agent_inquiries(
             filters["status"] = status
         
         # Get inquiries
-        inquiries = await db.select("inquiries", filters=filters, limit=limit, offset=offset)
+        inquiries = await db.select("inquiries", filters=filters, limit=limit)
         inquiries_list = inquiries or []
         
         # Enhance inquiries with property and user details
@@ -186,9 +192,15 @@ async def get_agent_bookings(
         
         print(f"[AGENT] Fetching bookings for user: {user_id}")
         
-        # Get agent's assigned property IDs
-        properties = await db.select("properties", filters={"agent_id": user_id})
-        property_ids = [p.get("id") for p in (properties or [])]
+        # Get agent's assigned property IDs - check both agent_id and assigned_agent_id
+        properties_agent_id = await db.select("properties", filters={"agent_id": user_id})
+        properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id})
+        
+        # Combine both lists and remove duplicates
+        all_properties = (properties_agent_id or []) + (properties_assigned_id or [])
+        property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
+        
+        print(f"[AGENT] Found {len(property_ids)} assigned properties")
         
         if not property_ids:
             return {"success": True, "bookings": [], "total": 0}
@@ -201,7 +213,7 @@ async def get_agent_bookings(
             filters["status"] = status
         
         # Get bookings
-        bookings = await db.select("bookings", filters=filters, limit=limit, offset=offset)
+        bookings = await db.select("bookings", filters=filters, limit=limit)
         bookings_list = bookings or []
         
         # Enhance bookings with property and user details
@@ -237,3 +249,58 @@ async def get_agent_bookings(
         print(f"[AGENT] Full traceback:")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch bookings: {str(e)}")
+
+@router.get("/agent/properties")
+async def get_agent_properties(
+    request: Request,
+    status: Optional[str] = Query(None),
+    limit: Optional[int] = Query(20),
+    offset: Optional[int] = Query(0)
+):
+    """Get properties assigned to the agent"""
+    try:
+        claims = get_current_user_claims(request)
+        if not claims:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        print(f"[AGENT] Fetching properties for user: {user_id}")
+        
+        # Get agent's assigned properties - check both agent_id and assigned_agent_id
+        # Only show verified properties for agents
+        properties_agent_id = await db.select("properties", filters={"agent_id": user_id, "verified": True})
+        properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id, "verified": True})
+        
+        # Combine both lists and remove duplicates
+        all_properties = (properties_agent_id or []) + (properties_assigned_id or [])
+        unique_properties = []
+        seen_ids = set()
+        
+        for prop in all_properties:
+            prop_id = prop.get("id")
+            if prop_id and prop_id not in seen_ids:
+                seen_ids.add(prop_id)
+                unique_properties.append(prop)
+        
+        print(f"[AGENT] Found {len(unique_properties)} assigned properties")
+        
+        # Apply status filter if provided
+        if status:
+            unique_properties = [p for p in unique_properties if p.get("status") == status]
+        
+        # Apply limit and offset
+        start_idx = offset or 0
+        end_idx = start_idx + (limit or 20)
+        paginated_properties = unique_properties[start_idx:end_idx]
+        
+        return {"success": True, "properties": paginated_properties, "total": len(unique_properties)}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AGENT] Get properties error: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to fetch properties: {str(e)}")

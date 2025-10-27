@@ -6,7 +6,7 @@ import jwt
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-def hash_password(password: str) -> str:
+def get_password_hash(password: str) -> str:
     """Hash password using bcrypt"""
     return pwd_context.hash(password)
 

@@ -4,7 +4,7 @@ from ..models.schemas import SignupRequest, LoginRequest, SendOTPRequest, Verify
 from ..core.config import settings
 from ..core.security import get_current_user_claims
 from ..core.crypto import (
-    hash_password,
+    get_password_hash,
     verify_password,
     generate_token,
     issue_user_token,
@@ -53,34 +53,49 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
         # Prepare user data
         now_utc = dt.datetime.now(dt.timezone.utc).isoformat()
         
-        # Set verification status based on user role
-        verification_status = "verified" if payload.role == "buyer" else "pending"
+        # Set verification status and initial status based on user role
+        # ALL users now require admin approval
+        verification_status = "pending"
+        initial_status = "pending"  # All users need approval
         
         user_data: Dict[str, Any] = {
             "id": user_id,
             "email": payload.email.lower(),
-            "password_hash": hash_password(payload.password),
+            "password_hash": get_password_hash(payload.password),
             "first_name": payload.first_name or "",
             "last_name": payload.last_name or "",
             "phone_number": payload.phone_number or "",
             "user_type": payload.role or "buyer",
             "city": payload.city or "",
             "state": payload.state or "",
-            "status": "active",  # All users start as active
+            "status": initial_status,  # Set based on user type
             "verification_status": verification_status,  # Agents/sellers need admin approval
             "email_verified": False,
             "created_at": now_utc,
             "updated_at": now_utc
         }
         
-        # For buyers, generate custom ID immediately since they get auto-approved
+        # Generate custom ID and license number based on user type
         custom_id = None
-        if payload.role == "buyer":
+        if payload.role in ["buyer", "agent", "seller"]:
             try:
                 from ..services.admin_service import generate_custom_id
                 custom_id = await generate_custom_id(payload.role)
                 user_data["custom_id"] = custom_id
-                print(f"[AUTH] Generated custom ID: {custom_id}")
+                
+                # For agents, also set license number (if column exists)
+                if payload.role == "agent":
+                    # Try to set license_number, but don't fail if column doesn't exist
+                    try:
+                        user_data["license_number"] = custom_id
+                        print(f"[AUTH] Generated license number for agent: {custom_id}")
+                    except Exception as license_error:
+                        print(f"[AUTH] License number field not available: {license_error}")
+                        # Store in agent_license_number as fallback
+                        user_data["agent_license_number"] = custom_id
+                        print(f"[AUTH] Stored license number in agent_license_number: {custom_id}")
+                else:
+                    print(f"[AUTH] Generated custom ID: {custom_id}")
             except Exception as cid_error:
                 print(f"[AUTH] Custom ID generation failed: {cid_error}")
         
@@ -130,20 +145,28 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
             except Exception as doc_assoc_err:
                 print(f"[AUTH] Documents association error: {doc_assoc_err}")
         
-        # Create user approval record for agents and sellers
-        if payload.role in ["agent", "seller"]:
-            try:
-                approval_data = {
-                    "user_id": user_id,
-                    "status": "pending",
-                    "submitted_at": now_utc,
-                    "created_at": now_utc,
-                    "updated_at": now_utc
-                }
-                await db.insert("user_approvals", approval_data)
-                print(f"[AUTH] User approval record created for {payload.role}: {user_id}")
-            except Exception as approval_err:
-                print(f"[AUTH] Failed to create approval record: {approval_err}")
+        # Create user approval record for ALL users (buyers, agents, sellers)
+        try:
+            approval_data = {
+                "user_id": user_id,
+                "status": "pending",
+                "submitted_at": now_utc,
+                "created_at": now_utc,
+                "updated_at": now_utc
+            }
+            await db.insert("user_approvals", approval_data)
+            print(f"[AUTH] User approval record created for {payload.role}: {user_id}")
+        except Exception as approval_err:
+            print(f"[AUTH] Failed to create approval record: {approval_err}")
+        
+        # Send admin notification for new user registration
+        try:
+            from ..services.admin_notification_service import AdminNotificationService
+            await AdminNotificationService.notify_user_registration(user_data)
+            print(f"[AUTH] Admin notification sent for new user: {payload.email}")
+        except Exception as notify_error:
+            print(f"[AUTH] Failed to send admin notification: {notify_error}")
+            # Don't fail signup if notification fails
         
         # Generate and send email OTP for verification
         print(f"[AUTH] Sending email verification OTP...")
@@ -213,17 +236,22 @@ async def login(payload: LoginRequest, response: Response, role: Optional[str] =
                 detail=f"You are registered as a {user_type.title()}. Please select the correct role to sign in."
             )
         
-        # Allow any verified user to sign in (regardless of user type)
-        # Only requirement is that email must be verified
-        if not user.get("email_verified", False):
-            print(f"[AUTH] Email not verified: {payload.email}")
-            raise HTTPException(status_code=403, detail="Email not verified. Please check your inbox for verification link.")
+        # Check if user is approved by admin (for all user types)
+        user_status = user.get("status", "pending")
+        if user_status != "active":
+            print(f"[AUTH] User not approved by admin: {payload.email} (status: {user_status})")
+            # Provide a more specific message for suspended accounts
+            if user_status == 'suspended':
+                detail = "Your account has been suspended. Please contact support."
+            else:
+                detail = "Your account is pending admin approval. Please wait for admin approval before you can login."
+            raise HTTPException(
+                status_code=403, 
+                detail=detail
+            )
         
-        # Optional: Check if account is suspended (but allow pending/active)
-        user_status = (user.get("status") or "active").lower()
-        if user_status == 'suspended':
-            print(f"[AUTH] Account suspended: {payload.email}")
-            raise HTTPException(status_code=403, detail="Your account has been suspended. Please contact support.")
+        # Allow any verified user to sign in (regardless of user type)
+        # Admin approval is the primary requirement
         
         print(f"[AUTH] User verified and allowed to sign in: {user['email']} (type: {user.get('user_type', 'buyer')})")
         
@@ -958,7 +986,7 @@ async def reset_password(request: Request) -> Dict[str, Any]:
         user_id = token_data["user_id"]
         
         # Hash new password
-        password_hash = hash_password(new_password)
+        password_hash = get_password_hash(new_password)
         
         # Update user password
         await db.update("users", {"id": user_id}, {
