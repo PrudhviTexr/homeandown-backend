@@ -101,7 +101,7 @@
 ## 🔗 Important URLs
 
 ### Backend API
-- **Render URL**: (Will be provided after deployment)
+- **Render URL**: https://homeandown-backend.onrender.com
 - **Test Endpoint**: `/api` - Should return welcome message
 
 ### Frontend
