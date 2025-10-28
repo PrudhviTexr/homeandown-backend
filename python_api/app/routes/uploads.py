@@ -42,10 +42,17 @@ async def upload_file(
         ext = os.path.splitext(file.filename or "")[1] or ""
         filename = f"{uuid.uuid4().hex}{ext}"
 
-        # Path inside bucket: <entity_type>/<entity_id>/<filename>
-        object_path = f"{entity_type}/{entity_id}/{filename}"
+        # Determine bucket based on entity type - NO SUBFOLDERS
+        if entity_type == 'property' or entity_type == 'property_images':
+            bucket = 'property-images'
+            object_path = filename  # Flat structure: just filename
+        elif entity_type == 'user' or entity_type == 'user_documents':
+            bucket = 'documents'
+            object_path = filename  # Flat structure: just filename
+        else:
+            bucket = _get_storage_bucket()
+            object_path = filename
 
-        bucket = _get_storage_bucket()
         await ensure_bucket_exists(bucket)
 
         try:
@@ -75,15 +82,19 @@ async def upload_file(
             "storage_path": object_path,  # Store the path in bucket
             "file_type": file.content_type,
             "file_size": len(content),
-            "created_at": dt.datetime.now(dt.timezone.utc).isoformat()
+            "status": "pending",  # Default status
+            "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()
         }
 
         try:
             await db.insert("documents", doc_data)
-            print(f"[UPLOAD] File uploaded successfully: {doc_data['url']}")
+            print(f"[UPLOAD] Document uploaded successfully: {doc_data['url']}, entity: {entity_type}:{entity_id}")
             return {"success": True, "id": doc_data["id"], "url": doc_data["url"]}
         except Exception as insert_error:
             print(f"[UPLOAD] Failed to insert document record: {insert_error}")
+            import traceback
+            print(traceback.format_exc())
             # Still return success with URL even if DB insert fails
             return {"success": True, "id": doc_data["id"], "url": doc_data["url"]}
 

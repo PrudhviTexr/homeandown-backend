@@ -388,6 +388,8 @@ async def list_documents(
 ):
     """List documents with optional filtering"""
     try:
+        print(f"[ADMIN] Fetching documents with entity_type={entity_type}, entity_id={entity_id}")
+        
         # Build filters if provided
         filters = {}
         if entity_type:
@@ -398,6 +400,7 @@ async def list_documents(
         # Fetch documents with filters
         documents = await db.admin_select("documents", filters=filters if filters else None) or []
         
+        print(f"[ADMIN] Found {len(documents)} documents")
         return documents
     except Exception as e:
         import traceback
