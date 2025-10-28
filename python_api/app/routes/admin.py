@@ -160,7 +160,9 @@ async def delete_property(property_id: str, _=Depends(require_api_key)):
 async def approve_property(property_id: str, _=Depends(require_api_key)):
     try:
         update_data = {
-            "verified": True, "status": "verified", "updated_at": dt.datetime.utcnow().isoformat()
+            "verified": True, 
+            "status": "active",  # Changed from "verified" to "active" so property is visible
+            "updated_at": dt.datetime.utcnow().isoformat()
         }
         result = await db.update("properties", update_data, {"id": property_id})
         
