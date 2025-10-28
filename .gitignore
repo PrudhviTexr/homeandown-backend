@@ -1,0 +1,77 @@
+# Frontend files and directories
+src/
+public/
+node_modules/
+package.json
+package-lock.json
+index.html
+vite.config.ts
+tsconfig.json
+tsconfig.app.json
+tsconfig.node.json
+tailwind.config.js
+postcss.config.js
+eslint.config.js
+
+# Supabase (if not part of backend)
+supabase/
+
+# Test reports (frontend related)
+test_reports/
+
+# Scripts (frontend related) - exclude root scripts, allow python_api/scripts
+scripts/
+!python_api/scripts/
+
+# Postman collections (if not backend specific)
+postman/
+
+# Root level files (frontend related) - exclude root README/render, allow python_api versions
+README.md
+render.yaml
+!python_api/README.md
+!python_api/render.yaml
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
