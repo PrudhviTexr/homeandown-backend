@@ -83,6 +83,53 @@ This application uses **Resend** for transactional email verification. The custo
 
 **Note**: In development mode, verification links are also logged to the console if Resend is not configured.
 
+## 📦 Supabase Storage Integration
+
+This application uses **Supabase Storage** for file uploads including property images, profile pictures, and documents.
+
+### Storage Buckets
+
+The following buckets are used in the application:
+- **property-images**: Property listing photos
+- **profile-images**: User profile pictures
+- **documents**: Legal documents and verification files
+- **images**: General image uploads
+- **uploads**: General file uploads
+
+### Required Environment Variables
+
+#### Frontend (.env):
+```env
+VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+#### Backend (python_api/.env):
+```env
+SUPABASE_URL=your_supabase_url
+SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+```
+
+### Storage Setup
+
+1. **Create Buckets**: In your Supabase project dashboard, create the buckets listed above
+2. **Set Bucket Policies**: Make buckets public or configure RLS policies as needed
+3. **Configure Environment**: Add the required environment variables to your .env files
+
+### API Endpoints
+
+- `POST /api/files/upload` - Upload files to storage
+- `DELETE /api/files` - Delete files from storage
+- `GET /api/files/list` - List files in a bucket
+- `GET /api/property-favorites` - List favorite properties
+- `POST /api/property-favorites` - Add property to favorites
+- `DELETE /api/property-favorites/{id}` - Remove from favorites
+- `GET /api/notifications` - List user notifications
+- `POST /api/notifications/{id}/read` - Mark notification as read
+- `POST /api/notifications/mark-all-read` - Mark all as read
+- `PATCH /api/auth/profile` - Update user profile including profile image
+
 ## 🔐 Security Features
 
 ### Input Sanitization
