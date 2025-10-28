@@ -101,8 +101,17 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
         
         # Create user in database
         try:
-            user = await db.insert("users", user_data)
+            user_result = await db.insert("users", user_data)
             print(f"[AUTH] User created in database successfully")
+            
+            # Handle list response from db.insert
+            if isinstance(user_result, list) and len(user_result) > 0:
+                user = user_result[0]
+            elif isinstance(user_result, dict):
+                user = user_result
+            else:
+                # Fallback to user_data if insert returns unexpected format
+                user = user_data
             
             # Initialize user roles with primary role
             try:
@@ -178,13 +187,17 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
             print(f"[AUTH] Email OTP send failed (non-blocking): {otp_error}")
         
         print(f"[AUTH] Signup completed successfully for: {payload.email}")
+        
+        # Ensure user is a dict
+        user_dict = user if isinstance(user, dict) else user_data
+        
         return {
             "success": True,
             "user": {
-                "id": user["id"],
-                "email": user["email"],
-                "first_name": user.get("first_name", ""),
-                "last_name": user.get("last_name", "")
+                "id": user_dict.get("id", user_id),
+                "email": user_dict.get("email", payload.email.lower()),
+                "first_name": user_dict.get("first_name", payload.first_name or ""),
+                "last_name": user_dict.get("last_name", payload.last_name or "")
             },
             "message": "Account created successfully! Please check your email for verification."
         }
