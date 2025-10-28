@@ -77,6 +77,18 @@ async def update_user(user_id: str, payload: UpdateProfileRequest, _=Depends(req
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.put("/users/{user_id}")
+async def update_user_put(user_id: str, request: Request, _=Depends(require_api_key)):
+    """Update a user - PUT method"""
+    try:
+        payload = await request.json()
+        if payload:
+            payload["updated_at"] = dt.datetime.utcnow().isoformat()
+            return await db.update("users", payload, {"id": user_id})
+        return {"message": "No changes to update"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.delete("/users/{user_id}")
 async def delete_user(user_id: str, _=Depends(require_api_key)):
     try:
@@ -680,3 +692,127 @@ async def get_analytics(_=Depends(require_api_key), range: str = "7d"):
         print(f"[ADMIN] Error getting analytics: {e}")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+
+# Additional missing routes
+@router.post("/users/{user_id}/profile")
+async def update_user_profile(user_id: str, request: Request, _=Depends(require_api_key)):
+    """Update user profile data"""
+    try:
+        payload = await request.json()
+        payload["updated_at"] = dt.datetime.utcnow().isoformat()
+        return await db.update("users", payload, {"id": user_id})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/users/{user_id}/bank")
+async def update_user_bank(user_id: str, request: Request, _=Depends(require_api_key)):
+    """Update user bank details"""
+    try:
+        payload = await request.json()
+        update_data = {
+            "bank_account_number": payload.get("bank_account_number"),
+            "ifsc_code": payload.get("ifsc_code"),
+            "updated_at": dt.datetime.utcnow().isoformat()
+        }
+        return await db.update("users", update_data, {"id": user_id})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/users/{user_id}/verify-bank")
+async def verify_user_bank(user_id: str, _=Depends(require_api_key)):
+    """Verify user bank account"""
+    try:
+        update_data = {
+            "bank_verified": True,
+            "updated_at": dt.datetime.utcnow().isoformat()
+        }
+        return await db.update("users", update_data, {"id": user_id})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/users/{user_id}/verify-status")
+async def update_verification_status(user_id: str, request: Request, _=Depends(require_api_key)):
+    """Update user verification status"""
+    try:
+        payload = await request.json()
+        status = payload.get("status")
+        update_data = {
+            "verification_status": status,
+            "updated_at": dt.datetime.utcnow().isoformat()
+        }
+        return await db.update("users", update_data, {"id": user_id})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/inquiries/{inquiry_id}/assign-agent")
+async def assign_agent_to_inquiry(inquiry_id: str, request: Request, _=Depends(require_api_key)):
+    """Assign an agent to an inquiry"""
+    try:
+        payload = await request.json()
+        agent_id = payload.get("agent_id")
+        status = payload.get("status", "pending")
+        assigned_at = payload.get("assigned_at")
+        expires_at = payload.get("expires_at")
+        notes = payload.get("notes")
+        
+        update_data = {
+            "agent_id": agent_id,
+            "status": status,
+            "assigned_at": assigned_at,
+            "expires_at": expires_at,
+            "notes": notes,
+            "updated_at": dt.datetime.utcnow().isoformat()
+        }
+        return await db.update("inquiries", update_data, {"id": inquiry_id})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/documents/{document_id}/approve")
+async def approve_document(document_id: str, _=Depends(require_api_key)):
+    """Approve a document"""
+    try:
+        update_data = {
+            "status": "approved",
+            "updated_at": dt.datetime.utcnow().isoformat()
+        }
+        return await db.update("documents", update_data, {"id": document_id})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/documents/{document_id}/reject")
+async def reject_document(document_id: str, request: Request, _=Depends(require_api_key)):
+    """Reject a document"""
+    try:
+        payload = await request.json() if request else {}
+        reason = payload.get("reason")
+        update_data = {
+            "status": "rejected",
+            "rejection_reason": reason,
+            "updated_at": dt.datetime.utcnow().isoformat()
+        }
+        return await db.update("documents", update_data, {"id": document_id})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/notifications")
+async def get_notifications(_=Depends(require_api_key), user_id: str = None):
+    """Get notifications for a user"""
+    try:
+        filters = {"user_id": user_id} if user_id else {}
+        notifications = await db.select("notifications", filters=filters) or []
+        return notifications
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/notifications/{notification_id}/mark-read")
+async def mark_notification_read(notification_id: str, _=Depends(require_api_key)):
+    """Mark a notification as read"""
+    try:
+        update_data = {
+            "read": True,
+            "read_at": dt.datetime.utcnow().isoformat(),
+            "updated_at": dt.datetime.utcnow().isoformat()
+        }
+        return await db.update("notifications", update_data, {"id": notification_id})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
