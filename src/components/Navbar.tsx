@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { Menu, X, User, LogOut, Settings, CreditCard } from 'lucide-react';
+import { Menu, X, User, LogOut, Settings, CreditCard, Bell } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { NotificationsApi } from '@/services/pyApi';
 import AuthModal from './AuthModal';
 import PasswordChangeModal from './PasswordChangeModal';
 import BankDetailsModal from './auth/BankDetailsModal';
@@ -19,6 +20,7 @@ const Navbar: React.FC = () => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [showBankModal, setShowBankModal] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // State for mobile menu
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -96,6 +98,28 @@ const Navbar: React.FC = () => {
 
   const [mainNavItems, setMainNavItems] = useState<any[]>([]);
   const [footerNavItems, setFooterNavItems] = useState<any[]>([]);
+
+  // Load unread notifications count
+  useEffect(() => {
+    if (user?.id) {
+      const loadUnreadCount = async () => {
+        try {
+          const response = await NotificationsApi.list(user.id);
+          const notifications = response.data || response || [];
+          const unread = notifications.filter((n: any) => !n.read).length;
+          setUnreadCount(unread);
+        } catch (error) {
+          console.error('Error loading notifications count:', error);
+        }
+      };
+      loadUnreadCount();
+      // Poll every 30 seconds for new notifications
+      const interval = setInterval(loadUnreadCount, 30000);
+      return () => clearInterval(interval);
+    } else {
+      setUnreadCount(0);
+    }
+  }, [user]);
 
   useEffect(() => {
     const loadNavItems = async () => {
@@ -239,7 +263,21 @@ const Navbar: React.FC = () => {
                 </nav>
 
                 {/* User Menu */}
-                <div className="relative ml-2 md:ml-4">
+                <div className="relative ml-2 md:ml-4 flex items-center space-x-2">
+                  {user && (
+                    <button
+                      onClick={() => navigate('/notifications')}
+                      className="relative p-2 text-gray-700 hover:bg-gray-100 rounded-full transition-colors"
+                      title="Notifications"
+                    >
+                      <Bell className="h-5 w-5" />
+                      {unreadCount > 0 && (
+                        <span className="absolute top-0 right-0 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/2 -translate-y-1/2 bg-red-600 rounded-full">
+                          {unreadCount > 9 ? '9+' : unreadCount}
+                        </span>
+                      )}
+                    </button>
+                  )}
                   {user ? (
                     <div className="relative user-menu-container">
                       <button
@@ -263,6 +301,31 @@ const Navbar: React.FC = () => {
                           >
                             <User size={16} className="mr-2" />
                             Profile
+                          </button>
+                          <button
+                            onClick={() => {
+                              setShowUserMenu(false);
+                              navigate('/wishlist');
+                            }}
+                            className="w-full text-left px-4 py-3 text-gray-700 hover:bg-gray-100 transition-colors flex items-center"
+                          >
+                            <span className="mr-2">❤️</span>
+                            Wishlist
+                          </button>
+                          <button
+                            onClick={() => {
+                              setShowUserMenu(false);
+                              navigate('/notifications');
+                            }}
+                            className="w-full text-left px-4 py-3 text-gray-700 hover:bg-gray-100 transition-colors flex items-center"
+                          >
+                            <Bell size={16} className="mr-2" />
+                            Notifications
+                            {unreadCount > 0 && (
+                              <span className="ml-auto bg-red-600 text-white text-xs px-2 py-0.5 rounded-full">
+                                {unreadCount}
+                              </span>
+                            )}
                           </button>
                           <button
                             onClick={() => {

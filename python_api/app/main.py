@@ -41,7 +41,8 @@ app.add_middleware(
 # Import routes after app initialization to avoid circular dependencies
 from .routes import (
     auth, properties, users, uploads, records, maintenance,
-    seller, buyer, emails, agent, locations, analytics, admin
+    seller, buyer, emails, agent, locations, analytics, admin,
+    files, favorites, notifications
 )
 
 @app.on_event("startup")
@@ -125,6 +126,10 @@ app.include_router(emails.router, prefix="/api/emails", tags=["emails"])
 app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
 app.include_router(locations.router, prefix="/api/locations", tags=["locations"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
+# New routes for storage, favorites, and notifications
+app.include_router(files.router)
+app.include_router(favorites.router)
+app.include_router(notifications.router)
 
 @app.get("/api", tags=["Root"])
 async def read_root():

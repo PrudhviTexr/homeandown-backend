@@ -255,4 +255,63 @@ export const FilesApi = {
     const base = (typeof window !== 'undefined' ? window.location.origin : '') + '/api';
     return `${base}/files/${id}`;
   },
+  uploadFile(file: File, bucket: string, folder: string = '') {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('bucket', bucket);
+    if (folder) formData.append('folder', folder);
+    return pyFetch('/api/files/upload', { 
+      method: 'POST', 
+      body: formData,
+      headers: {}, // Let browser set Content-Type for FormData
+      useApiKey: false 
+    });
+  },
+  deleteFile(path: string, bucket: string) {
+    return pyFetch('/api/files', { 
+      method: 'DELETE', 
+      body: JSON.stringify({ path, bucket }),
+      useApiKey: false 
+    });
+  },
+  listFiles(bucket: string, folder: string = '') {
+    const params = new URLSearchParams();
+    params.set('bucket', bucket);
+    if (folder) params.set('folder', folder);
+    return pyFetch(`/api/files/list?${params.toString()}`, { method: 'GET', useApiKey: false });
+  }
+};
+
+export const FavoritesApi = {
+  list(user_id?: string | number) {
+    const params = user_id ? `?user_id=${user_id}` : '';
+    return pyFetch(`/api/property-favorites${params}`, { method: 'GET', useApiKey: false });
+  },
+  add(property_id: string | number, user_id: string | number) {
+    return pyFetch('/api/property-favorites', { 
+      method: 'POST', 
+      body: JSON.stringify({ property_id, user_id }),
+      useApiKey: false 
+    });
+  },
+  remove(id: string | number) {
+    return pyFetch(`/api/property-favorites/${id}`, { method: 'DELETE', useApiKey: false });
+  }
+};
+
+export const NotificationsApi = {
+  list(user_id?: string | number) {
+    const params = user_id ? `?user_id=${user_id}` : '';
+    return pyFetch(`/api/notifications${params}`, { method: 'GET', useApiKey: false });
+  },
+  markAsRead(id: string | number) {
+    return pyFetch(`/api/notifications/${id}/read`, { method: 'POST', useApiKey: false });
+  },
+  markAllAsRead(user_id: string | number) {
+    return pyFetch('/api/notifications/mark-all-read', { 
+      method: 'POST', 
+      body: JSON.stringify({ user_id }),
+      useApiKey: false 
+    });
+  }
 };
