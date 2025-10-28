@@ -238,6 +238,10 @@ async def login(payload: LoginRequest, response: Response, role: Optional[str] =
         
         # Check if user is approved by admin (for all user types)
         user_status = user.get("status", "pending")
+        verification_status = user.get("verification_status", "pending")
+        
+        print(f"[AUTH] User status check: status={user_status}, verification_status={verification_status}")
+        
         if user_status != "active":
             print(f"[AUTH] User not approved by admin: {payload.email} (status: {user_status})")
             # Provide a more specific message for suspended accounts
@@ -248,6 +252,14 @@ async def login(payload: LoginRequest, response: Response, role: Optional[str] =
             raise HTTPException(
                 status_code=403, 
                 detail=detail
+            )
+        
+        # For agents, also check verification_status
+        if user_type == 'agent' and verification_status not in ['verified', 'active']:
+            print(f"[AUTH] Agent not verified: {payload.email} (verification_status: {verification_status})")
+            raise HTTPException(
+                status_code=403,
+                detail="Your agent account verification is still pending. Please wait for admin approval."
             )
         
         # Allow any verified user to sign in (regardless of user type)

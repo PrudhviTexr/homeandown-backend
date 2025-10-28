@@ -260,8 +260,8 @@ async def create_property(property_data: dict):
         property_data['created_at'] = now
         property_data['updated_at'] = now
         
-        # Ensure required fields with defaults
-        property_data.setdefault('status', 'active')
+        # Ensure required fields with defaults - properties start as pending for admin approval
+        property_data.setdefault('status', 'pending')
         property_data.setdefault('featured', False)
         property_data.setdefault('verified', False)  # Properties require admin approval
         property_data.setdefault('priority', 0)
