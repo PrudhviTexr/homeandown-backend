@@ -13,6 +13,7 @@ router = APIRouter()
 async def get_properties(
     city: Optional[str] = Query(None),
     state: Optional[str] = Query(None),
+    mandal: Optional[str] = Query(None),
     property_type: Optional[str] = Query(None),
     listing_type: Optional[str] = Query(None),
     min_price: Optional[float] = Query(None),
@@ -37,6 +38,7 @@ async def get_properties(
         print(f"[PROPERTIES] Query parameters:")
         print(f"  - city: {city}")
         print(f"  - state: {state}")
+        print(f"  - mandal: {mandal}")
         print(f"  - property_type: {property_type}")
         print(f"  - listing_type: {listing_type}")
         print(f"  - commercial_subtype: {commercial_subtype}")
@@ -64,6 +66,8 @@ async def get_properties(
             base_filters['owner_id'] = owner_id
         if added_by:
             base_filters['added_by'] = added_by
+        if mandal:
+            base_filters['mandal'] = mandal
         if property_type:
             # Handle multiple property types (comma-separated)
             if ',' in property_type:
@@ -1368,3 +1372,93 @@ async def get_pincode_suggestions(pincode: str):
     except Exception as e:
         print(f"[PROPERTIES] Error fetching pincode suggestions: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch pincode suggestions: {str(e)}")
+
+@router.get("/filters/options", tags=["properties"])
+async def get_filter_options():
+    """Get distinct filter values from database for search filters"""
+    try:
+        print(f"[PROPERTIES] Fetching filter options from database")
+        
+        # Get all active properties
+        properties = await db.admin_select("properties", filters={"status": "active"})
+        
+        if not properties:
+            print(f"[PROPERTIES] No properties found")
+            return {
+                "property_types": [],
+                "states": [],
+                "cities": [],
+                "furnishing_statuses": [],
+                "facing_directions": [],
+                "commercial_subtypes": [],
+                "land_types": []
+            }
+        
+        # Extract distinct values
+        property_types = sorted(list(set([p.get('property_type') for p in properties if p.get('property_type')])))
+        states = sorted(list(set([p.get('state') for p in properties if p.get('state')])))
+        cities = sorted(list(set([p.get('city') for p in properties if p.get('city')])))
+        furnishing_statuses = sorted(list(set([p.get('furnishing_status') for p in properties if p.get('furnishing_status')])))
+        facing_directions = sorted(list(set([p.get('facing') for p in properties if p.get('facing')])))
+        commercial_subtypes = sorted(list(set([p.get('commercial_subtype') for p in properties if p.get('commercial_subtype')])))
+        land_types = sorted(list(set([p.get('land_type') for p in properties if p.get('land_type')])))
+        
+        result = {
+            "property_types": [{"value": pt, "label": pt.replace('_', ' ').title()} for pt in property_types],
+            "states": states,
+            "cities": cities,
+            "furnishing_statuses": furnishing_statuses,
+            "facing_directions": facing_directions,
+            "commercial_subtypes": commercial_subtypes,
+            "land_types": land_types
+        }
+        
+        print(f"[PROPERTIES] Filter options: {result}")
+        return result
+        
+    except Exception as e:
+        print(f"[PROPERTIES] Error fetching filter options: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch filter options: {str(e)}")
+
+@router.get("/locations/{city}/mandals", tags=["properties"])
+async def get_mandals_for_city(city: str):
+    """Get mandals with property counts for a specific city"""
+    try:
+        print(f"[PROPERTIES] Fetching mandals for city: {city}")
+        
+        # Get all active properties in this city
+        properties = await db.admin_select("properties", filters={"city": city, "status": "active"})
+        
+        if not properties:
+            print(f"[PROPERTIES] No properties found in city: {city}")
+            return {
+                "city": city,
+                "mandals": [],
+                "property_count": 0
+            }
+        
+        # Count properties per mandal
+        mandal_counts: dict = {}
+        for prop in properties:
+            mandal = prop.get('mandal')
+            if mandal:
+                mandal_counts[mandal] = mandal_counts.get(mandal, 0) + 1
+        
+        # Sort by property count descending
+        mandals = [
+            {"mandal": m, "property_count": c} 
+            for m, c in sorted(mandal_counts.items(), key=lambda x: x[1], reverse=True)
+        ]
+        
+        result = {
+            "city": city,
+            "mandals": mandals,
+            "total_properties": len(properties)
+        }
+        
+        print(f"[PROPERTIES] Found {len(mandals)} mandals in {city} with {len(properties)} total properties")
+        return result
+        
+    except Exception as e:
+        print(f"[PROPERTIES] Error fetching mandals for city: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch mandals: {str(e)}")
