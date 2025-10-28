@@ -1,7 +1,7 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from pydantic import BaseModel
-from ..core.security import require_api_key
+from typing import Dict, Any
 
 router = APIRouter()
 
@@ -18,9 +18,8 @@ class VerifyOTPRequest(BaseModel):
 
 
 @router.post("/send-otp")
-async def send_otp_endpoint(payload: dict):
+async def send_otp_endpoint(payload: Dict[str, Any] = Body(...)):
     from ..services.otp_service import send_email_otp
-    from fastapi import Request
     
     # Handle request body
     email = payload.get("email")
@@ -39,7 +38,7 @@ async def send_otp_endpoint(payload: dict):
 
 
 @router.post("/verify-otp")
-async def verify_otp_endpoint(payload: dict):
+async def verify_otp_endpoint(payload: Dict[str, Any] = Body(...)):
     from ..services.otp_service import verify_email_otp
     
     # Handle request body
