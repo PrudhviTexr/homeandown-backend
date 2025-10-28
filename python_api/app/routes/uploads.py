@@ -68,19 +68,18 @@ async def upload_file(
         doc_data = {
             "id": str(uuid.uuid4()),
             "entity_type": entity_type,
-            "entity_id": entity_id,
+            "entity_id": entity_id if entity_id else str(uuid.uuid4()),
             "name": file.filename or filename,
-            "url": public_url,
+            "file_path": public_url,  # Changed from 'url' to 'file_path' to match schema
             "file_type": file.content_type,
             "file_size": len(content),
-            "storage_path": object_path,
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat()
         }
 
         await db.insert("documents", doc_data)
 
-        print(f"[UPLOAD] File uploaded successfully: {doc_data['url']}")
-        return {"success": True, "id": doc_data["id"], "url": doc_data["url"]}
+        print(f"[UPLOAD] File uploaded successfully: {doc_data['file_path']}")
+        return {"success": True, "id": doc_data["id"], "url": doc_data["file_path"]}
 
     except HTTPException:
         raise
