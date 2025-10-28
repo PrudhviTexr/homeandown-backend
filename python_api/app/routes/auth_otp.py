@@ -10,19 +10,19 @@ router = APIRouter()
 
 
 class SendOTPRequest(BaseModel):
-    phone: str
-    purpose: str | None = "verify"
+    email: str  # Changed from phone to email
+    action: str | None = "email_verification"  # Changed from purpose to action
 
 
 class VerifyOTPRequest(BaseModel):
-    phone: str
-    token: str
-    purpose: str | None = "verify"
+    email: str  # Changed from phone to email
+    otp: str  # Changed from token to otp
+    action: str | None = "email_verification"  # Changed from purpose to action
 
 
 @router.post("/send-otp")
 def send_otp_endpoint(req: SendOTPRequest, db: Session = Depends(get_db), _=Depends(require_api_key)):
-    from ..services.otp_service import send_otp_simple
+    from ..services.otp_service import send_email_otp
     import asyncio
     
     # Call the async function
@@ -32,25 +32,17 @@ def send_otp_endpoint(req: SendOTPRequest, db: Session = Depends(get_db), _=Depe
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     
-    token = loop.run_until_complete(send_otp_simple(req.phone, req.purpose or "verify"))
-    
-    # For testing, include token in response when TWILIO_* not configured
-    tw_sid = False
-    try:
-        import os
-        tw_sid = bool(os.getenv("TWILIO_ACCOUNT_SID"))
-    except Exception:
-        pass
+    token = loop.run_until_complete(send_email_otp(req.email, req.action or "email_verification"))
     
     # Return in format frontend expects
-    return {"success": True, "sent": True, "otp": token if not tw_sid else None}
+    return {"success": True, "sent": True, "otp": token}
 
 
 @router.post("/verify-otp")
 def verify_otp_endpoint(req: VerifyOTPRequest, db: Session = Depends(get_db)):
-    from ..services.otp_service import verify_otp_simple
+    from ..services.otp_service import verify_email_otp
     
-    ok = verify_otp_simple(req.phone, req.token, req.purpose or "verify")
+    ok = verify_email_otp(req.email, req.otp, req.action or "email_verification")
     if not ok:
         raise HTTPException(status_code=400, detail="Invalid or expired token")
     
