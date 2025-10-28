@@ -19,7 +19,7 @@ class VerifyOTPRequest(BaseModel):
 
 
 @router.post("/send-otp")
-def send_otp_endpoint(req: SendOTPRequest, db: Session = Depends(get_db), _=Depends(require_api_key)):
+def send_otp_endpoint(req: SendOTPRequest, _=Depends(require_api_key)):
     from ..services.otp_service import send_email_otp
     import asyncio
     
@@ -37,7 +37,7 @@ def send_otp_endpoint(req: SendOTPRequest, db: Session = Depends(get_db), _=Depe
 
 
 @router.post("/verify-otp")
-def verify_otp_endpoint(req: VerifyOTPRequest, db: Session = Depends(get_db)):
+def verify_otp_endpoint(req: VerifyOTPRequest):
     from ..services.otp_service import verify_email_otp
     
     ok = verify_email_otp(req.email, req.otp, req.action or "email_verification")
