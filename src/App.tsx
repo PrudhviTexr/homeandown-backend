@@ -24,6 +24,8 @@ import EmailVerification from './pages/EmailVerification';
 import AgentAssignments from './pages/agent/AgentAssignments';
 import AgentDashboard from './pages/agent/AgentDashboard'; 
 import Profile from './pages/client/Profile';
+import Wishlist from './pages/Wishlist';
+import Notifications from './pages/Notifications';
 
 import SellerDashboard from './pages/seller/SellerDashboard';
 import BuyerDashboard from './pages/buyer/BuyerDashboard';
@@ -75,6 +77,8 @@ function AppRoutes() {
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/profile" element={<ClientRouteGuard><Profile /></ClientRouteGuard>} />
+      <Route path="/wishlist" element={<ClientRouteGuard><Wishlist /></ClientRouteGuard>} />
+      <Route path="/notifications" element={<ClientRouteGuard><Notifications /></ClientRouteGuard>} />
       <Route path="/agent/assignments" element={<AgentRouteGuard><AgentAssignments /></AgentRouteGuard>} />
       <Route path="/agent/dashboard/*" element={<AgentRouteGuard><AgentDashboard /></AgentRouteGuard>} />
       <Route path="/agent/dashboard" element={<AgentRouteGuard><AgentDashboard /></AgentRouteGuard>} />

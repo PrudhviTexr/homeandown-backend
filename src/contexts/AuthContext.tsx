@@ -10,6 +10,7 @@ interface User {
   user_type: string;
   email_verified: boolean;
   phone_number?: string;
+  profile_image_url?: string;
 }
 
 interface AuthContextType {
@@ -20,6 +21,7 @@ interface AuthContextType {
   signUp: (email: string, password: string, userData: any) => Promise<{ error?: any; success?: boolean }>;
   signOut: () => Promise<void>;
   getUserProfile: (force?: boolean) => Promise<any>;
+  updateProfileImage: (imageUrl: string) => Promise<void>;
   sendOTP: (phone: string, action: string) => Promise<{ success: boolean; error?: string; otp?: string }>;
   verifyOTP: (phone: string, otp: string, action: string) => Promise<{ success: boolean; error?: string }>;
 }
@@ -336,6 +338,38 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  const updateProfileImage = async (imageUrl: string) => {
+    try {
+      console.log('[AUTH] Updating profile image...');
+      
+      const response = await pyFetch('/api/auth/profile', {
+        method: 'PATCH',
+        body: JSON.stringify({ profile_image_url: imageUrl }),
+        useApiKey: false
+      });
+
+      if (response && response.id) {
+        // Update local user state
+        setUser(prev => prev ? { ...prev, profile_image_url: imageUrl } : null);
+        try {
+          const cached = sessionStorage.getItem('auth_profile');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            parsed.profile_image_url = imageUrl;
+            sessionStorage.setItem('auth_profile', JSON.stringify(parsed));
+          }
+        } catch (e) {
+          // ignore sessionStorage errors
+        }
+        toast.success('Profile image updated successfully');
+      }
+    } catch (error: any) {
+      console.error('[AUTH] Update profile image error:', error);
+      toast.error('Failed to update profile image');
+      throw error;
+    }
+  };
+
   const value = {
     user,
     loading,
@@ -344,6 +378,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     signUp,
     signOut,
     getUserProfile,
+    updateProfileImage,
     sendOTP,
     verifyOTP,
   };
