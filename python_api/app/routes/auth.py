@@ -103,83 +103,10 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
             except Exception as cid_error:
                 print(f"[AUTH] Custom ID generation failed: {cid_error}")
         
-        # Create user in database
-        try:
-            user_result = await db.insert("users", user_data)
-            print(f"[AUTH] User created in database successfully")
-            
-            # Handle list response from db.insert
-            if isinstance(user_result, list) and len(user_result) > 0:
-                user = user_result[0]
-            elif isinstance(user_result, dict):
-                user = user_result
-            else:
-                # Fallback to user_data if insert returns unexpected format
-                user = user_data
-            
-            # Initialize user roles with primary role
-            try:
-                from ..services.user_role_service import UserRoleService
-                await UserRoleService.initialize_user_roles(user_id, payload.role)
-                print(f"[AUTH] User roles initialized successfully")
-            except Exception as role_error:
-                print(f"[AUTH] Failed to initialize user roles: {role_error}")
-                # Don't fail the signup if role initialization fails
-                
-        except Exception as create_error:
-            print(f"[AUTH] User creation failed: {create_error}")
-            return {
-                "success": False,
-                "error": f"Failed to create user account: {str(create_error)}"
-            }
-
-        # Handle document uploads if provided
-        if hasattr(payload, 'documents') and payload.documents:
-            try:
-                for doc in payload.documents:
-                    doc_id = str(uuid.uuid4())
-                    doc_data = {
-                        "id": doc_id,
-                        "entity_type": "user",
-                        "entity_id": user_id,
-                        "name": doc.name,
-                        "file_path": doc.url,
-                        "file_type": doc.file_type,
-                        "file_size": doc.file_size,
-                        "document_category": doc.type,
-                        "uploaded_by": user_id,
-                        "created_at": now_utc
-                    }
-                    try:
-                        await db.insert("documents", doc_data)
-                        print(f"[AUTH] Document {doc_id} associated to user {user_id}")
-                    except Exception as e:
-                        print(f"[AUTH] Failed to associate document {doc_id} to user {user_id}: {e}")
-            except Exception as doc_assoc_err:
-                print(f"[AUTH] Documents association error: {doc_assoc_err}")
-        
-        # Create user approval record for ALL users (buyers, agents, sellers)
-        try:
-            approval_data = {
-                "user_id": user_id,
-                "status": "pending",
-                "submitted_at": now_utc,
-                "created_at": now_utc,
-                "updated_at": now_utc
-            }
-            await db.insert("user_approvals", approval_data)
-            print(f"[AUTH] User approval record created for {payload.role}: {user_id}")
-        except Exception as approval_err:
-            print(f"[AUTH] Failed to create approval record: {approval_err}")
-        
-        # Send admin notification for new user registration
-        try:
-            from ..services.admin_notification_service import AdminNotificationService
-            await AdminNotificationService.notify_user_registration(user_data)
-            print(f"[AUTH] Admin notification sent for new user: {payload.email}")
-        except Exception as notify_error:
-            print(f"[AUTH] Failed to send admin notification: {notify_error}")
-            # Don't fail signup if notification fails
+        # STORE IN TEMP STORAGE (not DB yet - save after OTP verification)
+        from ..services.otp_service import store_temp_signup
+        store_temp_signup(user_id, user_data)
+        print(f"[AUTH] Stored signup data temporarily for {payload.email} - NOT saved to DB yet")
         
         # Generate and send email OTP for verification
         print(f"[AUTH] Sending email verification OTP...")
@@ -190,20 +117,18 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
         except Exception as otp_error:
             print(f"[AUTH] Email OTP send failed (non-blocking): {otp_error}")
         
-        print(f"[AUTH] Signup completed successfully for: {payload.email}")
-        
-        # Ensure user is a dict
-        user_dict = user if isinstance(user, dict) else user_data
-        
+        # Return success but user NOT in DB yet
+        print(f"[AUTH] Signup data stored temporarily for: {payload.email}")
         return {
             "success": True,
             "user": {
-                "id": user_dict.get("id", user_id),
-                "email": user_dict.get("email", payload.email.lower()),
-                "first_name": user_dict.get("first_name", payload.first_name or ""),
-                "last_name": user_dict.get("last_name", payload.last_name or "")
+                "id": user_id,
+                "email": payload.email.lower(),
+                "first_name": payload.first_name or "",
+                "last_name": payload.last_name or ""
             },
-            "message": "Account created successfully! Please check your email for verification."
+            "message": "Account created successfully! Please check your email for verification.",
+            "otp_sent": True
         }
         
     except Exception as e:
@@ -214,6 +139,82 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
             "success": False,
             "error": f"Signup failed: {str(e)}"
         }
+
+@router.post("/verify-and-create-user")
+async def verify_and_create_user(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Complete user signup after OTP verification - saves to DB"""
+    try:
+        email = payload.get("email")
+        otp = payload.get("otp")
+        user_id = payload.get("user_id")
+        
+        print(f"[AUTH] Complete signup after OTP verification for: {email}")
+        
+        # Verify OTP
+        from ..services.otp_service import verify_email_otp
+        if not verify_email_otp(email, otp, "email_verification"):
+            return {"success": False, "error": "Invalid or expired OTP"}
+        
+        # Get temp signup data
+        from ..services.otp_service import get_temp_signup, delete_temp_signup
+        signup_data = get_temp_signup(user_id)
+        
+        if not signup_data:
+            return {"success": False, "error": "Signup session expired. Please sign up again."}
+        
+        # Save to database
+        now_utc = dt.datetime.now(dt.timezone.utc).isoformat()
+        
+        # Create user in database
+        user_result = await db.insert("users", signup_data)
+        user = user_result[0] if isinstance(user_result, list) else user_result
+        
+        # Initialize user roles
+        try:
+            from ..services.user_role_service import UserRoleService
+            await UserRoleService.initialize_user_roles(user_id, signup_data.get("user_type", "buyer"))
+        except Exception as role_error:
+            print(f"[AUTH] Role initialization failed: {role_error}")
+        
+        # Create user approval record
+        try:
+            approval_data = {
+                "user_id": user_id,
+                "status": "pending",
+                "submitted_at": now_utc,
+                "created_at": now_utc,
+                "updated_at": now_utc
+            }
+            await db.insert("user_approvals", approval_data)
+        except Exception as approval_err:
+            print(f"[AUTH] Approval record failed: {approval_err}")
+        
+        # Send admin notification
+        try:
+            from ..services.admin_notification_service import AdminNotificationService
+            await AdminNotificationService.notify_user_registration(signup_data)
+        except Exception as notify_error:
+            print(f"[AUTH] Admin notification failed: {notify_error}")
+        
+        # Delete temp data
+        delete_temp_signup(user_id)
+        
+        return {
+            "success": True,
+            "user": {
+                "id": user_id,
+                "email": signup_data.get("email"),
+                "first_name": signup_data.get("first_name", ""),
+                "last_name": signup_data.get("last_name", "")
+            },
+            "message": "Account created and verified successfully! Waiting for admin approval."
+        }
+        
+    except Exception as e:
+        print(f"[AUTH] Complete signup error: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return {"success": False, "error": f"Failed to complete signup: {str(e)}"}
 
 @router.post("/login")
 async def login(payload: LoginRequest, response: Response, role: Optional[str] = None) -> Dict[str, Any]:
