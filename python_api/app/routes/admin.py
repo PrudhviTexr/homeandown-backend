@@ -175,7 +175,7 @@ async def approve_property(property_id: str, _=Depends(require_api_key)):
                         user = user_data[0]
                         subject = f"Your property listing '{prop.get('title')}' has been approved"
                         html_content = f"<p>Hi {user.get('first_name')},</p><p>Congratulations! Your property listing, <strong>{prop.get('title')}</strong>, has been approved and is now live on Home & Own.</p>"
-                        await send_email(to_email=user.get('email'), subject=subject, html_content=html_content)
+                        await send_email(to=user.get('email'), subject=subject, html=html_content)
         except Exception as email_error:
             print(f"[ADMIN] !!! Failed to send property approval email: {email_error}")
 
@@ -209,7 +209,7 @@ async def reject_property(property_id: str, request: Request, _=Depends(require_
                         user = user_data[0]
                         subject = f"An update on your property listing '{prop.get('title')}'"
                         html_content = f"<p>Hi {user.get('first_name')},</p><p>We have reviewed your property listing, <strong>{prop.get('title')}</strong>. We regret to inform you that it has been rejected.</p><p><strong>Reason:</strong> {reason}</p>"
-                        await send_email(to_email=user.get('email'), subject=subject, html_content=html_content)
+                        await send_email(to=user.get('email'), subject=subject, html=html_content)
         except Exception as email_error:
             print(f"[ADMIN] !!! Failed to send property rejection email: {email_error}")
 
@@ -244,7 +244,7 @@ async def resubmit_property(property_id: str, request: Request, _=Depends(requir
                         user = user_data[0]
                         subject = f"Action required for your property listing '{prop.get('title')}'"
                         html_content = f"<p>Hi {user.get('first_name')},</p><p>Regarding your property listing, <strong>{prop.get('title')}</strong>, we require some changes before it can be approved.</p><p><strong>Reason:</strong> {reason}</p><p>Please log in to your account to edit and resubmit your property for review.</p>"
-                        await send_email(to_email=user.get('email'), subject=subject, html_content=html_content)
+                        await send_email(to=user.get('email'), subject=subject, html=html_content)
         except Exception as email_error:
             print(f"[ADMIN] !!! Failed to send property resubmission email: {email_error}")
 
@@ -275,7 +275,7 @@ async def assign_agent(property_id: str, payload: dict, _=Depends(require_api_ke
                 <p>You have been assigned as the agent for the property: <strong>{prop.get('title')}</strong>.</p>
                 <p>You can view the property details in your dashboard.</p>
                 """
-                await send_email(to_email=agent.get('email'), subject=subject, html_content=html_content)
+                await send_email(to=agent.get('email'), subject=subject, html=html_content)
         except Exception as email_error:
             print(f"[ADMIN] !!! Failed to send agent assignment email: {email_error}")
 
