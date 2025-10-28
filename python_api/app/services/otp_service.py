@@ -7,6 +7,9 @@ from ..core.config import settings
 # In-memory OTP storage for development (use Redis in production)
 _otp_storage: Dict[str, Any] = {}
 
+# In-memory temporary signup storage (save to DB only after OTP verification)
+_temp_signup_storage: Dict[str, Any] = {}
+
 def _gen_code(length: int = 6) -> str:
     """Generate random OTP code"""
     return ''.join(str(random.randint(0, 9)) for _ in range(length))
@@ -201,6 +204,22 @@ def verify_email_otp(email: str, token: str, action: str = "email_verification")
     
     print(f"[EMAIL-OTP] Email OTP verified successfully for {email}")
     return True
+
+# Temporary signup storage functions
+def store_temp_signup(user_id: str, signup_data: Dict[str, Any]):
+    """Store signup data temporarily (until OTP verification)"""
+    _temp_signup_storage[user_id] = signup_data
+    print(f"[TEMP-SIGNUP] Stored temporary signup data for user {user_id}")
+
+def get_temp_signup(user_id: str) -> Optional[Dict[str, Any]]:
+    """Get temporary signup data"""
+    return _temp_signup_storage.get(user_id)
+
+def delete_temp_signup(user_id: str):
+    """Delete temporary signup data after successful DB save"""
+    if user_id in _temp_signup_storage:
+        del _temp_signup_storage[user_id]
+        print(f"[TEMP-SIGNUP] Deleted temporary signup data for user {user_id}")
 
 def get_email_otp_status(email: str, action: str = "email_verification") -> dict:
     """Get email OTP status for debugging"""

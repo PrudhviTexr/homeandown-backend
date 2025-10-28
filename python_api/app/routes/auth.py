@@ -50,7 +50,11 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
         user_id = str(uuid.uuid4())
         print(f"[AUTH] Generated user ID: {user_id}")
         
-        # Prepare user data
+        # TEMPORARY STORAGE: Store signup data in memory, don't save to DB yet
+        # Data will be saved to DB only after OTP verification
+        from ..services.otp_service import _temp_signup_storage
+        
+        # Prepare user data (not saved to DB yet)
         now_utc = dt.datetime.now(dt.timezone.utc).isoformat()
         
         # Set verification status and initial status based on user role
