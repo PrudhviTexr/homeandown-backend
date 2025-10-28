@@ -1,8 +1,6 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from ..db.deps import get_db
 from ..services.otp_service import send_otp, verify_otp
 from ..core.security import require_api_key
 
