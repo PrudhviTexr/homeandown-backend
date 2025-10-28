@@ -22,7 +22,18 @@ class VerifyOTPRequest(BaseModel):
 
 @router.post("/send-otp")
 def send_otp_endpoint(req: SendOTPRequest, db: Session = Depends(get_db), _=Depends(require_api_key)):
-    token = send_otp(db, req.phone, purpose=req.purpose or "verify")
+    from ..services.otp_service import send_otp_simple
+    import asyncio
+    
+    # Call the async function
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    token = loop.run_until_complete(send_otp_simple(req.phone, req.purpose or "verify"))
+    
     # For testing, include token in response when TWILIO_* not configured
     tw_sid = False
     try:
@@ -30,12 +41,18 @@ def send_otp_endpoint(req: SendOTPRequest, db: Session = Depends(get_db), _=Depe
         tw_sid = bool(os.getenv("TWILIO_ACCOUNT_SID"))
     except Exception:
         pass
-    return {"ok": True, "sent": True, "token": token if not tw_sid else None}
+    
+    # Return in format frontend expects
+    return {"success": True, "sent": True, "otp": token if not tw_sid else None}
 
 
 @router.post("/verify-otp")
 def verify_otp_endpoint(req: VerifyOTPRequest, db: Session = Depends(get_db)):
-    ok = verify_otp(db, req.phone, req.token, purpose=req.purpose or "verify")
+    from ..services.otp_service import verify_otp_simple
+    
+    ok = verify_otp_simple(req.phone, req.token, req.purpose or "verify")
     if not ok:
         raise HTTPException(status_code=400, detail="Invalid or expired token")
-    return {"ok": True}
+    
+    # Return in format frontend expects
+    return {"success": True}

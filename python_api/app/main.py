@@ -43,6 +43,7 @@ from .routes import (
     auth, properties, users, uploads, records, maintenance,
     seller, buyer, emails, agent, locations, analytics, admin
 )
+from .routes import auth_otp
 
 @app.on_event("startup")
 async def startup_event():
@@ -113,6 +114,7 @@ async def startup_event():
 
 # Include routers with prefixes
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(auth_otp.router, prefix="/api/auth", tags=["auth"])
 app.include_router(properties.router, prefix="/api/properties", tags=["properties"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
