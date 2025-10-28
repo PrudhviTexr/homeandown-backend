@@ -1,20 +1,8 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, Body
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Body
 from typing import Dict, Any
 
 router = APIRouter()
-
-
-class SendOTPRequest(BaseModel):
-    email: str  # Changed from phone to email
-    action: str | None = "email_verification"  # Changed from purpose to action
-
-
-class VerifyOTPRequest(BaseModel):
-    email: str  # Changed from phone to email
-    otp: str  # Changed from token to otp
-    action: str | None = "email_verification"  # Changed from purpose to action
 
 
 @router.post("/send-otp")
