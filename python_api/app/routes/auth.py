@@ -428,14 +428,6 @@ async def verify_otp(payload: VerifyOTPRequest) -> Dict[str, Any]:
             
         print(f"[OTP] OTP verified successfully for {payload.email}")
         return {"success": True}
-            
-        except ImportError:
-            # Development fallback - accept any 6-digit OTP
-            print(f"[OTP] OTP service not available - accepting any valid format in dev mode")
-            return {"success": True, "message": "OTP verified successfully (dev mode)"}
-        except Exception as verify_error:
-            print(f"[OTP] OTP verification error: {verify_error}")
-            raise HTTPException(status_code=400, detail="Invalid or expired OTP")
         
     except HTTPException:
         raise
