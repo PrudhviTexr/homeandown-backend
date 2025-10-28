@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request, Query
+from typing import Optional
 from ..core.security import require_api_key
 from ..db.supabase_client import db
 from ..services.email import send_email
@@ -378,10 +379,28 @@ async def reject_user(user_id: str, request: Request, _=Depends(require_api_key)
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.get("/documents")
-async def list_documents(_=Depends(require_api_key)):
+async def list_documents(
+    entity_type: Optional[str] = Query(None),
+    entity_id: Optional[str] = Query(None),
+    _=Depends(require_api_key)
+):
+    """List documents with optional filtering"""
     try:
-        return await db.admin_select("documents") or []
+        # Build filters if provided
+        filters = {}
+        if entity_type:
+            filters['entity_type'] = entity_type
+        if entity_id:
+            filters['entity_id'] = entity_id
+        
+        # Fetch documents with filters
+        documents = await db.admin_select("documents", filters=filters if filters else None) or []
+        
+        return documents
     except Exception as e:
+        import traceback
+        print(f"[ADMIN] Error fetching documents: {e}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 # Agent-specific routes
