@@ -31,13 +31,13 @@ class EmailRequest(BaseModel):
     html: str
 
 class SendOTPRequest(BaseModel):
-    phone: str
-    action: str = "verification"  # verification, bank_update, sensitive_action
+    email: str  # Changed from phone to email
+    action: str = "email_verification"  # Changed default action
 
 class VerifyOTPRequest(BaseModel):
-    phone: str
+    email: str  # Changed from phone to email
     otp: str
-    action: str = "verification"
+    action: str = "email_verification"
 
 class BankDetailsRequest(BaseModel):
     bank_account_number: str

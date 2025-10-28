@@ -399,36 +399,15 @@ async def get_profile(request: Request) -> Dict[str, Any]:
 
 @router.post("/send-otp")
 async def send_otp(payload: SendOTPRequest) -> Dict[str, Any]:
-    """Send OTP via SMS for phone verification."""
+    """Send OTP via email for email verification."""
     try:
-        print(f"[OTP] Send OTP request: {payload.phone} for {payload.action}")
+        print(f"[OTP] Send OTP request: {payload.email} for {payload.action}")
         
-        # Generate OTP
-        import random
-        otp = str(random.randint(100000, 999999))
+        from ..services.otp_service import send_email_otp
+        token = await send_email_otp(payload.email, payload.action)
         
-        # In development, just return the OTP
-        if settings.SITE_URL and "localhost" in settings.SITE_URL:
-            print(f"[OTP] Development mode - returning OTP: {otp}")
-            return {"success": True, "otp": otp, "message": "OTP sent successfully (dev mode)"}
-        
-        # Send OTP via Twilio SMS
-        try:
-            from ..services.sms_service import send_sms_otp
-            result = await send_sms_otp(payload.phone, otp, payload.action)
-            if result.get('success'):
-                return {"success": True, "message": "OTP sent successfully"}
-            else:
-                raise HTTPException(status_code=500, detail="Failed to send OTP")
-        except ImportError:
-            # Fallback for development - return OTP in response
-            print(f"[OTP] SMS service not available - development mode OTP: {otp}")
-            return {"success": True, "otp": otp, "message": "OTP sent successfully (dev mode)"}
-        except Exception as sms_error:
-            print(f"[OTP] SMS sending failed: {sms_error}")
-            raise HTTPException(status_code=500, detail=f"Failed to send OTP: {str(sms_error)}")
-        
-        return {"success": True, "message": "OTP sent successfully"}
+        # Return in format frontend expects
+        return {"success": True, "sent": True, "otp": token}
         
     except Exception as e:
         print(f"[OTP] Send OTP error: {e}")
@@ -436,26 +415,19 @@ async def send_otp(payload: SendOTPRequest) -> Dict[str, Any]:
 
 @router.post("/verify-otp")
 async def verify_otp(payload: VerifyOTPRequest) -> Dict[str, Any]:
-    """Verify OTP for phone verification."""
+    """Verify OTP for email verification."""
     try:
-        print(f"[OTP] Verify OTP: {payload.phone} for {payload.action}")
+        print(f"[OTP] Verify OTP: {payload.email} for {payload.action}")
         
-        # Implement OTP verification
-        if len(payload.otp) != 6 or not payload.otp.isdigit():
-            print(f"[OTP] Invalid OTP format: {payload.otp}")
-            raise HTTPException(status_code=400, detail="Invalid OTP format")
+        from ..services.otp_service import verify_email_otp
+        is_valid = verify_email_otp(payload.email, payload.otp, payload.action)
         
-        # Verify OTP using OTP service
-        try:
-            from ..services.otp_service import verify_phone_otp
-            is_valid = verify_phone_otp(payload.phone, payload.otp, payload.action)
+        if not is_valid:
+            print(f"[OTP] Invalid OTP provided for {payload.email}")
+            raise HTTPException(status_code=400, detail="Invalid or expired OTP")
             
-            if not is_valid:
-                print(f"[OTP] Invalid OTP provided for {payload.phone}")
-                raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-                
-            print(f"[OTP] OTP verified successfully for {payload.phone}")
-            return {"success": True, "message": "OTP verified successfully"}
+        print(f"[OTP] OTP verified successfully for {payload.email}")
+        return {"success": True}
             
         except ImportError:
             # Development fallback - accept any 6-digit OTP
