@@ -14,25 +14,10 @@ def _get_storage_bucket():
 
 async def ensure_bucket_exists(bucket: str, public: bool = True):
     """Ensure the storage bucket exists in Supabase"""
-    # This is a simplified version. In a real app, you might want to cache this.
-    # Note: Listing buckets might require admin privileges.
-    # The `db` object uses the service key, so it should have the necessary permissions.
-    try:
-        # We can't easily list buckets with the current storage client version to check existence.
-        # So we'll just try to create it. If it exists, it will not throw a fatal error.
-        # A more robust solution might involve checking for a specific error message.
-        await db.supabase_client.storage.create_bucket(bucket, {"public": public})
-        print(f"[DB] Ensured bucket exists (or created): {bucket}")
-        return True
-    except Exception as e:
-        # A bit of a hack: if the bucket already exists, the API might return an error.
-        # We can inspect the error message. A better client library would not require this.
-        if "already exists" in str(e):
-            print(f"[DB] Bucket already exists: {bucket}")
-            return True
-        print(f"[DB] Bucket creation/check failed: {e}")
-        # We don't re-raise here to allow uploads to proceed, assuming the bucket exists.
-        return False
+    # Skip bucket creation in production - assume it's already set up
+    # The bucket should be created manually in Supabase dashboard
+    print(f"[DB] Assuming bucket exists: {bucket}")
+    return True
 
 
 @router.post("/upload")
@@ -67,7 +52,10 @@ async def upload_file(
             await db.upload_to_storage(bucket, object_path, content, content_type=file.content_type)
         except Exception as e:
             print(f"[UPLOAD] Storage upload failed: {e}")
-            raise HTTPException(status_code=500, detail="Failed to upload to storage")
+            print(f"[UPLOAD] Error details: {type(e).__name__}: {str(e)}")
+            import traceback
+            print(f"[UPLOAD] Traceback: {traceback.format_exc()}")
+            raise HTTPException(status_code=500, detail=f"Failed to upload to storage: {str(e)}")
 
         # Get public URL
         try:
