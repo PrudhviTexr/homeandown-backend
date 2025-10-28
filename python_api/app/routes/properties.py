@@ -56,7 +56,7 @@ async def get_properties(
 
         # Build base filters for server-side query
         base_filters = {
-            "verified": True  # Only show admin-approved properties
+            # Don't filter by verified - show all active properties
         }
         if status:
             base_filters['status'] = status
@@ -260,10 +260,10 @@ async def create_property(property_data: dict):
         property_data['created_at'] = now
         property_data['updated_at'] = now
         
-        # Ensure required fields with defaults - properties start as pending for admin approval
-        property_data.setdefault('status', 'pending')
+        # Ensure required fields with defaults - properties are immediately visible
+        property_data.setdefault('status', 'active')
         property_data.setdefault('featured', False)
-        property_data.setdefault('verified', False)  # Properties require admin approval
+        property_data.setdefault('verified', True)  # Verified by default so properties show immediately
         property_data.setdefault('priority', 0)
         
         # Handle required fields - set to 'NA' if empty
