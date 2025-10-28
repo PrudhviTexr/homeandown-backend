@@ -145,13 +145,8 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
         except Exception as approval_err:
             print(f"[AUTH] Failed to create approval record: {approval_err}")
         
-        # Send admin notification for new user registration
-        try:
-            from ..services.admin_notification_service import AdminNotificationService
-            await AdminNotificationService.notify_user_registration(user_data)
-            print(f"[AUTH] Admin notification sent for new user: {payload.email}")
-        except Exception as notify_error:
-            print(f"[AUTH] Failed to send admin notification: {notify_error}")
+        # Admin notifications are handled by admin dashboard
+        print(f"[AUTH] User registration complete for {payload.email}")
         
         # Generate and send email OTP for verification
         print(f"[AUTH] Sending email verification OTP...")

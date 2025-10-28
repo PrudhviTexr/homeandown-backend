@@ -340,7 +340,7 @@ async def approve_user(user_id: str, _=Depends(require_api_key)):
                 user = user_data[0]
                 subject = "Your Home & Own account has been approved"
                 html_content = f"<p>Hi {user.get('first_name')},</p><p>Congratulations! Your {user.get('user_type')} account on Home & Own has been approved.</p><p>You can now log in and access your dashboard.</p>"
-                await send_email(to_email=user.get('email'), subject=subject, html_content=html_content)
+                await send_email(to=user.get('email'), subject=subject, html=html_content)
         except Exception as email_error:
             print(f"[ADMIN] !!! Failed to send approval email: {email_error}")
 
@@ -369,7 +369,7 @@ async def reject_user(user_id: str, request: Request, _=Depends(require_api_key)
                 user = user_data[0]
                 subject = "An update on your Home & Own application"
                 html_content = f"<p>Hi {user.get('first_name')},</p><p>Thank you for your application to Home & Own. After careful review, we regret to inform you that your application has been rejected.</p><p><strong>Reason:</strong> {reason}</p>"
-                await send_email(to_email=user.get('email'), subject=subject, html_content=html_content)
+                await send_email(to=user.get('email'), subject=subject, html=html_content)
         except Exception as email_error:
             print(f"[ADMIN] !!! Failed to send rejection email: {email_error}")
         
@@ -472,7 +472,7 @@ async def approve_agent(agent_id: str, request: Request, _=Depends(require_api_k
                 user = user_data[0]
                 subject = "Your Home & Own agent account has been approved"
                 html_content = f"<p>Hi {user.get('first_name')},</p><p>Congratulations! Your agent account on Home & Own has been approved.</p><p>You can now log in and access your dashboard.</p><p><strong>Notes:</strong> {approval_notes}</p>"
-                await send_email(to_email=user.get('email'), subject=subject, html_content=html_content)
+                await send_email(to=user.get('email'), subject=subject, html=html_content)
         except Exception as email_error:
             print(f"[ADMIN] Failed to send agent approval email: {email_error}")
 
@@ -505,7 +505,7 @@ async def reject_agent(agent_id: str, request: Request, _=Depends(require_api_ke
                 user = user_data[0]
                 subject = "An update on your Home & Own agent application"
                 html_content = f"<p>Hi {user.get('first_name')},</p><p>Thank you for your application to Home & Own as an agent. After careful review, we regret to inform you that your application has been rejected.</p><p><strong>Reason:</strong> {rejection_reason}</p>"
-                await send_email(to_email=user.get('email'), subject=subject, html_content=html_content)
+                await send_email(to=user.get('email'), subject=subject, html=html_content)
         except Exception as email_error:
             print(f"[ADMIN] Failed to send agent rejection email: {email_error}")
         
