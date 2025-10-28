@@ -18,7 +18,7 @@ class VerifyOTPRequest(BaseModel):
 
 
 @router.post("/send-otp")
-async def send_otp_endpoint(req: SendOTPRequest, _=Depends(require_api_key)):
+async def send_otp_endpoint(req: SendOTPRequest):
     from ..services.otp_service import send_email_otp
     
     # Call the async function
