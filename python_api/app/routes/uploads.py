@@ -23,7 +23,7 @@ async def ensure_bucket_exists(bucket: str, public: bool = True):
 @router.post("/upload")
 async def upload_file(
     entity_type: str = Form(...),
-    entity_id: str = Form(...),
+    entity_id: str = Form(default=""),
     file: UploadFile = File(...),
     _=Depends(require_api_key),
 ):
