@@ -225,18 +225,43 @@ async def approve_property(property_id: str, _=Depends(require_api_key)):
             print(f"[ADMIN] !!! Failed to send property approval email: {email_error}")
 
         # Start sequential agent notification queue
+        print(f"[ADMIN] ========== STARTING AGENT NOTIFICATION PROCESS ==========")
+        print(f"[ADMIN] Property ID: {property_id}")
         try:
+            # Get property details for logging
+            property_data = await db.select("properties", filters={"id": property_id})
+            if property_data:
+                prop = property_data[0]
+                print(f"[ADMIN] Property Title: {prop.get('title')}")
+                print(f"[ADMIN] Property Zipcode: {prop.get('zip_code')}")
+                print(f"[ADMIN] Property City: {prop.get('city')}")
+                print(f"[ADMIN] Property State: {prop.get('state')}")
+            
             from ..services.sequential_agent_notification import SequentialAgentNotificationService
+            print(f"[ADMIN] Calling SequentialAgentNotificationService.start_property_assignment_queue()")
             queue_result = await SequentialAgentNotificationService.start_property_assignment_queue(property_id)
             
+            print(f"[ADMIN] Queue result: {queue_result}")
+            
             if not queue_result.get("success"):
-                print(f"[ADMIN] Warning: Failed to start agent notification queue: {queue_result.get('error')}")
+                print(f"[ADMIN] ⚠️ WARNING: Failed to start agent notification queue")
+                print(f"[ADMIN] Error: {queue_result.get('error')}")
+                print(f"[ADMIN] Unassigned: {queue_result.get('unassigned', False)}")
                 # Don't fail the approval if notification queue fails - property is still approved
+            else:
+                print(f"[ADMIN] ✅ SUCCESS: Agent notification queue started")
+                print(f"[ADMIN] Agents count: {queue_result.get('agents_count')}")
+                print(f"[ADMIN] Queue ID: {queue_result.get('queue_id')}")
         except Exception as notification_error:
-            print(f"[ADMIN] !!! Failed to start agent notification queue: {notification_error}")
+            print(f"[ADMIN] !!! CRITICAL: Failed to start agent notification queue")
+            print(f"[ADMIN] Exception: {notification_error}")
             # Property is still approved, this is a warning
             import traceback
+            print(f"[ADMIN] Full traceback:")
             print(traceback.format_exc())
+        
+        print(f"[ADMIN] ========== AGENT NOTIFICATION PROCESS COMPLETE ==========")
+
 
         return result
     except Exception as e:
@@ -1449,6 +1474,60 @@ async def retry_property_assignment(property_id: str, _=Depends(require_api_key)
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
         
+@router.get("/debug/agents-by-zipcode/{zipcode}")
+async def debug_agents_by_zipcode(zipcode: str, _=Depends(require_api_key)):
+    """Debug endpoint to check which agents match a zipcode"""
+    try:
+        # Get all verified active agents
+        all_agents = await db.select("users", filters={
+            "user_type": "agent",
+            "status": "active",
+            "verification_status": "verified"
+        })
+        
+        print(f"[DEBUG] Total verified active agents: {len(all_agents or [])}")
+        
+        if not all_agents:
+            return {
+                "total_agents": 0,
+                "matching_agents": [],
+                "message": "No verified active agents found in database"
+            }
+        
+        # Check which have zip_code field
+        agents_with_zipcode = [a for a in all_agents if a.get("zip_code")]
+        print(f"[DEBUG] Agents with zip_code field: {len(agents_with_zipcode)}")
+        
+        # Find matching agents
+        matching_agents = []
+        for agent in all_agents:
+            agent_zip = agent.get("zip_code")
+            if agent_zip and str(agent_zip).strip() == str(zipcode).strip():
+                matching_agents.append({
+                    "id": agent.get("id"),
+                    "name": f"{agent.get('first_name')} {agent.get('last_name')}",
+                    "email": agent.get("email"),
+                    "zip_code": agent_zip,
+                    "city": agent.get("city"),
+                    "state": agent.get("state"),
+                    "status": agent.get("status"),
+                    "verification_status": agent.get("verification_status")
+                })
+        
+        return {
+            "search_zipcode": zipcode,
+            "total_agents": len(all_agents),
+            "agents_with_zipcode": len(agents_with_zipcode),
+            "matching_agents_count": len(matching_agents),
+            "matching_agents": matching_agents,
+            "sample_agent_zipcodes": [a.get("zip_code") for a in all_agents[:5]] if all_agents else []
+        }
+    except Exception as e:
+        print(f"[DEBUG] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/email-config-status")
 async def check_email_configuration(_=Depends(require_api_key)):
     """Check which email providers are configured"""
