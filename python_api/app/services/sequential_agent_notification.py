@@ -337,7 +337,8 @@ class SequentialAgentNotificationService:
             print(f"[SEQUENTIAL_NOTIFICATION] Sent notification to agent {agent_id} for property {property_id} (Round {notification_round})")
             
             # Start a background task to handle timeout
-            asyncio.create_task(SequentialAgentNotificationService._handle_timeout(property_id, notification_id))
+            # Use ensure_future to ensure it runs in the background without blocking
+            asyncio.ensure_future(SequentialAgentNotificationService._handle_timeout(property_id, notification_id))
 
             return {
                 "success": True,
@@ -370,7 +371,7 @@ class SequentialAgentNotificationService:
                 # Immediately trigger the queue to process the next agent
                 # The 5-minute timeout itself acts as the gap between notifications
                 print(f"[TIMEOUT] Moving to next agent for property {property_id}...")
-                asyncio.create_task(SequentialAgentNotificationService._process_queue(property_id))
+                await SequentialAgentNotificationService._process_queue(property_id)
         except Exception as e:
             print(f"[TIMEOUT] Error in _handle_timeout for notification {notification_id}: {e}")
             traceback.print_exc()
@@ -506,8 +507,9 @@ class SequentialAgentNotificationService:
             print(f"[SEQUENTIAL_NOTIFICATION] Agent {agent_id} rejected property {property_id}, moving to next agent immediately")
 
             # Immediately trigger the queue to process the next agent
-            # No delay needed - immediate rejection allows faster assignment
-            asyncio.create_task(SequentialAgentNotificationService._process_queue(property_id))
+            # No delay needed - immediate rejection allows faster assignment  
+            # Use ensure_future so it doesn't block the response
+            asyncio.ensure_future(SequentialAgentNotificationService._process_queue(property_id))
             
             return {
                 "success": True,

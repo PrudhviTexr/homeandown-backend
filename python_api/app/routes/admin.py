@@ -1449,6 +1449,42 @@ async def retry_property_assignment(property_id: str, _=Depends(require_api_key)
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
         
+@router.post("/test-email")
+async def test_email_service(request: Request, _=Depends(require_api_key)):
+    """Test endpoint to verify email service is working"""
+    try:
+        payload = await request.json()
+        to_email = payload.get("to_email")
+        
+        if not to_email:
+            raise HTTPException(status_code=400, detail="to_email is required")
+        
+        from ..services.email import send_email
+        
+        email_html = """
+        <h2>Test Email from Home & Own</h2>
+        <p>This is a test email to verify the email service is working correctly.</p>
+        <p>If you received this email, the email service is functioning properly!</p>
+        """
+        
+        result = await send_email(
+            to=to_email,
+            subject="Test Email - Home & Own",
+            html=email_html
+        )
+        
+        return {
+            "success": True,
+            "message": "Test email sent successfully",
+            "to": to_email,
+            "result": result
+        }
+    except Exception as e:
+        print(f"[TEST_EMAIL] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/users/all")
 async def list_all_users(_=Depends(require_api_key)):
     """List all users across all roles"""
