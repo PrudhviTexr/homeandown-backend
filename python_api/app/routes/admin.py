@@ -368,20 +368,64 @@ async def list_inquiries(_=Depends(require_api_key)):
 @router.post("/users/{user_id}/approve")
 async def approve_user(user_id: str, _=Depends(require_api_key)):
     try:
+        # Get user data first to check user type
+        user_data = await db.select("users", filters={"id": user_id})
+        if not user_data:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user = user_data[0]
+        user_type = user.get('user_type', '').lower()
+        
         update_data = {
-            "verification_status": "verified", "status": "active",
+            "verification_status": "verified",
+            "status": "active",  # Ensure status is set to 'active' not 'pending'
             "updated_at": dt.datetime.utcnow().isoformat()
         }
+        
+        # For agents, ensure license number is set after approval
+        if user_type == 'agent':
+            # Get or generate license number
+            license_number = user.get('agent_license_number') or user.get('license_number')
+            if not license_number:
+                # Generate license number from custom_id if available
+                custom_id = user.get('custom_id')
+                if custom_id:
+                    license_number = custom_id
+                else:
+                    # Generate new custom_id for license
+                    try:
+                        from ..services.admin_service import generate_custom_id
+                        license_number = await generate_custom_id('agent')
+                    except Exception as gen_error:
+                        print(f"[ADMIN] Failed to generate license number: {gen_error}")
+                        license_number = f"AGT-{user_id[:8].upper()}"
+                
+                # Set license number in both possible fields
+                update_data['agent_license_number'] = license_number
+                update_data['license_number'] = license_number
+                print(f"[ADMIN] Set license number for agent {user_id}: {license_number}")
+        
+        # For buyers and sellers, ensure license number is set to null or 'NA'
+        elif user_type in ['buyer', 'seller']:
+            # Explicitly set to None or remove if exists
+            update_data['agent_license_number'] = None
+            update_data['license_number'] = None
+            print(f"[ADMIN] Cleared license number for {user_type} {user_id}")
+        
         result = await db.update("users", update_data, {"id": user_id})
 
         # Send approval email
         try:
-            user_data = await db.select("users", filters={"id": user_id})
-            if user_data:
-                user = user_data[0]
+            updated_user_data = await db.select("users", filters={"id": user_id})
+            if updated_user_data:
+                updated_user = updated_user_data[0]
+                license_number = updated_user.get('agent_license_number') or updated_user.get('license_number')
                 subject = "Your Home & Own account has been approved"
-                html_content = f"<p>Hi {user.get('first_name')},</p><p>Congratulations! Your {user.get('user_type')} account on Home & Own has been approved.</p><p>You can now log in and access your dashboard.</p>"
-                await send_email(to=user.get('email'), subject=subject, html=html_content)
+                html_content = f"<p>Hi {updated_user.get('first_name')},</p><p>Congratulations! Your {updated_user.get('user_type')} account on Home & Own has been approved.</p>"
+                if user_type == 'agent' and license_number:
+                    html_content += f"<p><strong>Your License Number:</strong> {license_number}</p>"
+                html_content += "<p>You can now log in and access your dashboard.</p>"
+                await send_email(to=updated_user.get('email'), subject=subject, html=html_content)
         except Exception as email_error:
             print(f"[ADMIN] !!! Failed to send approval email: {email_error}")
 
@@ -506,26 +550,57 @@ async def get_agent_profile(agent_id: str, _=Depends(require_api_key)):
 
 @router.post("/agents/{agent_id}/approve")
 async def approve_agent(agent_id: str, request: Request, _=Depends(require_api_key)):
-    """Approve an agent"""
+    """Approve an agent and ensure license number is set"""
     try:
         payload = await request.json() if request else {}
         approval_notes = payload.get("approval_notes", "Agent approved by admin")
         
+        # Get user data first
+        user_data = await db.select("users", filters={"id": agent_id})
+        if not user_data:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        user = user_data[0]
+        
+        # Get or generate license number
+        license_number = user.get('agent_license_number') or user.get('license_number')
+        if not license_number:
+            # Generate from custom_id if available
+            custom_id = user.get('custom_id')
+            if custom_id:
+                license_number = custom_id
+            else:
+                # Generate new license number
+                try:
+                    from ..services.admin_service import generate_custom_id
+                    license_number = await generate_custom_id('agent')
+                except Exception as gen_error:
+                    print(f"[ADMIN] Failed to generate license number: {gen_error}")
+                    license_number = f"AGT-{agent_id[:8].upper()}"
+            
+            print(f"[ADMIN] Generated license number for agent {agent_id}: {license_number}")
+        
         update_data = {
             "verification_status": "verified",
-            "status": "active",
+            "status": "active",  # Ensure status is 'active' not 'pending'
+            "agent_license_number": license_number,
+            "license_number": license_number,  # Set both fields for compatibility
             "updated_at": dt.datetime.utcnow().isoformat()
         }
         result = await db.update("users", update_data, {"id": agent_id})
 
         # Send approval email
         try:
-            user_data = await db.select("users", filters={"id": agent_id})
-            if user_data:
-                user = user_data[0]
+            updated_user_data = await db.select("users", filters={"id": agent_id})
+            if updated_user_data:
+                updated_user = updated_user_data[0]
+                final_license = updated_user.get('agent_license_number') or updated_user.get('license_number') or license_number
                 subject = "Your Home & Own agent account has been approved"
-                html_content = f"<p>Hi {user.get('first_name')},</p><p>Congratulations! Your agent account on Home & Own has been approved.</p><p>You can now log in and access your dashboard.</p><p><strong>Notes:</strong> {approval_notes}</p>"
-                await send_email(to=user.get('email'), subject=subject, html=html_content)
+                html_content = f"<p>Hi {updated_user.get('first_name')},</p><p>Congratulations! Your agent account on Home & Own has been approved.</p>"
+                if final_license:
+                    html_content += f"<p><strong>Your License Number:</strong> {final_license}</p>"
+                html_content += f"<p>You can now log in and access your dashboard.</p><p><strong>Notes:</strong> {approval_notes}</p>"
+                await send_email(to=updated_user.get('email'), subject=subject, html=html_content)
         except Exception as email_error:
             print(f"[ADMIN] Failed to send agent approval email: {email_error}")
 
