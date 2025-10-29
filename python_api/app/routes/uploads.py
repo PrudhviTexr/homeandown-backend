@@ -71,6 +71,7 @@ async def upload_file_to_storage(
 
     # Store document record
     doc_data = {
+        "id": str(uuid.uuid4()), # Generate a UUID for the new document record
         "name": file.filename or filename,
         "file_path": public_url,
         "file_type": file.content_type,
