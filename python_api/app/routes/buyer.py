@@ -8,7 +8,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/buyer/dashboard/stats")
+@router.get("/dashboard/stats")
 async def get_buyer_dashboard_stats(request: Request):
     """Get comprehensive buyer dashboard statistics"""
     try:
@@ -75,7 +75,7 @@ async def get_buyer_dashboard_stats(request: Request):
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch dashboard stats: {str(e)}")
 
-@router.get("/buyer/saved-properties")
+@router.get("/saved-properties")
 async def get_saved_properties(
     request: Request,
     limit: Optional[int] = Query(20),
@@ -129,7 +129,7 @@ async def get_saved_properties(
         print(f"[BUYER] Get saved properties error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch saved properties: {str(e)}")
 
-@router.post("/buyer/save-property")
+@router.post("/save-property")
 async def save_property(
     request: Request
 ):
@@ -190,7 +190,7 @@ async def save_property(
         print(f"[BUYER] Save property error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save property: {str(e)}")
 
-@router.delete("/buyer/unsave-property/{property_id}")
+@router.delete("/unsave-property/{property_id}")
 async def unsave_property(
     property_id: str,
     request: Request
@@ -219,7 +219,7 @@ async def unsave_property(
         print(f"[BUYER] Unsave property error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to remove property: {str(e)}")
 
-@router.get("/buyer/inquiries")
+@router.get("/inquiries")
 async def get_buyer_inquiries(
     request: Request,
     status: Optional[str] = Query(None),
@@ -269,7 +269,7 @@ async def get_buyer_inquiries(
         print(f"[BUYER] Get inquiries error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch inquiries: {str(e)}")
 
-@router.get("/buyer/bookings")
+@router.get("/bookings")
 async def get_buyer_bookings(
     request: Request,
     status: Optional[str] = Query(None),
@@ -325,7 +325,7 @@ async def get_buyer_bookings(
         print(f"[BUYER] Get bookings error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch bookings: {str(e)}")
 
-@router.post("/buyer/bookings/{booking_id}/cancel")
+@router.post("/bookings/{booking_id}/cancel")
 async def cancel_booking(
     booking_id: str,
     request: Request
@@ -370,7 +370,7 @@ async def cancel_booking(
         print(f"[BUYER] Cancel booking error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to cancel booking: {str(e)}")
 
-@router.post("/buyer/bookings/{booking_id}/reschedule")
+@router.post("/bookings/{booking_id}/reschedule")
 async def reschedule_booking(
     booking_id: str,
     request: Request

@@ -8,7 +8,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/seller/dashboard/stats")
+@router.get("/dashboard/stats")
 async def get_seller_dashboard_stats(request: Request):
     """Get comprehensive seller dashboard statistics"""
     try:
@@ -82,7 +82,7 @@ async def get_seller_dashboard_stats(request: Request):
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch dashboard stats: {str(e)}")
 
-@router.get("/seller/properties")
+@router.get("/properties")
 async def get_seller_properties(
     request: Request,
     status: Optional[str] = Query(None),
@@ -178,7 +178,7 @@ async def get_seller_properties(
         print(f"[SELLER] Get properties error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch properties: {str(e)}")
 
-@router.get("/seller/inquiries")
+@router.get("/inquiries")
 async def get_seller_inquiries(
     request: Request,
     property_id: Optional[str] = Query(None),
@@ -240,69 +240,7 @@ async def get_seller_inquiries(
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch inquiries: {str(e)}")
 
-@router.get("/seller/bookings")
-async def get_seller_bookings(
-    request: Request,
-    property_id: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    limit: Optional[int] = Query(20),
-    offset: Optional[int] = Query(0)
-):
-    """Get bookings for seller's properties"""
-    try:
-        claims = get_current_user_claims(request)
-        if not claims:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
-        user_id = claims.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        
-        print(f"[SELLER] Fetching bookings for user: {user_id}")
-        
-        # Get seller's property IDs
-        properties = await db.select("properties", filters={"added_by": user_id})
-        property_ids = [p.get("id") for p in (properties or [])]
-        
-        if not property_ids:
-            return {"success": True, "bookings": [], "total": 0}
-        
-        # Build filters
-        filters = {"property_id": {"in": property_ids}}
-        if property_id:
-            filters["property_id"] = property_id
-        if status:
-            filters["status"] = status
-        
-        # Get bookings
-        bookings = await db.select("bookings", filters=filters, limit=limit, offset=offset)
-        bookings_list = bookings or []
-        
-        # Enhance bookings with property details
-        enhanced_bookings = []
-        for booking in bookings_list:
-            prop_id = booking.get("property_id")
-            property_data = await db.select("properties", filters={"id": prop_id})
-            property_info = property_data[0] if property_data else {}
-            
-            enhanced_booking = {
-                **booking,
-                "property": property_info
-            }
-            enhanced_bookings.append(enhanced_booking)
-        
-        print(f"[SELLER] Found {len(enhanced_bookings)} bookings")
-        return {"success": True, "bookings": enhanced_bookings, "total": len(enhanced_bookings)}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[SELLER] Get bookings error: {e}")
-        print(f"[SELLER] Full traceback:")
-        print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Failed to fetch bookings: {str(e)}")
-
-@router.get("/seller/bookings")
+@router.get("/bookings")
 async def get_seller_bookings(
     request: Request,
     property_id: Optional[str] = Query(None),
@@ -376,7 +314,7 @@ async def get_seller_bookings(
         print(f"[SELLER] Get bookings error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch bookings: {str(e)}")
 
-@router.post("/seller/bookings/{booking_id}/update-status")
+@router.post("/bookings/{booking_id}/update-status")
 async def update_booking_status(
     booking_id: str,
     request: Request
@@ -438,7 +376,7 @@ async def update_booking_status(
         print(f"[SELLER] Update booking status error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update booking status: {str(e)}")
 
-@router.post("/seller/inquiries/{inquiry_id}/respond")
+@router.post("/inquiries/{inquiry_id}/respond")
 async def respond_to_inquiry(
     inquiry_id: str,
     request: Request
