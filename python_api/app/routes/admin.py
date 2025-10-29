@@ -1449,6 +1449,61 @@ async def retry_property_assignment(property_id: str, _=Depends(require_api_key)
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
         
+@router.get("/email-config-status")
+async def check_email_configuration(_=Depends(require_api_key)):
+    """Check which email providers are configured"""
+    import os
+    from ..core.config import settings
+    
+    config_status = {
+        "resend": {
+            "configured": bool(os.getenv("RESEND_API_KEY")),
+            "priority": 1,
+            "details": {
+                "api_key": "SET" if os.getenv("RESEND_API_KEY") else "MISSING",
+                "template_id": "SET" if os.getenv("RESEND_TEMPLATE_ID") else "MISSING",
+                "sender": os.getenv("RESEND_SENDER") or "NOT SET"
+            }
+        },
+        "emailjs": {
+            "configured": bool(os.getenv("EMAILJS_SERVICE_ID") and os.getenv("EMAILJS_TEMPLATE_ID")),
+            "priority": 2,
+            "details": {
+                "service_id": "SET" if os.getenv("EMAILJS_SERVICE_ID") else "MISSING",
+                "template_id": "SET" if os.getenv("EMAILJS_TEMPLATE_ID") else "MISSING",
+                "user_id": "SET" if os.getenv("EMAILJS_USER_ID") else "MISSING"
+            }
+        },
+        "sendgrid": {
+            "configured": bool(os.getenv("SENDGRID_API_KEY")),
+            "priority": 3,
+            "details": {
+                "api_key": "SET" if os.getenv("SENDGRID_API_KEY") else "MISSING"
+            }
+        },
+        "gmail_smtp": {
+            "configured": bool(settings.GMAIL_USERNAME and settings.GMAIL_APP_PASSWORD),
+            "priority": 4,
+            "details": {
+                "username": settings.GMAIL_USERNAME[:20] + "..." if settings.GMAIL_USERNAME else "MISSING",
+                "app_password": "SET" if settings.GMAIL_APP_PASSWORD else "MISSING"
+            }
+        }
+    }
+    
+    # Determine which provider will be used
+    active_provider = None
+    for provider, status in config_status.items():
+        if status["configured"]:
+            active_provider = provider
+            break
+    
+    return {
+        "active_provider": active_provider or "NONE (Development mode - emails will be logged only)",
+        "providers": config_status,
+        "recommendation": "Configure Resend (recommended) or Gmail SMTP for production email delivery"
+    }
+
 @router.post("/test-email")
 async def test_email_service(request: Request, _=Depends(require_api_key)):
     """Test endpoint to verify email service is working"""
@@ -1462,22 +1517,32 @@ async def test_email_service(request: Request, _=Depends(require_api_key)):
         from ..services.email import send_email
         
         email_html = """
-        <h2>Test Email from Home & Own</h2>
-        <p>This is a test email to verify the email service is working correctly.</p>
-        <p>If you received this email, the email service is functioning properly!</p>
-        """
+        <div style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2 style="color: #0ca5e9;">Test Email from Home & Own</h2>
+            <p>This is a test email to verify the email service is working correctly.</p>
+            <p><strong>If you received this email, the email service is functioning properly!</strong></p>
+            <div style="background: #f0f9ff; padding: 15px; border-radius: 8px; margin-top: 20px;">
+                <p style="margin: 0;"><strong>Test Details:</strong></p>
+                <p style="margin: 5px 0;">Timestamp: {timestamp}</p>
+                <p style="margin: 5px 0;">Recipient: {to_email}</p>
+            </div>
+        </div>
+        """.format(timestamp=dt.datetime.utcnow().isoformat(), to_email=to_email)
         
+        print(f"[TEST_EMAIL] Attempting to send test email to: {to_email}")
         result = await send_email(
             to=to_email,
-            subject="Test Email - Home & Own",
+            subject="Test Email - Home & Own Email Service",
             html=email_html
         )
+        print(f"[TEST_EMAIL] Send result: {result}")
         
         return {
             "success": True,
             "message": "Test email sent successfully",
             "to": to_email,
-            "result": result
+            "result": result,
+            "note": "Check Render logs for detailed email provider information"
         }
     except Exception as e:
         print(f"[TEST_EMAIL] Error: {e}")
