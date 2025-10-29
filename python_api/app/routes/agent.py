@@ -304,3 +304,57 @@ async def get_agent_properties(
         print(f"[AGENT] Get properties error: {e}")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch properties: {str(e)}")
+
+@router.get("/agent/pending-assignments")
+async def get_pending_property_assignments(request: Request):
+    """Get pending property assignment notifications for the agent"""
+    try:
+        claims = get_current_user_claims(request)
+        if not claims:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        print(f"[AGENT] Fetching pending assignments for user: {user_id}")
+        
+        # Get pending notifications for this agent
+        notifications = await db.select("agent_property_notifications", filters={
+            "agent_id": user_id,
+            "status": "pending"
+        })
+        
+        notifications_list = notifications or []
+        
+        # Enhance with property details
+        enhanced_notifications = []
+        for notification in notifications_list:
+            property_id = notification.get("property_id")
+            property_data = None
+            
+            if property_id:
+                properties = await db.select("properties", filters={"id": property_id})
+                if properties:
+                    property_data = properties[0]
+            
+            enhanced_notifications.append({
+                **notification,
+                "property": property_data
+            })
+        
+        # Sort by sent_at descending (most recent first)
+        enhanced_notifications.sort(
+            key=lambda x: x.get("sent_at", ""), 
+            reverse=True
+        )
+        
+        print(f"[AGENT] Found {len(enhanced_notifications)} pending assignments")
+        return {"success": True, "notifications": enhanced_notifications, "total": len(enhanced_notifications)}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AGENT] Get pending assignments error: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to fetch pending assignments: {str(e)}")

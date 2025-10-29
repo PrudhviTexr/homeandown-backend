@@ -397,28 +397,61 @@ async def create_booking(booking_data: dict, request: Request):
                 )
                 print(f"[RECORDS] Confirmation email sent to: {booker_email}")
                 
-                # Send notification email to property owner
-                owner_data = await db.select("users", filters={"id": property_details.get('owner_id')})
-                if owner_data:
-                    owner_info = owner_data[0]
-                    owner_name = f"{owner_info.get('first_name', '')} {owner_info.get('last_name', '')}".strip()
-                    owner_email = owner_info.get('email')
-                    
-                    if owner_email:
-                        notification_html = booking_notification_email(
-                            owner_name,
-                            booker_name,
-                            booker_email,
-                            property_title,
-                            booking_data['booking_date'],
-                            booking_data['booking_time']
-                        )
-                        await send_email(
-                            to=owner_email,
-                            subject=f"New Tour Booking for {property_title} - Home & Own",
-                            html=notification_html
-                        )
-                        print(f"[RECORDS] Notification email sent to property owner: {owner_email}")
+                # Send notification email to assigned agent (primary contact for inquiries/bookings)
+                if property_details.get("agent_id"):
+                    try:
+                        agent_data = await db.select("users", filters={"id": property_details["agent_id"]})
+                        if agent_data:
+                            agent_info = agent_data[0]
+                            agent_name = f"{agent_info.get('first_name', '')} {agent_info.get('last_name', '')}".strip()
+                            agent_email = agent_info.get('email')
+                            
+                            if agent_email:
+                                notification_html = booking_notification_email(
+                                    agent_name,
+                                    booker_name,
+                                    booker_email,
+                                    property_title,
+                                    booking_data['booking_date'],
+                                    booking_data['booking_time']
+                                )
+                                await send_email(
+                                    to=agent_email,
+                                    subject=f"New Tour Booking for {property_title} - Home & Own",
+                                    html=notification_html
+                                )
+                                print(f"[RECORDS] ✅ Sent booking notification to agent {agent_name}: {agent_email}")
+                                # Also update booking with agent_id
+                                await db.update("bookings", {"agent_id": property_details["agent_id"]}, {"id": booking_record["id"]})
+                    except Exception as agent_error:
+                        print(f"[RECORDS] Error sending email to agent: {agent_error}")
+                
+                # Also send notification email to property owner (as secondary contact)
+                if property_details.get('owner_id'):
+                    try:
+                        owner_data = await db.select("users", filters={"id": property_details.get('owner_id')})
+                        if owner_data:
+                            owner_info = owner_data[0]
+                            owner_name = f"{owner_info.get('first_name', '')} {owner_info.get('last_name', '')}".strip()
+                            owner_email = owner_info.get('email')
+                            
+                            if owner_email:
+                                notification_html = booking_notification_email(
+                                    owner_name,
+                                    booker_name,
+                                    booker_email,
+                                    property_title,
+                                    booking_data['booking_date'],
+                                    booking_data['booking_time']
+                                )
+                                await send_email(
+                                    to=owner_email,
+                                    subject=f"New Tour Booking for {property_title} - Home & Own",
+                                    html=notification_html
+                                )
+                                print(f"[RECORDS] ✅ Sent booking notification to owner: {owner_email}")
+                    except Exception as owner_error:
+                        print(f"[RECORDS] Error sending email to owner: {owner_error}")
         except Exception as email_error:
             print(f"[RECORDS] Email sending failed: {email_error}")
             # Don't fail the booking creation if email fails

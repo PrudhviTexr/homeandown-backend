@@ -126,13 +126,45 @@ async def get_seller_properties(
             # Get views count (mock for now)
             views_count = property_data.get("views_count", 0)
             
+            # Get assigned agent details
+            assigned_agent = None
+            agent_id = property_data.get("agent_id") or property_data.get("assigned_agent_id")
+            if agent_id:
+                try:
+                    agents = await db.select("users", filters={"id": agent_id})
+                    if agents:
+                        agent = agents[0]
+                        assigned_agent = {
+                            "id": agent.get("id"),
+                            "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
+                            "email": agent.get("email"),
+                            "phone": agent.get("phone_number"),
+                            "assigned_at": property_data.get("assigned_at")  # If we track this
+                        }
+                except Exception as agent_error:
+                    print(f"[SELLER] Error fetching agent details: {agent_error}")
+            
+            # Get property images
+            property_images = []
+            try:
+                image_docs = await db.select("documents", filters={
+                    "entity_type": "property",
+                    "entity_id": property_id
+                })
+                if image_docs:
+                    property_images = [doc.get("file_path") for doc in image_docs if doc.get("file_path")]
+            except Exception as img_error:
+                print(f"[SELLER] Error fetching property images: {img_error}")
+            
             enhanced_property = {
                 **property_data,
                 "inquiries_count": inquiries_count,
                 "bookings_count": bookings_count,
                 "views_count": views_count,
                 "last_inquiry_date": inquiries[0].get("created_at") if inquiries else None,
-                "last_booking_date": bookings[0].get("created_at") if bookings else None
+                "last_booking_date": bookings[0].get("created_at") if bookings else None,
+                "assigned_agent": assigned_agent,
+                "images": property_images  # Include images
             }
             
             enhanced_properties.append(enhanced_property)

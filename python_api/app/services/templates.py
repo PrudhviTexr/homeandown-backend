@@ -575,3 +575,82 @@ def agent_inquiry_response_email(inquirer_name: str, agent_name: str, property_t
       <p style='font-size: 16px;'>The Home & Own Team</p>
     """
     return wrap_html(body, "Agent Response - Home & Own")
+
+async def get_property_assignment_email(agent_name: str, property: Dict[str, Any], notification_round: int, accept_url: str, reject_url: str) -> str:
+    """Generate email template for property assignment notification to agent"""
+    
+    property_title = property.get('title', 'Untitled Property')
+    property_type = property.get('property_type', 'Property')
+    listing_type = property.get('listing_type', 'SALE')
+    location = f"{property.get('city', '')}, {property.get('state', '')}".strip(', ')
+    zip_code = property.get('zip_code', 'N/A')
+    
+    # Price display
+    if listing_type == 'SALE':
+        price = f"₹{property.get('price', 0):,.0f}" if property.get('price') else "Price on request"
+        price_text = f"<p><strong>Sale Price:</strong> {price}</p>"
+    else:
+        rent = f"₹{property.get('monthly_rent', 0):,.0f}/month" if property.get('monthly_rent') else "Rent on request"
+        price_text = f"<p><strong>Monthly Rent:</strong> {rent}</p>"
+    
+    # Property details
+    bedrooms = property.get('bedrooms', 'N/A')
+    bathrooms = property.get('bathrooms', 'N/A')
+    area = property.get('area_sqft', 'N/A')
+    
+    expires_in = "5 minutes"
+    
+    body = f"""
+      <h2 style='margin-top:0; color: #1e293b;'>New Property Assignment Opportunity! 🏠</h2>
+      <p style='font-size: 16px;'>Hi <strong>{agent_name}</strong>,</p>
+      <p style='font-size: 16px;'>A new property in your area is available for assignment. This is <strong>Round {notification_round}</strong> of notifications.</p>
+      
+      <div style='background: #f0f9ff; padding: 24px; border-radius: 8px; margin: 24px 0; border-left: 4px solid #0ca5e9;'>
+        <h3 style='margin-top:0; color: #1e293b;'>Property Details:</h3>
+        <p><strong>Title:</strong> {property_title}</p>
+        <p><strong>Type:</strong> {property_type.replace('_', ' ').title()}</p>
+        <p><strong>Listing Type:</strong> {listing_type}</p>
+        <p><strong>Location:</strong> {location}</p>
+        <p><strong>Zipcode:</strong> {zip_code}</p>
+        {price_text}
+        <p><strong>Bedrooms:</strong> {bedrooms}</p>
+        <p><strong>Bathrooms:</strong> {bathrooms}</p>
+        <p><strong>Area:</strong> {area} sqft</p>
+      </div>
+      
+      <div style='background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 16px; margin: 24px 0;'>
+        <p style='margin: 0; color: #92400e; font-size: 14px; font-weight: 600;'>
+          ⏰ <strong>Time Sensitive:</strong> You have <strong>{expires_in}</strong> to accept this assignment. If you don't respond, it will automatically move to the next agent.
+        </p>
+      </div>
+      
+      <div style='text-align:center; margin: 32px 0;'>
+        <div style='display: inline-block; margin: 0 8px;'>
+          <a class='btn' href='{accept_url}' style='background: #10b981; margin-right: 8px;'>✅ Accept Assignment</a>
+        </div>
+        <div style='display: inline-block; margin: 0 8px;'>
+          <a href='{reject_url}' style='display:inline-block; background:#ef4444; color:#fff; padding: 14px 28px; text-decoration:none; border-radius: 8px; font-weight:600;'>❌ Reject</a>
+        </div>
+      </div>
+      
+      <div style='background: #ecfdf5; border: 1px solid #10b981; border-radius: 8px; padding: 16px; margin: 20px 0;'>
+        <p style='margin: 0; color: #065f46; font-size: 14px;'>
+          <strong>💡 What happens when you accept:</strong>
+          <ul style='margin: 8px 0 0 20px; padding-left: 0;'>
+            <li>You'll be assigned as the primary agent for this property</li>
+            <li>All inquiries and bookings will be directed to you</li>
+            <li>You'll receive full commission on successful transactions</li>
+            <li>You can manage property details and communicate with clients</li>
+          </ul>
+        </p>
+      </div>
+      
+      <p style='font-size: 16px;'>If the buttons above don't work, you can also access your dashboard:</p>
+      <div style='text-align:center; margin: 24px 0;'>
+        <a class='btn' href='https://homeandown.com/agent/dashboard'>Go to Agent Dashboard</a>
+      </div>
+      
+      <p style='font-size: 16px;'>Thank you for being part of the Home & Own team!</p>
+      <p style='font-size: 16px;'>The Home & Own Team</p>
+    """
+    return wrap_html(body, f"Property Assignment - Round {notification_round} - Home & Own")

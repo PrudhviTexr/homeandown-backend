@@ -182,6 +182,20 @@ async def approve_property(property_id: str, _=Depends(require_api_key)):
         except Exception as email_error:
             print(f"[ADMIN] !!! Failed to send property approval email: {email_error}")
 
+        # Start sequential agent notification queue
+        try:
+            from ..services.sequential_agent_notification import SequentialAgentNotificationService
+            queue_result = await SequentialAgentNotificationService.start_property_assignment_queue(property_id)
+            
+            if not queue_result.get("success"):
+                print(f"[ADMIN] Warning: Failed to start agent notification queue: {queue_result.get('error')}")
+                # Don't fail the approval if notification queue fails - property is still approved
+        except Exception as notification_error:
+            print(f"[ADMIN] !!! Failed to start agent notification queue: {notification_error}")
+            # Property is still approved, this is a warning
+            import traceback
+            print(traceback.format_exc())
+
         return result
     except Exception as e:
         import traceback
@@ -881,6 +895,207 @@ async def get_notifications(_=Depends(require_api_key), user_id: str = None):
         notifications = await db.select("notifications", filters=filters) or []
         return notifications
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/property-assignments/{property_id}/tracking")
+async def get_property_assignment_tracking(property_id: str, _=Depends(require_api_key)):
+    """Get complete tracking information for a property's agent assignment process"""
+    try:
+        from ..services.sequential_agent_notification import SequentialAgentNotificationService
+        
+        tracking = await SequentialAgentNotificationService.get_assignment_tracking(property_id)
+        
+        if not tracking or tracking.get("error"):
+            raise HTTPException(
+                status_code=404,
+                detail=tracking.get("error", "Tracking information not found")
+            )
+        
+        return tracking
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[ADMIN] Error getting assignment tracking: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/property-assignments/queue")
+async def get_all_assignment_queues(_=Depends(require_api_key), status: Optional[str] = None):
+    """Get all property assignment queues (for admin dashboard)"""
+    try:
+        filters = {}
+        if status:
+            filters["status"] = status
+        
+        queues = await db.admin_select("property_assignment_queue", filters=filters) or []
+        
+        # Enrich with property and agent details
+        enriched_queues = []
+        for queue in queues:
+            property_id = queue.get("property_id")
+            property_data = None
+            if property_id:
+                properties = await db.select("properties", filters={"id": property_id})
+                property_data = properties[0] if properties else None
+            
+            current_agent_id = queue.get("current_agent_id")
+            current_agent_data = None
+            if current_agent_id:
+                agents = await db.select("users", filters={"id": current_agent_id})
+                current_agent_data = agents[0] if agents else None
+            
+            final_agent_id = queue.get("final_agent_id")
+            final_agent_data = None
+            if final_agent_id:
+                agents = await db.select("users", filters={"id": final_agent_id})
+                final_agent_data = agents[0] if agents else None
+            
+            enriched_queues.append({
+                **queue,
+                "property": property_data,
+                "current_agent": current_agent_data,
+                "final_agent": final_agent_data
+            })
+        
+        return enriched_queues
+    except Exception as e:
+        import traceback
+        print(f"[ADMIN] Error getting assignment queues: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/property-assignments/unassigned")
+async def get_unassigned_properties(_=Depends(require_api_key)):
+    """Get all properties that are unassigned (no agent assigned)"""
+    try:
+        # Get properties with no agent assigned
+        properties = await db.admin_select("properties", filters={
+            "agent_id": None
+        }) or []
+        
+        # Also check properties that have expired queues
+        expired_queues = await db.admin_select("property_assignment_queue", filters={
+            "status": "expired"
+        }) or []
+        
+        expired_property_ids = [q.get("property_id") for q in expired_queues]
+        
+        # Get properties from expired queues
+        expired_properties = []
+        for property_id in expired_property_ids:
+            props = await db.select("properties", filters={"id": property_id})
+            if props:
+                expired_properties.append(props[0])
+        
+        return {
+            "unassigned_without_queue": properties,
+            "unassigned_expired_queue": expired_properties,
+            "total_unassigned": len(properties) + len(expired_properties)
+        }
+    except Exception as e:
+        import traceback
+        print(f"[ADMIN] Error getting unassigned properties: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/properties/{property_id}/comprehensive-stats")
+async def get_property_comprehensive_stats(property_id: str, _=Depends(require_api_key)):
+    """Get comprehensive statistics for a property including inquiries, bookings, agent, views"""
+    try:
+        # Get property
+        properties = await db.select("properties", filters={"id": property_id})
+        if not properties:
+            raise HTTPException(status_code=404, detail="Property not found")
+        
+        property_data = properties[0]
+        
+        # Get inquiries
+        inquiries = await db.select("inquiries", filters={"property_id": property_id}) or []
+        
+        # Get bookings
+        bookings = await db.select("bookings", filters={"property_id": property_id}) or []
+        
+        # Get assigned agent
+        assigned_agent = None
+        agent_id = property_data.get("agent_id") or property_data.get("assigned_agent_id")
+        if agent_id:
+            agents = await db.select("users", filters={"id": agent_id})
+            if agents:
+                agent = agents[0]
+                assigned_agent = {
+                    "id": agent.get("id"),
+                    "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
+                    "email": agent.get("email"),
+                    "phone": agent.get("phone_number"),
+                    "assignments_count": 0,  # Count of properties assigned to this agent
+                    "inquiries_count": 0,  # Count of inquiries for this agent's properties
+                    "bookings_count": 0  # Count of bookings for this agent's properties
+                }
+                # Get agent's total assignments
+                agent_properties = await db.select("properties", filters={
+                    "$or": [{"agent_id": agent_id}, {"assigned_agent_id": agent_id}]
+                }) or []
+                assigned_agent["assignments_count"] = len(agent_properties)
+                
+                # Get agent's total inquiries and bookings
+                agent_property_ids = [p.get("id") for p in agent_properties]
+                if agent_property_ids:
+                    agent_inquiries = await db.select("inquiries", filters={
+                        "property_id": {"in": agent_property_ids}
+                    }) or []
+                    agent_bookings = await db.select("bookings", filters={
+                        "property_id": {"in": agent_property_ids}
+                    }) or []
+                    assigned_agent["inquiries_count"] = len(agent_inquiries)
+                    assigned_agent["bookings_count"] = len(agent_bookings)
+        
+        # Get property owner
+        owner = None
+        owner_id = property_data.get("owner_id") or property_data.get("added_by")
+        if owner_id:
+            owners = await db.select("users", filters={"id": owner_id})
+            if owners:
+                owner = {
+                    "id": owners[0].get("id"),
+                    "name": f"{owners[0].get('first_name', '')} {owners[0].get('last_name', '')}".strip(),
+                    "email": owners[0].get("email"),
+                    "phone": owners[0].get("phone_number")
+                }
+        
+        # Calculate stats
+        stats = {
+            "total_inquiries": len(inquiries),
+            "new_inquiries": len([i for i in inquiries if i.get("status") == "new"]),
+            "responded_inquiries": len([i for i in inquiries if i.get("status") in ["responded", "contacted"]]),
+            "total_bookings": len(bookings),
+            "pending_bookings": len([b for b in bookings if b.get("status") == "pending"]),
+            "confirmed_bookings": len([b for b in bookings if b.get("status") == "confirmed"]),
+            "completed_bookings": len([b for b in bookings if b.get("status") == "completed"]),
+            "conversion_rate": round((len(bookings) / max(len(inquiries), 1)) * 100, 2),
+            "has_assigned_agent": agent_id is not None,
+            "assigned_agent": assigned_agent,
+            "property_owner": owner,
+            "property_status": property_data.get("status"),
+            "property_verified": property_data.get("verified"),
+            "created_at": property_data.get("created_at"),
+            "updated_at": property_data.get("updated_at")
+        }
+        
+        return {
+            "success": True,
+            "property_id": property_id,
+            "property_title": property_data.get("title"),
+            "stats": stats,
+            "inquiries": inquiries[:10],  # Last 10 inquiries
+            "bookings": bookings[:10]  # Last 10 bookings
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[ADMIN] Error getting property comprehensive stats: {e}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/notifications/{notification_id}/mark-read")
