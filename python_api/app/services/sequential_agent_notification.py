@@ -328,14 +328,23 @@ class SequentialAgentNotificationService:
     
     @staticmethod
     async def _handle_timeout(property_id: str, notification_id: str):
-        """Waits 5 minutes and marks the notification as timed out if still pending."""
-        await asyncio.sleep(300) # 5 minutes
+        """
+        Waits 5 minutes and marks the notification as timed out if still pending.
+        After timeout, immediately triggers the next agent notification.
+        """
+        await asyncio.sleep(300) # 5 minutes - Link expires and becomes invalid
         try:
             notification_res = await db.select("agent_property_notifications", filters={"id": notification_id})
             if notification_res and notification_res[0].get("status") == "pending":
-                print(f"[TIMEOUT] Notification {notification_id} for property {property_id} timed out.")
-                await db.update("agent_property_notifications", {"status": "timeout"}, {"id": notification_id})
-                # Trigger the queue to process the next agent
+                print(f"[TIMEOUT] Notification {notification_id} for property {property_id} timed out after 5 minutes.")
+                await db.update("agent_property_notifications", {
+                    "status": "timeout",
+                    "responded_at": dt.datetime.utcnow().isoformat()
+                }, {"id": notification_id})
+                
+                # Immediately trigger the queue to process the next agent
+                # The 5-minute timeout itself acts as the gap between notifications
+                print(f"[TIMEOUT] Moving to next agent for property {property_id}...")
                 asyncio.create_task(SequentialAgentNotificationService._process_queue(property_id))
         except Exception as e:
             print(f"[TIMEOUT] Error in _handle_timeout for notification {notification_id}: {e}")
@@ -355,14 +364,30 @@ class SequentialAgentNotificationService:
             notification = notifications[0]
             property_id = notification.get("property_id")
 
+            # Check if already expired (using status, as timeout handler updates it)
+            if notification.get("status") != "pending":
+                return {"success": False, "error": "This assignment link has expired or is no longer available. Links are valid for 5 minutes only."}
+            
+            # Double-check expiration time
+            expires_at_str = notification.get("expires_at")
+            if expires_at_str:
+                try:
+                    expires_at = dt.datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+                    now = dt.datetime.utcnow()
+                    if now > expires_at:
+                        # Mark as expired
+                        await db.update("agent_property_notifications", {
+                            "status": "expired",
+                            "updated_at": dt.datetime.utcnow().isoformat()
+                        }, {"id": notification_id})
+                        return {"success": False, "error": "This assignment link has expired. Links are valid for 5 minutes only."}
+                except Exception as date_error:
+                    print(f"[ACCEPT] Error parsing expiration date: {date_error}")
+            
             # Final check: ensure property is still unassigned
             prop_res = await db.select("properties", filters={"id": property_id})
             if not prop_res or prop_res[0].get("agent_id"):
                 return {"success": False, "error": "This property has already been assigned to another agent."}
-            
-            # Check if already expired (using status, as timeout handler updates it)
-            if notification.get("status") != "pending":
-                return {"success": False, "error": "This assignment is no longer available. It may have expired or been rejected."}
             
             # Update notification
             await db.update("agent_property_notifications", {
@@ -425,9 +450,24 @@ class SequentialAgentNotificationService:
             notification = notifications[0]
             property_id = notification.get("property_id")
             
-            # Check if already responded
+            # Check if already responded or expired
             if notification.get("status") != "pending":
-                return {"success": False, "error": "Already responded to this notification"}
+                return {"success": False, "error": "This assignment link has already been responded to or has expired. Links are valid for 5 minutes only."}
+            
+            # Check expiration time
+            expires_at_str = notification.get("expires_at")
+            if expires_at_str:
+                try:
+                    expires_at = dt.datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+                    now = dt.datetime.utcnow()
+                    if now > expires_at:
+                        await db.update("agent_property_notifications", {
+                            "status": "expired",
+                            "updated_at": dt.datetime.utcnow().isoformat()
+                        }, {"id": notification_id})
+                        return {"success": False, "error": "This assignment link has expired. Links are valid for 5 minutes only."}
+                except Exception as date_error:
+                    print(f"[REJECT] Error parsing expiration date: {date_error}")
             
             # Update notification
             await db.update("agent_property_notifications", {
@@ -438,14 +478,15 @@ class SequentialAgentNotificationService:
                 "updated_at": dt.datetime.utcnow().isoformat()
             }, {"id": notification_id})
             
-            print(f"[SEQUENTIAL_NOTIFICATION] Agent {agent_id} rejected property {property_id}")
+            print(f"[SEQUENTIAL_NOTIFICATION] Agent {agent_id} rejected property {property_id}, moving to next agent immediately")
 
             # Immediately trigger the queue to process the next agent
+            # No delay needed - immediate rejection allows faster assignment
             asyncio.create_task(SequentialAgentNotificationService._process_queue(property_id))
             
             return {
                 "success": True,
-                "message": "Property assignment rejected, moving to next agent"
+                "message": "Property assignment rejected, next agent will be notified shortly"
             }
             
         except Exception as e:
