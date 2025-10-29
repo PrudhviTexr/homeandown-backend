@@ -55,11 +55,19 @@ async def get_properties(
         print(f"  - added_by: {added_by}")
 
         # Build base filters for server-side query
-        base_filters = {
-            # Don't filter by verified - show all active properties
-        }
+        # Only show approved (verified=true) and active properties to public
+        # Admin endpoints can show all properties via /api/admin/properties
+        base_filters = {}
         if status:
             base_filters['status'] = status
+        else:
+            # Default to active status for public listings
+            base_filters['status'] = 'active'
+        
+        # For public endpoints, only show verified properties
+        # This ensures approved properties appear in property list and home page
+        base_filters['verified'] = True
+        
         if featured is not None:
             base_filters['featured'] = featured
         if owner_id:
@@ -90,8 +98,13 @@ async def get_properties(
         # Fetch properties from database
         properties = await db.select("properties", filters=base_filters)
         if not properties:
-            print("[PROPERTIES] No properties found in database")
+            print("[PROPERTIES] No properties found in database with filters:", base_filters)
             return []
+        
+        # Additional client-side filtering: ensure only verified and active properties are shown
+        # This is a safety check in case database filters didn't work
+        properties = [p for p in properties if p.get('status') == 'active' and p.get('verified') == True]
+        print(f"[PROPERTIES] After client-side verification filter: {len(properties)} properties")
 
         print(f"[PROPERTIES] Found {len(properties)} properties in database")
 
@@ -334,7 +347,7 @@ async def create_property(property_data: dict):
         if 'longitude' in property_data and (property_data['longitude'] is None or property_data['longitude'] == '' or property_data['longitude'] == 'NA'):
             property_data['longitude'] = None
         
-        # Auto-populate location fields from pincode (suggested values, editable)
+        # Auto-populate location fields from zipcode (suggested values, editable)
         if property_data.get('zip_code'):
             try:
                 from ..services.location_service import LocationService
@@ -362,12 +375,12 @@ async def create_property(property_data: dict):
                         if property_data.get('longitude') is None:
                             property_data['longitude'] = suggested_fields['longitude']
 
-                    print(f"[PROPERTIES] Auto-populated suggested location fields from pincode {property_data['zip_code']}")
+                    print(f"[PROPERTIES] Auto-populated suggested location fields from zipcode {property_data['zip_code']}")
                     print(f"[PROPERTIES] Suggested Location: {suggested_fields.get('city')}, {suggested_fields.get('district')}, {suggested_fields.get('state')}")
                     print(f"[PROPERTIES] Suggested Address: {suggested_fields.get('address')}")
             except Exception as location_error:
-                print(f"[PROPERTIES] Failed to auto-populate location from pincode: {location_error}")
-                # Don't fail property creation if pincode lookup fails
+                print(f"[PROPERTIES] Failed to auto-populate location from zipcode: {location_error}")
+                # Don't fail property creation if zipcode lookup fails
                 # Just log the error and continue
         
         # Set default coordinates for Hyderabad if still missing (to prevent map crashes)
@@ -1315,46 +1328,49 @@ async def create_property_review(property_id: str, data: dict):
 
         raise HTTPException(status_code=500, detail=f"Error fetching contact: {str(e)}")
 
-@router.get("/pincode/{pincode}", tags=["properties"])
-async def get_pincode_location(pincode: str):
-    """Get complete location data for a pincode - auto-populates form fields"""
+@router.get("/zipcode/{zipcode}", tags=["properties"])
+@router.get("/pincode/{zipcode}", tags=["properties"])  # Keep pincode for backward compatibility
+async def get_zipcode_location(zipcode: str):
+    """Get complete location data for a zipcode - auto-populates form fields"""
     try:
-        print(f"[PROPERTIES] Fetching complete location data for pincode: {pincode}")
+        print(f"[PROPERTIES] Fetching complete location data for zipcode: {zipcode}")
         
         from ..services.location_service import LocationService
         
         # Get complete location data including auto-population fields
-        location_data = await LocationService.get_pincode_location_data(pincode)
+        location_data = await LocationService.get_pincode_location_data(zipcode)
         
         if not location_data.get('auto_populated'):
-            raise HTTPException(status_code=404, detail=f"No location data found for pincode {pincode}")
+            raise HTTPException(status_code=404, detail=f"No location data found for zipcode {zipcode}")
         
-        print(f"[PROPERTIES] Successfully fetched complete location data for pincode {pincode}")
+        print(f"[PROPERTIES] Successfully fetched complete location data for zipcode {zipcode}")
         return location_data
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[PROPERTIES] Error fetching pincode location: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch pincode location: {str(e)}")
+        print(f"[PROPERTIES] Error fetching zipcode location: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch zipcode location: {str(e)}")
 
-@router.get("/pincode/{pincode}/suggestions", tags=["properties"])
-async def get_pincode_suggestions(pincode: str):
-    """Get suggested field values for a pincode - for form auto-population"""
+@router.get("/zipcode/{zipcode}/suggestions", tags=["properties"])
+@router.get("/pincode/{zipcode}/suggestions", tags=["properties"])  # Keep pincode for backward compatibility
+async def get_zipcode_suggestions(zipcode: str):
+    """Get suggested field values for a zipcode - for form auto-population"""
     try:
-        print(f"[PROPERTIES] Fetching suggestions for pincode: {pincode}")
+        print(f"[PROPERTIES] Fetching suggestions for zipcode: {zipcode}")
         
         from ..services.location_service import LocationService
         
         # Get complete location data
-        location_data = await LocationService.get_pincode_location_data(pincode)
+        location_data = await LocationService.get_pincode_location_data(zipcode)
         
         if not location_data.get('auto_populated'):
-            raise HTTPException(status_code=404, detail=f"No location data found for pincode {pincode}")
+            raise HTTPException(status_code=404, detail=f"No location data found for zipcode {zipcode}")
         
         # Return only the suggested fields for easy frontend integration
         suggestions = {
-            "pincode": pincode,
+            "zipcode": zipcode,
+            "pincode": zipcode,  # Keep for backward compatibility
             "suggestions": location_data.get('suggested_fields', {}),
             "map_data": {
                 "coordinates": location_data.get('coordinates'),
@@ -1364,14 +1380,14 @@ async def get_pincode_suggestions(pincode: str):
             "message": "These are suggested values. All fields can be edited."
         }
         
-        print(f"[PROPERTIES] Successfully fetched suggestions for pincode {pincode}")
+        print(f"[PROPERTIES] Successfully fetched suggestions for zipcode {zipcode}")
         return suggestions
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[PROPERTIES] Error fetching pincode suggestions: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch pincode suggestions: {str(e)}")
+        print(f"[PROPERTIES] Error fetching zipcode suggestions: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch zipcode suggestions: {str(e)}")
 
 @router.get("/filters/options", tags=["properties"])
 async def get_filter_options():
