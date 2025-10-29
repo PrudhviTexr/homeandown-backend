@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { 
   Target, CheckCircle, MessageCircle, DollarSign, Home, Users, Calendar, 
   TrendingUp, Star, Clock, MapPin, Phone, Mail, Bell, Settings, 
-  FileText, Award, BarChart3, Eye, Edit, Plus, Filter, Search
+  FileText, Award, BarChart3, Eye, Edit, Plus, Filter, Search, AlertCircle, XCircle, Download
 } from 'lucide-react';
 import { getApiUrl } from '@/utils/backend';
 import { formatIndianCurrency } from '@/utils/currency';
+import { useNavigate } from 'react-router-dom';
 
 interface DashboardProps {
   user: any;
@@ -39,6 +40,10 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
   const [assignedProperties, setAssignedProperties] = useState<any[]>([]);
   const [recentBookings, setRecentBookings] = useState<any[]>([]);
   const [pendingAssignments, setPendingAssignments] = useState<any[]>([]);
+  const [agentProfileData, setAgentProfileData] = useState<any | null>(null);
+  const [documents, setDocuments] = useState<any[]>([]);
+
+  const navigate = useNavigate();
 
   useEffect(() => {
     fetchDashboardData();
@@ -49,16 +54,25 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
       setLoading(true);
       console.log('[FastDashboard] Fetching data for agent:', user.id);
       
-      // Import pyFetch for proper API calls
-      const { pyFetch } = await import('@/utils/backend');
       const { AgentApi } = await import('@/services/pyApi');
       
-      // Fetch data in parallel using pyFetch for proper authentication
-      const [propertiesRes, inquiriesRes, bookingsRes] = await Promise.allSettled([
+      // Fetch all data in parallel
+      const [profileRes, propertiesRes, inquiriesRes, bookingsRes, assignmentsRes] = await Promise.allSettled([
+        AgentApi.getAgentProfile(),
         AgentApi.getProperties(),
         AgentApi.getInquiries(),
-        AgentApi.getBookings()
+        AgentApi.getBookings(),
+        AgentApi.getPendingPropertyAssignments()
       ]);
+
+      // Process profile
+      if (profileRes.status === 'fulfilled') {
+        console.log('[FastDashboard] Profile fetched:', profileRes.value);
+        setAgentProfileData(profileRes.value.user);
+        setDocuments(profileRes.value.documents || []);
+      } else {
+        console.error('[FastDashboard] Error fetching profile:', profileRes.reason);
+      }
 
       // Process properties
       if (propertiesRes.status === 'fulfilled') {
@@ -102,6 +116,16 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
       } else {
         console.error('[FastDashboard] Error fetching bookings:', bookingsRes.reason);
       }
+      
+      // Process assignments
+      if (assignmentsRes.status === 'fulfilled') {
+        const assignmentsData = assignmentsRes.value;
+        const assignments = assignmentsData?.notifications || assignmentsData || [];
+        console.log('[FastDashboard] Pending assignments fetched:', assignments.length);
+        setPendingAssignments(assignments);
+      } else {
+        console.error('[FastDashboard] Error fetching pending assignments:', assignmentsRes.reason);
+      }
 
       // Calculate mock earnings (replace with real calculation)
       setStats(prev => ({
@@ -111,17 +135,6 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
         responseRate: 95,
         clientSatisfaction: 4.8
       }));
-
-      // Fetch pending property assignments using pyFetch
-      try {
-        const { AgentApi } = await import('@/services/pyApi');
-        const assignmentsData = await AgentApi.getPendingPropertyAssignments();
-        const assignments = assignmentsData?.notifications || assignmentsData || [];
-        console.log('[FastDashboard] Pending assignments fetched:', assignments.length);
-        setPendingAssignments(assignments);
-      } catch (assignError) {
-        console.error('[FastDashboard] Error fetching pending assignments:', assignError);
-      }
 
     } catch (error) {
       console.error('[FastDashboard] Error fetching dashboard data:', error);
@@ -157,6 +170,27 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
           Here's your performance overview for today
         </p>
       </div>
+
+      {/* Agent Profile & License Info */}
+      {agentProfileData && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Your Profile</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <p className="text-sm font-medium text-gray-500">License Number</p>
+              <p className="text-md font-semibold text-gray-800">{agentProfileData.agent_license_number || 'Not Assigned'}</p>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-500">Profile Status</p>
+              <p className="text-md font-semibold text-gray-800 capitalize">{agentProfileData.status || 'Pending'}</p>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-500">Verification Status</p>
+              <p className="text-md font-semibold text-gray-800 capitalize">{agentProfileData.verification_status || 'Pending'}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -497,6 +531,38 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
                   <button className="flex-1 bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700">
                     Manage
                   </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Agent Documents */}
+      {documents.length > 0 && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Your Documents</h3>
+          <div className="space-y-3">
+            {documents.map(doc => (
+              <div key={doc.id} className="border rounded-lg p-3 flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-gray-800">{doc.name}</p>
+                  <p className="text-sm text-gray-500 capitalize">{doc.document_category?.replace(/_/g, ' ') || 'Document'}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => window.open(doc.public_url, '_blank')}
+                    className="flex items-center gap-1 px-3 py-1 text-sm border rounded hover:bg-gray-100"
+                  >
+                    <Eye className="w-4 h-4" /> View
+                  </button>
+                  <a
+                    href={doc.public_url}
+                    download={doc.name}
+                    className="flex items-center gap-1 px-3 py-1 text-sm border rounded hover:bg-gray-100"
+                  >
+                    <Download className="w-4 h-4" /> Download
+                  </a>
                 </div>
               </div>
             ))}

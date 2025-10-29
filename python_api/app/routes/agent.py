@@ -94,6 +94,56 @@ async def get_agent_dashboard_stats(request: Request):
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch dashboard stats: {str(e)}")
 
+@router.get("/agent/profile")
+async def get_agent_profile(request: Request):
+    """Get the current agent's full profile, including license and documents."""
+    try:
+        claims = get_current_user_claims(request)
+        if not claims:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        print(f"[AGENT] Fetching full profile for user: {user_id}")
+
+        # Get agent's user data
+        users = await db.select("users", filters={"id": user_id})
+        if not users:
+            raise HTTPException(status_code=404, detail="Agent profile not found")
+        
+        agent_data = users[0]
+
+        # Get agent's documents
+        documents = await db.select("documents", filters={"entity_id": user_id}) or []
+        
+        # Add public URLs to documents
+        for doc in documents:
+            file_path = doc.get("file_path")
+            if file_path:
+                try:
+                    public_url = db.supabase_client.storage.from_("documents").get_public_url(file_path)
+                    doc['public_url'] = public_url
+                except Exception as e:
+                    print(f"Error generating public url for {file_path}: {e}")
+                    doc['public_url'] = None
+        
+        # Combine into a single response
+        full_profile = {
+            "user": agent_data,
+            "documents": documents
+        }
+        
+        return full_profile
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AGENT] Get profile error: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="An error occurred while fetching agent profile.")
+
 @router.get("/agent/inquiries")
 async def get_agent_inquiries(
     request: Request,

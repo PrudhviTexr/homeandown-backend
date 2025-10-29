@@ -301,6 +301,9 @@ export const AgentApi = {
       body: JSON.stringify({ reason }), 
       useApiKey: false 
     });
+  },
+  getAgentProfile() {
+    return pyFetch('/api/agent/profile', { method: 'GET', useApiKey: false });
   }
 };
 
