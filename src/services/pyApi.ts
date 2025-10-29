@@ -109,7 +109,13 @@ export const AdminApi = {
   },
   
   getUnassignedPropertiesForAssignments() {
-    return this.doAdminFetch('/api/admin/property-assignments/unassigned', { method: 'GET' });
+    return this.doAdminFetch('/api/admin/property-assignments/unassigned');
+  },
+
+  retryPropertyAssignment(propertyId: string) {
+    return this.doAdminFetch(`/api/admin/properties/${propertyId}/retry-assignment`, {
+      method: 'POST'
+    });
   },
   
   getPropertyComprehensiveStats(propertyId: string) {

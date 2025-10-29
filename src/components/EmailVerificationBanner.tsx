@@ -16,30 +16,16 @@ const EmailVerificationBanner: React.FC = () => {
         try {
           // Always fetch fresh profile to get latest email_verified status
           const profile = await getUserProfile(true); // Force refresh
-          console.log('[EMAIL_BANNER] User:', user);
-          console.log('[EMAIL_BANNER] Profile:', profile);
           
-          // Check multiple sources for email verification status
-          // Handle both boolean true and string 'true', and check for false/'false'
-          const emailVerifiedValue = profile?.email_verified ?? user?.email_verified;
-          const isEmailVerifiedBool = emailVerifiedValue === true || emailVerifiedValue === 'true' || emailVerifiedValue === 1;
-          const isEmailVerifiedString = String(emailVerifiedValue).toLowerCase() === 'true';
-          const isVerified = 
-            isEmailVerifiedBool || 
-            isEmailVerifiedString ||
-            user?.verification_status === 'verified' ||
-            profile?.verification_status === 'verified';
+          // The `profile` object is the most up-to-date source of truth.
+          // The backend and DB schema now consistently use a boolean for `email_verified`.
+          const isVerified = profile?.email_verified === true;
           
-          console.log('[EMAIL_BANNER] Email verified status:', isVerified, 'value:', emailVerifiedValue, 'bool:', isEmailVerifiedBool, 'string:', isEmailVerifiedString);
+          console.log(`[EMAIL_BANNER] Fresh profile fetched. Is email verified? ${isVerified}`);
           
-          // Hide banner if email is verified - don't show if verified
-          if (isVerified) {
-            console.log('[EMAIL_BANNER] Email is verified - hiding banner');
-            setIsVisible(false);
-          } else {
-            console.log('[EMAIL_BANNER] Email not verified - showing banner');
-            setIsVisible(true);
-          }
+          // Hide banner if email is verified, otherwise show it.
+          setIsVisible(!isVerified);
+          
         } catch (error) {
           console.error('[EMAIL_BANNER] Error checking email verification:', error);
           // If we can't check, assume not verified (better to show banner than hide it)

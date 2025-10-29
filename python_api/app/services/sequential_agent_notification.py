@@ -298,7 +298,7 @@ class SequentialAgentNotificationService:
             
             email_result = await send_email(
                 to=agent.get("email"),
-                subject=f"New Property Assignment - Round {notification_round} - {property_data.get('title', 'Property')}",
+                subject=f"New Property Assignment: {property_data.get('title', 'Property')} - Round {notification_round}",
                 html=email_html
             )
             

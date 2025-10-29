@@ -1402,3 +1402,40 @@ async def mark_notification_read(notification_id: str, _=Depends(require_api_key
         return await db.update("notifications", update_data, {"id": notification_id})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/properties/{property_id}/retry-assignment")
+async def retry_property_assignment(property_id: str, _=Depends(require_api_key)):
+    """Resets and retries the agent assignment process for a property."""
+    try:
+        print(f"[ADMIN] Retrying agent assignment for property: {property_id}")
+
+        # 1. Clear the agent_id from the property
+        await db.update("properties", {"agent_id": None, "assigned_agent_id": None}, {"id": property_id})
+
+        # 2. Delete old notification records for this property
+        await db.delete("agent_property_notifications", {"property_id": property_id})
+
+        # 3. Delete old queue record for this property
+        await db.delete("property_assignment_queue", {"property_id": property_id})
+        
+        print(f"[ADMIN] Cleared previous assignment data for property: {property_id}")
+
+        # 4. Restart the assignment queue
+        from ..services.sequential_agent_notification import SequentialAgentNotificationService
+        result = await SequentialAgentNotificationService.start_property_assignment_queue(property_id)
+        
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "Failed to restart assignment queue"))
+
+        return {"success": True, "message": "Property assignment retry process has been initiated."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ADMIN] Error retrying assignment: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+        
+@router.get("/users/all")
+async def list_all_users(_=Depends(require_api_key)):
+    """List all users across all roles"""

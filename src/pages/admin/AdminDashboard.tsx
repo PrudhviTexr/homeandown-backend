@@ -368,18 +368,6 @@ const AdminDashboard: React.FC = () => {
           { key: 'custom_id', header: 'ID' },
           { key: 'first_name', header: 'Name', render: (user: User) => `${user.first_name} ${user.last_name}` },
           { key: 'email', header: 'Email' },
-          { key: 'email_verified', header: 'Email Verified', render: (user: User) => {
-            const verified = Boolean(user?.email_verified);
-            return (
-              <span aria-label={`Email verified: ${verified ? 'Yes' : 'No'}`} className={`px-2 py-1 rounded-full text-xs font-medium ${verified ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                {verified ? 'Yes' : 'No'}
-              </span>
-            );
-          }},
-          { key: 'phone_number', header: 'Phone' },
-          { key: 'documents', header: 'Documents', render: (user: User) => (
-            <span className="text-sm text-gray-700">{(user.documents || []).length || 0}</span>
-          )},
           { key: 'user_type', header: 'Type', render: (user: User) => (
             <span className={`px-2 py-1 rounded-full text-xs font-medium ${getUserTypeColor(user.user_type)}`}>
               {user.user_type}
