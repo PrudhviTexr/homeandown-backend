@@ -47,12 +47,18 @@ async def upload_file(
         if entity_type == 'property' or entity_type == 'property_images':
             bucket = 'property-images'
             object_path = filename  # Flat structure: just filename
+            # Normalize entity_type for storage in database
+            normalized_entity_type = 'property'
         elif entity_type == 'user' or entity_type == 'user_documents':
             bucket = 'documents'
             object_path = filename  # Flat structure: just filename
+            # Normalize entity_type: always store as 'user' in database for consistency
+            # This ensures admin panel queries with entity_type='user' will find them
+            normalized_entity_type = 'user'
         else:
             bucket = _get_storage_bucket()
             object_path = filename
+            normalized_entity_type = entity_type
 
         await ensure_bucket_exists(bucket)
 
@@ -73,12 +79,13 @@ async def upload_file(
             raise HTTPException(status_code=500, detail="Failed to obtain public URL")
 
         # Store document record in Supabase - only use fields that exist in schema
+        # Use normalized entity_type for consistent querying
         doc_data = {
             "name": file.filename or filename,
             "file_path": public_url,  # Store the public URL in file_path
             "file_type": file.content_type,
             "file_size": len(content),
-            "entity_type": entity_type,
+            "entity_type": normalized_entity_type,  # Use normalized type for consistent queries
             "entity_id": entity_id if entity_id else str(uuid.uuid4()),
             "uploaded_by": entity_id if entity_id else None,
             "document_category": document_category if document_category else None
