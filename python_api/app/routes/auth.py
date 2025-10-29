@@ -376,7 +376,20 @@ async def get_profile(request: Request) -> Dict[str, Any]:
             "user_type": user.get("user_type", "buyer"),
             "custom_id": user.get("custom_id"),
             "email_verified": user.get("email_verified", False),
-            "status": user.get("status", "active")
+            "status": user.get("status", "active"),
+            "phone_number": user.get("phone_number", ""),
+            "city": user.get("city", ""),
+            "state": user.get("state", ""),
+            "district": user.get("district", ""),
+            "mandal": user.get("mandal", ""),
+            "zip_code": user.get("zip_code", ""),
+            "address": user.get("address", ""),
+            "latitude": user.get("latitude"),
+            "longitude": user.get("longitude"),
+            "date_of_birth": user.get("date_of_birth"),
+            "bio": user.get("bio", ""),
+            "profile_image_url": user.get("profile_image_url"),
+            "verification_status": user.get("verification_status", "pending")
         }
         
     except HTTPException:

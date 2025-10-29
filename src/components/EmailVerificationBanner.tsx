@@ -14,7 +14,8 @@ const EmailVerificationBanner: React.FC = () => {
     const checkEmailVerification = async () => {
       if (user) {
         try {
-          const profile = await getUserProfile();
+          // Always fetch fresh profile to get latest email_verified status
+          const profile = await getUserProfile(true); // Force refresh
           console.log('[EMAIL_BANNER] User:', user);
           console.log('[EMAIL_BANNER] Profile:', profile);
           
@@ -29,16 +30,20 @@ const EmailVerificationBanner: React.FC = () => {
             user?.verification_status === 'verified' ||
             profile?.verification_status === 'verified';
           
-          console.log('[EMAIL_BANNER] Email verified status:', isVerified, 'value:', emailVerifiedValue);
+          console.log('[EMAIL_BANNER] Email verified status:', isVerified, 'value:', emailVerifiedValue, 'bool:', isEmailVerifiedBool, 'string:', isEmailVerifiedString);
           
-          if (profile && !isVerified) {
-            setIsVisible(true);
-          } else {
+          // Hide banner if email is verified - don't show if verified
+          if (isVerified) {
+            console.log('[EMAIL_BANNER] Email is verified - hiding banner');
             setIsVisible(false);
+          } else {
+            console.log('[EMAIL_BANNER] Email not verified - showing banner');
+            setIsVisible(true);
           }
         } catch (error) {
-          console.error('Error checking email verification:', error);
-          setIsVisible(false);
+          console.error('[EMAIL_BANNER] Error checking email verification:', error);
+          // If we can't check, assume not verified (better to show banner than hide it)
+          setIsVisible(true);
         }
       } else {
         setIsVisible(false);
@@ -46,6 +51,9 @@ const EmailVerificationBanner: React.FC = () => {
     };
 
     checkEmailVerification();
+    // Also check periodically in case verification happens in another tab
+    const interval = setInterval(checkEmailVerification, 10000); // Check every 10 seconds
+    return () => clearInterval(interval);
   }, [user, getUserProfile]);
 
   const handleResendVerification = async () => {
