@@ -19,6 +19,8 @@ import {
   Camera,
   Video,
   ArrowLeft,
+  Mail,
+  Phone,
 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import { Icon } from 'leaflet';
@@ -640,6 +642,33 @@ const PropertyDetails: React.FC = () => {
                   {property.description}
                 </p>
               </div>
+
+              {/* Assigned Agent Details */}
+              {property.assigned_agent && (
+                <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-6 mb-6">
+                  <h3 className="text-xl font-semibold text-blue-800 mb-4">Contact Assigned Agent</h3>
+                  <div className="flex items-center space-x-4">
+                    <div className="p-3 bg-blue-200 rounded-full">
+                      <User className="w-8 h-8 text-blue-700" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-lg text-gray-900">{property.assigned_agent.first_name} {property.assigned_agent.last_name}</p>
+                      {property.assigned_agent.email && (
+                        <p className="text-gray-600 flex items-center gap-2 mt-1">
+                          <Mail className="w-4 h-4" />
+                          {property.assigned_agent.email}
+                        </p>
+                      )}
+                      {property.assigned_agent.phone_number && (
+                        <p className="text-gray-600 flex items-center gap-2 mt-1">
+                          <Phone className="w-4 h-4" />
+                          {property.assigned_agent.phone_number}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Flexible Sections (amenities/nearby or custom) */}
               {property.sections && property.sections.length > 0 ? (

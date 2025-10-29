@@ -819,6 +819,23 @@ async def _process_single_property(property_data: dict):
         except Exception:
             pass # Ignore owner fetch errors
 
+    # Fetch assigned agent details if available
+    agent_id = property_data.get("agent_id") or property_data.get("assigned_agent_id")
+    if agent_id:
+        try:
+            agents = await db.select("users", filters={"id": agent_id})
+            if agents:
+                agent = dict(agents[0])
+                property_data['assigned_agent'] = {
+                    'id': agent.get('id'),
+                    'first_name': agent.get('first_name'),
+                    'last_name': agent.get('last_name'),
+                    'email': agent.get('email'),
+                    'phone_number': agent.get('phone_number'),
+                }
+        except Exception:
+            pass # Ignore agent fetch errors
+
     # Fetch images if empty
     if not property_data.get('images'):
         try:
