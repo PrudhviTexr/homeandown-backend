@@ -915,6 +915,7 @@ const AdminDashboard: React.FC = () => {
         }}
         onPropertyUpdated={fetchAllData}
         property={selectedProperty as Property}
+        userRole="admin"
       />
       
       <AssignAgentModal

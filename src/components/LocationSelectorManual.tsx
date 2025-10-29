@@ -16,6 +16,7 @@ interface LocationSelectorProps {
   formData?: any;
   setFormData?: (data: any) => void;
   handleInputChange?: (e: any) => void;
+  readOnly?: boolean; // Add readOnly prop for non-editable location fields
 }
 
 const LocationSelector: React.FC<LocationSelectorProps> = ({
@@ -29,7 +30,8 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
   className = '',
   formData,
   setFormData,
-  handleInputChange
+  handleInputChange,
+  readOnly = false
 }) => {
   const [states, setStates] = useState<string[]>([]);
   const [districts, setDistricts] = useState<string[]>([]);
@@ -257,6 +259,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             name="zip_code"
             value={formData?.zip_code || ''}
             onChange={e => {
+              if (readOnly) return; // Prevent changes if read-only
               const val = e.target.value.replace(/\D/g, '').slice(0, 6);
               setFormData((prev: any) => ({ ...prev, zip_code: val }));
               if (val.length === 6) {
@@ -264,6 +267,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
               }
             }}
             onBlur={e => {
+              if (readOnly) return; // Prevent changes if read-only
               const val = e.target.value;
               if (val.length === 6) {
                 handleZipcodeAutoPopulation(val);
@@ -271,7 +275,8 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             }}
             placeholder="Enter 6-digit zipcode"
             maxLength={6}
-            className="w-full p-2 border border-gray-300 rounded-md"
+            disabled={readOnly}
+            className={`w-full p-2 border border-gray-300 rounded-md ${readOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
           />
           {isFetchingLocation && (
             <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
@@ -301,7 +306,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             required={required}
             suggestions={states}
             onNewEntry={handleNewState}
-            disabled={!formData?.zip_code || formData.zip_code.length < 6}
+            disabled={readOnly || !formData?.zip_code || formData.zip_code.length < 6}
           />
 
           {/* District Input */}
@@ -313,7 +318,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             required={required}
             suggestions={districts}
             onNewEntry={handleNewDistrict}
-            disabled={!effectiveState || !formData?.zip_code || formData.zip_code.length < 6}
+            disabled={readOnly || !effectiveState || !formData?.zip_code || formData.zip_code.length < 6}
           />
 
           {/* Mandal Input */}
@@ -325,7 +330,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             required={required}
             suggestions={mandals}
             onNewEntry={handleNewMandal}
-            disabled={!effectiveDistrict || !formData?.zip_code || formData.zip_code.length < 6}
+            disabled={readOnly || !effectiveDistrict || !formData?.zip_code || formData.zip_code.length < 6}
           />
         </div>
       </div>
