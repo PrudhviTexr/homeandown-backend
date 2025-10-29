@@ -28,6 +28,8 @@ async def send_otp_endpoint(payload: Dict[str, Any] = Body(...)):
 @router.post("/verify-otp")
 async def verify_otp_endpoint(payload: Dict[str, Any] = Body(...)):
     from ..services.otp_service import verify_email_otp
+    from ..db.supabase_client import db
+    import datetime as dt
     
     # Handle request body
     email = payload.get("email")
@@ -42,6 +44,25 @@ async def verify_otp_endpoint(payload: Dict[str, Any] = Body(...)):
     ok = verify_email_otp(email, otp, action)
     if not ok:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+    
+    # If OTP verification is successful, update user's email_verified status
+    if action == "email_verification":
+        try:
+            # Find user by email
+            users = await db.select("users", filters={"email": email})
+            if users:
+                user = users[0]
+                # Update email_verified to True (boolean) and set email_verified_at
+                update_data = {
+                    "email_verified": True,  # Set as boolean True, not string 'true'
+                    "email_verified_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()
+                }
+                await db.update("users", update_data, {"id": user["id"]})
+                print(f"[OTP] Updated email_verified to True for user: {email}")
+        except Exception as update_error:
+            print(f"[OTP] Failed to update email_verified status: {update_error}")
+            # Don't fail OTP verification if DB update fails - OTP is already verified
     
     # Return in format frontend expects
     return {"success": True}

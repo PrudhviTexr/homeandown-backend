@@ -459,7 +459,17 @@ async def create_booking(booking_data: dict, request: Request):
         # Send admin notification for new booking
         try:
             from ..services.admin_notification_service import AdminNotificationService
-            await AdminNotificationService.notify_booking_submission(booking_record, property_details, user_data)
+            # Fetch user data for notification
+            user_data_for_notification = None
+            if user_id:
+                try:
+                    user_records = await db.select("users", filters={"id": user_id})
+                    if user_records:
+                        user_data_for_notification = user_records[0]
+                except Exception as user_fetch_error:
+                    print(f"[RECORDS] Error fetching user data for notification: {user_fetch_error}")
+            
+            await AdminNotificationService.notify_booking_submission(booking_record, property_details, user_data_for_notification)
             print(f"[RECORDS] Admin notification sent for new booking: {booking_data.get('name')}")
         except Exception as notify_error:
             print(f"[RECORDS] Failed to send admin notification: {notify_error}")
