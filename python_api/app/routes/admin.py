@@ -615,9 +615,14 @@ async def list_documents(
             file_path = doc.get("file_path")
             if file_path:
                 try:
-                    # Reconstruct the public URL. Assumes 'documents' is the bucket name.
-                    public_url = db.supabase_client.storage.from_("documents").get_public_url(file_path)
-                    doc['public_url'] = public_url
+                    # Check if file_path is already a full URL (starts with http)
+                    if file_path.startswith('http://') or file_path.startswith('https://'):
+                        # It's already a full URL, use it directly
+                        doc['public_url'] = file_path
+                    else:
+                        # It's just a path, generate the public URL
+                        public_url = db.supabase_client.storage.from_("documents").get_public_url(file_path)
+                        doc['public_url'] = public_url
                 except Exception as e:
                     print(f"Error generating public url for {file_path}: {e}")
                     doc['public_url'] = None
