@@ -80,7 +80,19 @@ class SequentialAgentNotificationService:
             print(f"[SEQUENTIAL_NOTIFICATION] Created assignment queue for property {property_id}")
             
             # Start the sequential notification process
-            asyncio.create_task(SequentialAgentNotificationService._process_queue(property_id))
+            print(f"[SEQUENTIAL_NOTIFICATION] Creating async task to process queue for property {property_id}")
+            task = asyncio.create_task(SequentialAgentNotificationService._process_queue(property_id))
+            
+            # Add done callback to catch any errors
+            def handle_task_result(task):
+                try:
+                    if task.exception():
+                        print(f"[SEQUENTIAL_NOTIFICATION] ERROR in queue processing task: {task.exception()}")
+                        traceback.print_exception(type(task.exception()), task.exception(), task.exception().__traceback__)
+                except Exception as e:
+                    print(f"[SEQUENTIAL_NOTIFICATION] ERROR retrieving task exception: {e}")
+            
+            task.add_done_callback(handle_task_result)
             
             return {
                 "success": True,
@@ -179,7 +191,11 @@ class SequentialAgentNotificationService:
 
             if next_agent_id:
                 print(f"[QUEUE] Next agent to notify for property {property_id} is {next_agent_id}.")
-                await SequentialAgentNotificationService._send_notification_to_agent(property_id, next_agent_id, queue)
+                notification_result = await SequentialAgentNotificationService._send_notification_to_agent(property_id, next_agent_id, queue)
+                print(f"[QUEUE] Notification result: {notification_result}")
+                
+                if not notification_result.get("success"):
+                    print(f"[QUEUE] WARNING: Failed to send notification: {notification_result.get('error')}")
             else:
                 print(f"[QUEUE] No more agents available for property {property_id}. Marking as unassigned.")
                 await db.update("properties", {"status": "pending_unassigned"}, {"id": property_id})
