@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Request, Query, File, UploadFile, Form
 from typing import Optional
 from ..core.security import require_api_key
-from ..db.supabase_client import db
+from ..db.supabase_client import db, supabase
 from ..services.email import send_email
 
 from ..models.schemas import (
@@ -593,6 +593,19 @@ async def list_documents(
             documents = await db.admin_select("documents", filters=filters if filters else None) or []
         
         print(f"[ADMIN] Found {len(documents)} documents")
+        
+        # Add the full public URL to each document
+        for doc in documents:
+            file_path = doc.get("file_path")
+            if file_path:
+                try:
+                    # Reconstruct the public URL. Assumes 'documents' is the bucket name.
+                    public_url = supabase.storage.from_("documents").get_public_url(file_path)
+                    doc['public_url'] = public_url
+                except Exception as e:
+                    print(f"Error generating public url for {file_path}: {e}")
+                    doc['public_url'] = None
+
         return documents
     except Exception as e:
         import traceback
