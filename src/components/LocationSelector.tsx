@@ -33,7 +33,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
       
       // Call the zipcode API endpoint (tries zipcode first, falls back to pincode for backward compatibility)
       console.log('[LocationSelector] Calling API:', `/api/properties/zipcode/${zipcode}/suggestions`);
-      const response = await pyFetch(`/api/properties/zipcode/${zipcode}/suggestions`, { useApiKey: true });
+      const response = await pyFetch(`/api/properties/zipcode/${zipcode}/suggestions`, { useApiKey: false });
       console.log('[LocationSelector] API Response:', response);
       
       if (response && response.suggestions) {
@@ -62,24 +62,61 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
           }));
         }
         
-        // Set dropdown selections directly - this will work with fallback data
+        // Set dropdown selections directly and load dependent data
         if (suggestions.state) {
           setSelectedState(suggestions.state);
-          onStateChange(suggestions.state);
-        }
-        
-        if (suggestions.district) {
-          setSelectedDistrict(suggestions.district);
-          onDistrictChange(suggestions.district);
-        }
-        
-        if (suggestions.mandal) {
-          setSelectedMandal(suggestions.mandal);
-          onMandalChange(suggestions.mandal);
-        }
-        
-        if (suggestions.city) {
-          setSelectedCity(suggestions.city);
+          handleStateChange(suggestions.state);
+          
+          // Load districts for this state
+          if (loadDistricts) {
+            loadDistricts(suggestions.state);
+          }
+          
+          // After districts load, set district and load mandals
+          if (suggestions.district) {
+            setTimeout(() => {
+              setSelectedDistrict(suggestions.district);
+              handleDistrictChange(suggestions.district);
+              
+              // Load mandals for this district
+              if (loadMandals && suggestions.state) {
+                loadMandals(suggestions.state, suggestions.district);
+                
+                // After mandals load, set mandal and load cities
+                if (suggestions.mandal) {
+                  setTimeout(() => {
+                    setSelectedMandal(suggestions.mandal);
+                    handleMandalChange(suggestions.mandal);
+                    
+                    // Load cities for this mandal
+                    if (loadCities) {
+                      loadCities(suggestions.mandal);
+                    }
+                    
+                    // Set city
+                    if (suggestions.city) {
+                      setTimeout(() => {
+                        setSelectedCity(suggestions.city);
+                        handleCityChange(suggestions.city);
+                      }, 200);
+                    }
+                  }, 300);
+                }
+              }
+            }, 300);
+          }
+        } else {
+          // Even if no state, set the other fields
+          if (suggestions.district) {
+            setSelectedDistrict(suggestions.district);
+          }
+          if (suggestions.mandal) {
+            setSelectedMandal(suggestions.mandal);
+          }
+          if (suggestions.city) {
+            setSelectedCity(suggestions.city);
+            handleCityChange(suggestions.city);
+          }
         }
         
         console.log('[LocationSelector] Location fields auto-populated successfully');
@@ -90,9 +127,9 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
       // Fallback: Use hardcoded data for common zipcodes
       console.log('[LocationSelector] Attempting fallback zipcode lookup...');
       await handleFallbackZipcodeLookup(zipcode);
-      } finally {
-        setZipcodeLoading(false);
-      }
+    } finally {
+      setZipcodeLoading(false);
+    }
   };
 
   // Fallback zipcode lookup for when external API fails

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Request, Query
+from fastapi import APIRouter, HTTPException, Depends, Request, Query, File, UploadFile, Form
 from typing import Optional
 from ..core.security import require_api_key
 from ..db.supabase_client import db
@@ -600,6 +600,46 @@ async def list_documents(
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/documents/upload")
+async def admin_upload_document(
+    _=Depends(require_api_key),
+    file: UploadFile = File(...),
+    entity_id: str = Form(...),
+    entity_type: str = Form("user_documents"),
+    document_category: str = Form("admin_upload")
+):
+    """Admin endpoint to upload a document on behalf of a user"""
+    try:
+        from ..routes.uploads import upload_file_to_storage
+        
+        # Check if user (entity_id) exists
+        user_data = await db.select("users", filters={"id": entity_id})
+        if not user_data:
+            raise HTTPException(status_code=404, detail=f"User with id {entity_id} not found.")
+
+        result = await upload_file_to_storage(
+            file=file,
+            entity_id=entity_id,
+            entity_type=entity_type,
+            document_category=document_category,
+            uploaded_by="admin"
+        )
+        
+        return {
+            "success": True,
+            "message": "Document uploaded successfully by admin.",
+            "document": result
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[ADMIN] Error uploading document: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to upload document: {str(e)}")
+
+
 # Agent-specific routes
 @router.get("/agents/{agent_id}/profile")
 async def get_agent_profile(agent_id: str, _=Depends(require_api_key)):
@@ -1054,6 +1094,14 @@ async def reject_document(document_id: str, request: Request, _=Depends(require_
         reason = payload.get("reason", "")
         print(f"[ADMIN] Rejecting document {document_id} with reason: {reason}")
         
+        # Get document to find the user
+        doc_data = await db.select("documents", filters={"id": document_id})
+        if not doc_data:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        document = doc_data[0]
+        user_id = document.get('entity_id')
+
         update_data = {
             "status": "rejected",
             "updated_at": dt.datetime.utcnow().isoformat()
@@ -1064,6 +1112,24 @@ async def reject_document(document_id: str, request: Request, _=Depends(require_
         result = await db.update("documents", update_data, {"id": document_id})
         print(f"[ADMIN] Document rejection result: {result}")
         
+        # Send rejection email
+        if user_id:
+            try:
+                user_data = await db.select("users", filters={"id": user_id})
+                if user_data:
+                    user = user_data[0]
+                    subject = "An update on your submitted document"
+                    html_content = f"""
+                    <p>Hi {user.get('first_name', 'User')},</p>
+                    <p>We have reviewed your document, <strong>{document.get('name', 'a document')}</strong>, and it has been rejected.</p>
+                    <p><strong>Reason:</strong> {reason or 'No reason provided.'}</p>
+                    <p>Please log in to your account to upload a new document or contact support for assistance.</p>
+                    """
+                    await send_email(to_email=user.get('email'), subject=subject, html_content=html_content)
+                    print(f"[ADMIN] Sent document rejection email to {user.get('email')}")
+            except Exception as email_error:
+                print(f"[ADMIN] !!! Failed to send document rejection email: {email_error}")
+
         # Verify the update worked
         if result and len(result) > 0:
             updated_doc = result[0]

@@ -189,12 +189,26 @@ export const AdminApi = {
   approveDocument(documentId: number) {
     return pyFetch(`/api/admin/documents/${documentId}/approve`, { method: 'POST', useApiKey: true });
   },
-  rejectDocument(documentId: number, reason?: string) {
-    const body = reason ? JSON.stringify({ reason }) : undefined;
-    return pyFetch(`/api/admin/documents/${documentId}/reject`, { method: 'POST', body, useApiKey: true });
+  rejectDocument(documentId: number, body?: { reason: string }) {
+    return this.doAdminFetch(`/api/admin/documents/${documentId}/reject`, { method: 'POST', body: body ? JSON.stringify(body) : undefined });
+  },
+  adminUploadDocument(userId: string, file: File, entityType: string, documentCategory: string) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('entity_id', userId);
+    formData.append('entity_type', entityType);
+    formData.append('document_category', documentCategory);
+
+    // Note: We are using pyFetch directly because it handles FormData correctly.
+    // The 'Content-Type' header is set automatically by the browser for FormData.
+    return pyFetch('/api/admin/documents/upload', {
+      method: 'POST',
+      body: formData,
+      useApiKey: true, 
+    });
   },
   approveProperty(propertyId: string) {
-    return pyFetch(`/api/admin/properties/${propertyId}/approve`, { method: 'POST', useApiKey: true });
+    return this.doAdminFetch(`/api/admin/properties/${propertyId}/approve`, { method: 'POST' });
   },
   rejectProperty(propertyId: string, reason?: string) {
     const body = reason ? JSON.stringify({ reason }) : undefined;
