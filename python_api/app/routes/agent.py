@@ -216,7 +216,7 @@ async def get_agent_bookings(
         bookings = await db.select("bookings", filters=filters, limit=limit)
         bookings_list = bookings or []
         
-        # Enhance bookings with property and user details
+        # Enhance bookings with property and user details, filter out sold properties
         enhanced_bookings = []
         for booking in bookings_list:
             prop_id = booking.get("property_id")
@@ -225,6 +225,12 @@ async def get_agent_bookings(
             # Get property details
             property_data = await db.select("properties", filters={"id": prop_id})
             property_info = property_data[0] if property_data else {}
+            
+            # Skip bookings for sold properties
+            prop_status = (property_info.get('status') or '').lower().strip()
+            if prop_status == 'sold':
+                print(f"[AGENT] Skipping booking for sold property: {prop_id}")
+                continue
             
             # Get user details
             user_info = {}

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from typing import Optional, Any
 from ..db.supabase_client import db
 from ..core.security import require_api_key
@@ -223,6 +223,12 @@ async def get_properties(
                         print(f"[PROPERTIES] Furnishing filter failed: '{furnishing_status}' != '{enhanced_prop['furnishing_status']}'")
                         continue
 
+            # FILTER OUT SOLD PROPERTIES - don't show sold properties to buyers
+            prop_status = enhanced_prop.get('status', '').lower().strip()
+            if prop_status == 'sold':
+                print(f"[PROPERTIES] Skipping sold property: {enhanced_prop.get('id', 'unknown')}")
+                continue
+
             # Property passed all filters
             filtered_properties.append(enhanced_prop)
 
@@ -270,10 +276,32 @@ async def get_properties(
 
 @router.post("")
 @router.post("/")
-async def create_property(property_data: dict):
+async def create_property(property_data: dict, request: Request = None):
     try:
         print(f"[PROPERTIES] Creating new property")
         print(f"[PROPERTIES] Received data keys: {list(property_data.keys())}")
+        
+        # Try to get user_id from authentication if available
+        # Whoever creates the property is the owner (owner_id and added_by)
+        user_id = None
+        if request:
+            try:
+                from ..core.security import get_current_user_claims
+                claims = get_current_user_claims(request)
+                if claims:
+                    user_id = claims.get("sub")
+                    print(f"[PROPERTIES] Found authenticated user creating property: {user_id}")
+                    
+                    # Set owner_id and added_by to the logged-in user
+                    # This ensures admin can see who uploaded/owns the property
+                    if not property_data.get('owner_id'):
+                        property_data['owner_id'] = user_id
+                    if not property_data.get('added_by'):
+                        property_data['added_by'] = user_id
+                    print(f"[PROPERTIES] Set owner_id={property_data.get('owner_id')}, added_by={property_data.get('added_by')}")
+            except Exception as auth_error:
+                print(f"[PROPERTIES] Could not extract user from request: {auth_error}")
+                # Continue without user_id if auth fails
         
         # Generate unique ID
         property_id = str(uuid.uuid4())

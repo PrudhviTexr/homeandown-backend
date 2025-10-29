@@ -79,6 +79,10 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
             "updated_at": now_utc
         }
         
+        # Add date_of_birth if provided
+        if hasattr(payload, 'date_of_birth') and payload.date_of_birth:
+            user_data["date_of_birth"] = payload.date_of_birth
+        
         # Add location fields if provided (especially important for agents to enable zipcode-based assignment)
         if hasattr(payload, 'zip_code') and payload.zip_code:
             user_data["zip_code"] = payload.zip_code
@@ -175,14 +179,8 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
         # Admin notifications are handled by admin dashboard
         print(f"[AUTH] User registration complete for {payload.email}")
         
-        # Generate and send email OTP for verification
-        print(f"[AUTH] Sending email verification OTP...")
-        try:
-            from ..services.otp_service import send_email_otp
-            otp_token = await send_email_otp(payload.email, "email_verification")
-            print(f"[AUTH] Email verification OTP sent: {otp_token}")
-        except Exception as otp_error:
-            print(f"[AUTH] Email OTP send failed (non-blocking): {otp_error}")
+        # NOTE: OTP will be sent by the frontend OTPVerification component
+        # Do not send OTP here to avoid duplicate emails
         
         # Return success with user ID
         return {

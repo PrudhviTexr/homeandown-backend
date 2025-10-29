@@ -200,6 +200,10 @@ export const AdminApi = {
     const body = reason ? JSON.stringify({ reason }) : undefined;
     return pyFetch(`/api/admin/properties/${propertyId}/reject`, { method: 'POST', body, useApiKey: true });
   },
+  resubmitProperty(propertyId: string, reason?: string) {
+    const body = reason ? JSON.stringify({ reason }) : undefined;
+    return pyFetch(`/api/admin/properties/${propertyId}/resubmit`, { method: 'POST', body, useApiKey: true });
+  },
   updateUser(userId: string, data: any) {
     return pyFetch(`/api/admin/users/${userId}`, { method: 'PUT', body: JSON.stringify(data), useApiKey: true });
   },
