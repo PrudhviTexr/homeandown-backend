@@ -175,18 +175,36 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
       {agentProfileData && (
         <div className="bg-white rounded-lg shadow p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Your Profile</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div>
+              <p className="text-sm font-medium text-gray-500">Agent ID</p>
+              <p className="text-md font-semibold text-gray-800">{agentProfileData.custom_id || 'N/A'}</p>
+            </div>
             <div>
               <p className="text-sm font-medium text-gray-500">License Number</p>
-              <p className="text-md font-semibold text-gray-800">{agentProfileData.agent_license_number || 'Not Assigned'}</p>
+              <p className="text-md font-semibold text-gray-800">
+                {agentProfileData.agent_license_number || agentProfileData.license_number || 'Not Assigned'}
+              </p>
             </div>
             <div>
               <p className="text-sm font-medium text-gray-500">Profile Status</p>
-              <p className="text-md font-semibold text-gray-800 capitalize">{agentProfileData.status || 'Pending'}</p>
+              <p className={`text-md font-semibold capitalize ${
+                agentProfileData.status === 'active' ? 'text-green-600' : 
+                agentProfileData.status === 'inactive' ? 'text-red-600' : 
+                'text-yellow-600'
+              }`}>
+                {agentProfileData.status || 'Pending'}
+              </p>
             </div>
             <div>
               <p className="text-sm font-medium text-gray-500">Verification Status</p>
-              <p className="text-md font-semibold text-gray-800 capitalize">{agentProfileData.verification_status || 'Pending'}</p>
+              <p className={`text-md font-semibold capitalize ${
+                agentProfileData.verification_status === 'verified' ? 'text-green-600' : 
+                agentProfileData.verification_status === 'rejected' ? 'text-red-600' : 
+                'text-yellow-600'
+              }`}>
+                {agentProfileData.verification_status || 'Pending'}
+              </p>
             </div>
           </div>
         </div>
