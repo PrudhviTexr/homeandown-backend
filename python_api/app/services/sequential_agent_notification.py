@@ -154,133 +154,72 @@ class SequentialAgentNotificationService:
             return []
     
     @staticmethod
-    async def _process_queue(property_id: str) -> None:
+    async def _process_queue(property_id: str):
         """
-        Process the notification queue sequentially
-        This runs as a background task
+        Processes the notification queue. This function is designed to be called
+        when the queue starts, and after each agent action (reject/timeout).
         """
         try:
-            print(f"[SEQUENTIAL_NOTIFICATION] Processing queue for property: {property_id}")
+            print(f"[QUEUE] Processing queue for property: {property_id}")
+
+            queue_res = await db.select("property_assignment_queue", filters={"property_id": property_id})
+            if not queue_res or queue_res[0].get("status") != "active":
+                print(f"[QUEUE] Queue for property {property_id} is not active or not found. Stopping.")
+                return
+
+            queue = queue_res[0]
             
-            while True:
-                # Get queue status
-                queue = await db.select("property_assignment_queue", filters={"property_id": property_id})
-                if not queue or queue[0].get("status") != "active":
-                    print(f"[SEQUENTIAL_NOTIFICATION] Queue not active for property {property_id}, stopping")
-                    break
-                
-                queue_data = queue[0]
-                
-                # Check if property already has an agent
-                properties = await db.select("properties", filters={"id": property_id})
-                if properties and properties[0].get("agent_id"):
-                    print(f"[SEQUENTIAL_NOTIFICATION] Property {property_id} already assigned, stopping queue")
-                    await db.update("property_assignment_queue", {
-                        "status": "completed",
-                        "assignment_completed": True,
-                        "final_agent_id": properties[0].get("agent_id"),
-                        "completed_at": dt.datetime.utcnow().isoformat(),
-                        "updated_at": dt.datetime.utcnow().isoformat()
-                    }, {"property_id": property_id})
-                    break
-                
-                # Get next agent to notify
-                next_agent_id = await SequentialAgentNotificationService._get_next_agent(property_id, queue_data)
-                
-                if not next_agent_id:
-                    # No more agents available, mark as unassigned
-                    print(f"[SEQUENTIAL_NOTIFICATION] No more agents available for property {property_id}, marking as unassigned")
-                    await db.update("property_assignment_queue", {
-                        "status": "expired",
-                        "completed_at": dt.datetime.utcnow().isoformat(),
-                        "updated_at": dt.datetime.utcnow().isoformat()
-                    }, {"property_id": property_id})
-                    break
-                
-                # Send notification to next agent
-                notification_result = await SequentialAgentNotificationService._send_notification_to_agent(
-                    property_id, next_agent_id, queue_data
-                )
-                
-                if notification_result.get("success"):
-                    # Wait 5 minutes for response (or until agent responds)
-                    await SequentialAgentNotificationService._wait_for_response(
-                        property_id, notification_result.get("notification_id")
-                    )
-                    
-                    # Check if agent responded (accept/reject)
-                    notification = await db.select("agent_property_notifications", 
-                        filters={"id": notification_result.get("notification_id")})
-                    
-                    if notification and notification[0].get("status") == "accepted":
-                        # Agent accepted, assign and stop
-                        await db.update("properties", {
-                            "agent_id": next_agent_id,
-                            "assigned_agent_id": next_agent_id,
-                            "updated_at": dt.datetime.utcnow().isoformat()
-                        }, {"id": property_id})
-                        
-                        await db.update("property_assignment_queue", {
-                            "status": "completed",
-                            "assignment_completed": True,
-                            "final_agent_id": next_agent_id,
-                            "completed_at": dt.datetime.utcnow().isoformat(),
-                            "updated_at": dt.datetime.utcnow().isoformat()
-                        }, {"property_id": property_id})
-                        
-                        print(f"[SEQUENTIAL_NOTIFICATION] Property {property_id} assigned to agent {next_agent_id}")
-                        break
-                    elif notification and notification[0].get("status") in ["rejected", "timeout"]:
-                        # Move to next agent
-                        await db.update("property_assignment_queue", {
-                            "current_agent_id": None,
-                            "current_notification_id": None,
-                            "total_notifications_sent": queue_data.get("total_notifications_sent", 0) + 1,
-                            "updated_at": dt.datetime.utcnow().isoformat()
-                        }, {"property_id": property_id})
-                        # Continue to next iteration
-                        continue
-                else:
-                    # Failed to send notification, try next agent
-                    print(f"[SEQUENTIAL_NOTIFICATION] Failed to send notification: {notification_result.get('error')}")
-                    await asyncio.sleep(1)  # Brief pause before next agent
-                    continue
-                
+            prop_res = await db.select("properties", filters={"id": property_id})
+            if not prop_res or prop_res[0].get("agent_id"):
+                print(f"[QUEUE] Property {property_id} is already assigned. Stopping queue.")
+                await db.update("property_assignment_queue", {"status": "completed"}, {"id": queue['id']})
+                return
+
+            next_agent_id = await SequentialAgentNotificationService._get_next_agent(property_id, queue)
+
+            if next_agent_id:
+                print(f"[QUEUE] Next agent to notify for property {property_id} is {next_agent_id}.")
+                await SequentialAgentNotificationService._send_notification_to_agent(property_id, next_agent_id, queue)
+            else:
+                print(f"[QUEUE] No more agents available for property {property_id}. Marking as unassigned.")
+                await db.update("properties", {"status": "pending_unassigned"}, {"id": property_id})
+                await db.update("property_assignment_queue", {"status": "completed_unassigned"}, {"id": queue['id']})
+
         except Exception as e:
-            print(f"[SEQUENTIAL_NOTIFICATION] Error processing queue: {e}")
-            print(traceback.format_exc())
-    
+            print(f"[QUEUE] CRITICAL ERROR in _process_queue for property {property_id}: {e}")
+            traceback.print_exc()
+
     @staticmethod
     async def _get_next_agent(property_id: str, queue_data: Dict[str, Any]) -> Optional[str]:
-        """Get next agent to notify (hasn't been contacted 3 times)"""
-        try:
-            agent_list = queue_data.get("agent_list", [])
-            current_round = queue_data.get("current_round", 1)
-            
-            # Get all notifications for this property to count attempts per agent
-            all_notifications = await db.select("agent_property_notifications", 
-                filters={"property_id": property_id})
-            
-            # Count attempts per agent
-            agent_attempts: Dict[str, int] = {}
-            for notif in all_notifications:
-                agent_id = notif.get("agent_id")
-                if agent_id:
-                    agent_attempts[agent_id] = agent_attempts.get(agent_id, 0) + 1
-            
-            # Find next agent who hasn't been contacted 3 times
-            for agent_info in agent_list:
-                agent_id = agent_info.get("id")
-                attempts = agent_attempts.get(agent_id, 0)
-                
-                if attempts < 3:
-                    return agent_id
-            
-            return None  # All agents have been contacted 3 times
-            
-        except Exception as e:
-            print(f"[SEQUENTIAL_NOTIFICATION] Error getting next agent: {e}")
+        """
+        Gets the next agent in a round-robin fashion.
+        Increments the round if all agents in the current round have been notified.
+        """
+        agent_list = queue_data.get("agent_list", [])
+        if not agent_list:
             return None
+
+        last_notified_index = queue_data.get("last_notified_index", -1)
+        current_round = queue_data.get("current_round", 1)
+
+        if current_round > 3:
+            return None # Max rounds reached
+
+        next_index = (last_notified_index + 1) % len(agent_list)
+
+        # If we have looped back to the start, it's time for the next round
+        if next_index == 0 and last_notified_index != -1:
+            current_round += 1
+            if current_round > 3:
+                return None # Max rounds reached
+            await db.update("property_assignment_queue", {"current_round": current_round}, {"id": queue_data["id"]})
+
+        next_agent_id = agent_list[next_index].get("id")
+        
+        # Update the queue with the index of the agent we are about to notify
+        await db.update("property_assignment_queue", {"last_notified_index": next_index}, {"id": queue_data["id"]})
+        
+        return next_agent_id
     
     @staticmethod
     async def _send_notification_to_agent(
@@ -372,6 +311,9 @@ class SequentialAgentNotificationService:
             
             print(f"[SEQUENTIAL_NOTIFICATION] Sent notification to agent {agent_id} for property {property_id} (Round {notification_round})")
             
+            # Start a background task to handle timeout
+            asyncio.create_task(SequentialAgentNotificationService._handle_timeout(property_id, notification_id))
+
             return {
                 "success": True,
                 "notification_id": notification_id,
@@ -385,51 +327,20 @@ class SequentialAgentNotificationService:
             return {"success": False, "error": str(e)}
     
     @staticmethod
-    async def _wait_for_response(property_id: str, notification_id: str) -> None:
-        """Wait 5 minutes for agent response, checking periodically"""
+    async def _handle_timeout(property_id: str, notification_id: str):
+        """Waits 5 minutes and marks the notification as timed out if still pending."""
+        await asyncio.sleep(300) # 5 minutes
         try:
-            expiration_time = None
-            
-            # Get expiration time
-            notifications = await db.select("agent_property_notifications", 
-                filters={"id": notification_id})
-            if notifications:
-                expires_at_str = notifications[0].get("expires_at")
-                if expires_at_str:
-                    expiration_time = dt.datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
-            
-            if not expiration_time:
-                print(f"[SEQUENTIAL_NOTIFICATION] No expiration time found for notification {notification_id}")
-                return
-            
-            # Check every 10 seconds until expiration or response
-            check_interval = 10  # seconds
-            while dt.datetime.utcnow() < expiration_time:
-                await asyncio.sleep(check_interval)
-                
-                # Check if agent responded
-                notifications = await db.select("agent_property_notifications",
-                    filters={"id": notification_id})
-                
-                if notifications:
-                    status = notifications[0].get("status")
-                    if status in ["accepted", "rejected"]:
-                        print(f"[SEQUENTIAL_NOTIFICATION] Agent responded with status: {status}")
-                        return
-            
-            # Timeout reached
-            print(f"[SEQUENTIAL_NOTIFICATION] Notification {notification_id} expired (timeout)")
-            await db.update("agent_property_notifications", {
-                "status": "timeout",
-                "response": "timeout",
-                "responded_at": dt.datetime.utcnow().isoformat(),
-                "updated_at": dt.datetime.utcnow().isoformat()
-            }, {"id": notification_id})
-            
+            notification_res = await db.select("agent_property_notifications", filters={"id": notification_id})
+            if notification_res and notification_res[0].get("status") == "pending":
+                print(f"[TIMEOUT] Notification {notification_id} for property {property_id} timed out.")
+                await db.update("agent_property_notifications", {"status": "timeout"}, {"id": notification_id})
+                # Trigger the queue to process the next agent
+                asyncio.create_task(SequentialAgentNotificationService._process_queue(property_id))
         except Exception as e:
-            print(f"[SEQUENTIAL_NOTIFICATION] Error waiting for response: {e}")
-            print(traceback.format_exc())
-    
+            print(f"[TIMEOUT] Error in _handle_timeout for notification {notification_id}: {e}")
+            traceback.print_exc()
+
     @staticmethod
     async def accept_assignment(notification_id: str, agent_id: str) -> Dict[str, Any]:
         """Agent accepts the property assignment"""
@@ -439,21 +350,19 @@ class SequentialAgentNotificationService:
                 filters={"id": notification_id, "agent_id": agent_id})
             
             if not notifications:
-                return {"success": False, "error": "Notification not found"}
+                return {"success": False, "error": "Notification not found or not intended for you."}
             
             notification = notifications[0]
             property_id = notification.get("property_id")
+
+            # Final check: ensure property is still unassigned
+            prop_res = await db.select("properties", filters={"id": property_id})
+            if not prop_res or prop_res[0].get("agent_id"):
+                return {"success": False, "error": "This property has already been assigned to another agent."}
             
-            # Check if already expired
-            expires_at_str = notification.get("expires_at")
-            if expires_at_str:
-                expires_at = dt.datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
-                if dt.datetime.utcnow() > expires_at:
-                    return {"success": False, "error": "Notification has expired"}
-            
-            # Check if already responded
+            # Check if already expired (using status, as timeout handler updates it)
             if notification.get("status") != "pending":
-                return {"success": False, "error": "Already responded to this notification"}
+                return {"success": False, "error": "This assignment is no longer available. It may have expired or been rejected."}
             
             # Update notification
             await db.update("agent_property_notifications", {
@@ -480,16 +389,15 @@ class SequentialAgentNotificationService:
             }, {"property_id": property_id})
             
             # Mark all other pending notifications for this property as cancelled
-            await db.update("agent_property_notifications", {
-                "status": "expired",
-                "response": "timeout",
-                "responded_at": dt.datetime.utcnow().isoformat(),
-                "updated_at": dt.datetime.utcnow().isoformat()
-            }, {
+            # This is important to stop other timeout handlers
+            other_notifications = await db.select("agent_property_notifications", filters={
                 "property_id": property_id,
                 "status": "pending"
             })
-            
+            for notif in other_notifications:
+                if notif['id'] != notification_id:
+                    await db.update("agent_property_notifications", {"status": "cancelled"}, {"id": notif['id']})
+
             print(f"[SEQUENTIAL_NOTIFICATION] Agent {agent_id} accepted property {property_id}")
             
             return {
@@ -530,19 +438,10 @@ class SequentialAgentNotificationService:
                 "updated_at": dt.datetime.utcnow().isoformat()
             }, {"id": notification_id})
             
-            # Update queue to continue with next agent
-            queue = await db.select("property_assignment_queue", filters={"property_id": property_id})
-            if queue:
-                await db.update("property_assignment_queue", {
-                    "current_agent_id": None,
-                    "current_notification_id": None,
-                    "updated_at": dt.datetime.utcnow().isoformat()
-                }, {"property_id": property_id})
-                
-                # Continue processing queue
-                asyncio.create_task(SequentialAgentNotificationService._process_queue(property_id))
-            
             print(f"[SEQUENTIAL_NOTIFICATION] Agent {agent_id} rejected property {property_id}")
+
+            # Immediately trigger the queue to process the next agent
+            asyncio.create_task(SequentialAgentNotificationService._process_queue(property_id))
             
             return {
                 "success": True,
