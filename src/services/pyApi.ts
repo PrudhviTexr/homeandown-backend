@@ -267,6 +267,22 @@ export const AgentApi = {
       body: JSON.stringify({ response }), 
       useApiKey: false 
     });
+  },
+  getPendingPropertyAssignments() {
+    return pyFetch('/api/agent/pending-assignments', { method: 'GET', useApiKey: false });
+  },
+  acceptPropertyAssignment(notificationId: string) {
+    return pyFetch(`/api/agent/property-assignments/${notificationId}/accept`, { 
+      method: 'POST', 
+      useApiKey: false 
+    });
+  },
+  rejectPropertyAssignment(notificationId: string, reason?: string) {
+    return pyFetch(`/api/agent/property-assignments/${notificationId}/reject`, { 
+      method: 'POST', 
+      body: JSON.stringify({ reason }), 
+      useApiKey: false 
+    });
   }
 };
 

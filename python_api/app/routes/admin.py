@@ -303,27 +303,90 @@ async def resubmit_property(property_id: str, request: Request, _=Depends(requir
 async def assign_agent(property_id: str, payload: dict, _=Depends(require_api_key)):
     try:
         agent_id = payload.get("agent_id")
-        update_data = {"agent_id": agent_id, "updated_at": dt.datetime.utcnow().isoformat()}
+        
+        if not agent_id:
+            raise HTTPException(status_code=400, detail="agent_id is required")
+        
+        # Also set assigned_agent_id for consistency
+        update_data = {
+            "agent_id": agent_id,
+            "assigned_agent_id": agent_id,
+            "updated_at": dt.datetime.utcnow().isoformat()
+        }
         result = await db.update("properties", update_data, {"id": property_id})
+        
+        print(f"[ADMIN] Assigned agent {agent_id} to property {property_id}")
 
-        # Send email notification
+        # Send email notification with proper email template
         try:
             property_data = await db.select("properties", filters={"id": property_id})
             agent_data = await db.select("users", filters={"id": agent_id})
+            
             if property_data and agent_data:
                 prop = property_data[0]
                 agent = agent_data[0]
-                subject = f"You have been assigned to a new property: {prop.get('title')}"
-                html_content = f"""
-                <p>Hi {agent.get('first_name')},</p>
-                <p>You have been assigned as the agent for the property: <strong>{prop.get('title')}</strong>.</p>
-                <p>You can view the property details in your dashboard.</p>
-                """
-                await send_email(to=agent.get('email'), subject=subject, html=html_content)
+                agent_name = f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip() or "Agent"
+                agent_email = agent.get('email')
+                
+                if agent_email:
+                    # Use proper email template service
+                    try:
+                        from ..services.templates import get_property_assignment_email
+                        html_content = await get_property_assignment_email(
+                            agent_name=agent_name,
+                            property_title=prop.get('title', 'Property'),
+                            property_id=property_id,
+                            property_address=prop.get('address', prop.get('city', 'N/A')),
+                            property_price=prop.get('price') or prop.get('monthly_rent', 'N/A')
+                        )
+                        subject = f"New Property Assignment: {prop.get('title', 'Property')} - Home & Own"
+                    except Exception as template_error:
+                        print(f"[ADMIN] Template error, using fallback: {template_error}")
+                        # Fallback simple email
+                        html_content = f"""
+                        <html>
+                        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                                <h2 style="color: #2563eb;">New Property Assignment</h2>
+                                <p>Hi {agent_name},</p>
+                                <p>You have been assigned as the agent for a new property:</p>
+                                <div style="background-color: #f0f9ff; border-left: 4px solid #2563eb; padding: 15px; margin: 20px 0;">
+                                    <p><strong>Property:</strong> {prop.get('title', 'Property')}</p>
+                                    <p><strong>Address:</strong> {prop.get('address', prop.get('city', 'N/A'))}</p>
+                                    {f'<p><strong>Price:</strong> ₹{prop.get("price"):,}</p>' if prop.get('price') else ''}
+                                    {f'<p><strong>Monthly Rent:</strong> ₹{prop.get("monthly_rent"):,}</p>' if prop.get('monthly_rent') else ''}
+                                </div>
+                                <p>You can view and manage this property in your agent dashboard.</p>
+                                <div style="text-align: center; margin: 30px 0;">
+                                    <a href="https://homeandown.com/agent/dashboard" 
+                                       style="background-color: #2563eb; color: white; padding: 12px 30px; 
+                                              text-decoration: none; border-radius: 5px; display: inline-block;">
+                                        View Dashboard
+                                    </a>
+                                </div>
+                                <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
+                                <p style="color: #999; font-size: 12px;">© 2025 Home & Own. All rights reserved.</p>
+                            </div>
+                        </body>
+                        </html>
+                        """
+                        subject = f"You have been assigned to a new property: {prop.get('title')}"
+                    
+                    await send_email(to=agent_email, subject=subject, html=html_content)
+                    print(f"[ADMIN] ✅ Agent assignment email sent to: {agent_email}")
+                else:
+                    print(f"[ADMIN] ⚠️ Agent email not found for agent_id: {agent_id}")
+            else:
+                print(f"[ADMIN] ⚠️ Property or agent not found")
         except Exception as email_error:
             print(f"[ADMIN] !!! Failed to send agent assignment email: {email_error}")
+            import traceback
+            print(traceback.format_exc())
+            # Don't fail the assignment if email fails
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         print(f"[ADMIN] !!! Error assigning agent to {property_id}: {e}")

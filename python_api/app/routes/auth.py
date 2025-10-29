@@ -1039,3 +1039,105 @@ async def reset_password(request: Request) -> Dict[str, Any]:
         print(f"[AUTH] Reset password error: {e}")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail="Failed to reset password")
+
+@router.post("/change-password")
+async def change_password(request: Request) -> Dict[str, Any]:
+    """Change user password by verifying current password and setting new one."""
+    try:
+        from ..core.security import get_current_user_claims
+        from ..core.crypto import verify_password, get_password_hash
+        from ..services.email import send_email
+        from ..config import settings
+        
+        claims = get_current_user_claims(request)
+        if not claims:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        body = await request.json()
+        current_password = body.get("current_password", "").strip()
+        new_password = body.get("new_password", "").strip()
+        
+        if not current_password or not new_password:
+            raise HTTPException(status_code=400, detail="Both current_password and new_password are required")
+        
+        if len(new_password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+        
+        # Get user
+        users = await db.select("users", filters={"id": user_id})
+        if not users:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user = users[0]
+        password_hash = user.get("password_hash")
+        
+        # Verify current password
+        if not password_hash or not verify_password(current_password, password_hash):
+            raise HTTPException(status_code=400, detail="Invalid current password")
+        
+        # Check if new password is same as current
+        if verify_password(new_password, password_hash):
+            raise HTTPException(status_code=400, detail="New password must be different from current password")
+        
+        # Hash new password
+        new_password_hash = get_password_hash(new_password)
+        
+        # Update password
+        await db.update("users", {
+            "password_hash": new_password_hash,
+            "updated_at": dt.datetime.now(pytz.UTC).isoformat()
+        }, {"id": user_id})
+        
+        print(f"[AUTH] Password changed successfully for user: {user_id}")
+        
+        # Send confirmation email
+        try:
+            user_email = user.get("email")
+            user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "User"
+            
+            email_html = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <h2 style="color: #10b981;">Password Changed Successfully</h2>
+                    <p>Hello {user_name},</p>
+                    <p>Your password has been successfully changed.</p>
+                    <div style="background-color: #f0f9ff; border-left: 4px solid #10b981; padding: 15px; margin: 20px 0;">
+                        <p style="margin: 0;"><strong>Security Notice:</strong></p>
+                        <p style="margin: 5px 0 0 0;">If you didn't make this change, please contact our support team immediately.</p>
+                    </div>
+                    <p style="color: #666; font-size: 14px; margin-top: 30px;">
+                        You can now log in with your new password.
+                    </p>
+                    <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
+                    <p style="color: #999; font-size: 12px;">© 2025 Home & Own. All rights reserved.</p>
+                </div>
+            </body>
+            </html>
+            """
+            
+            await send_email(
+                to_email=user_email,
+                subject="Password Changed Successfully - Home & Own",
+                html_content=email_html
+            )
+            print(f"[AUTH] Password change confirmation email sent to: {user_email}")
+        except Exception as email_error:
+            print(f"[AUTH] Failed to send password change email: {email_error}")
+            # Don't fail password change if email fails
+        
+        return {
+            "success": True,
+            "message": "Password changed successfully. An email notification has been sent."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AUTH] Change password error: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to change password: {str(e)}")
