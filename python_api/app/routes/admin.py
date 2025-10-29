@@ -71,6 +71,14 @@ async def create_user(payload: SignupRequest, _=Depends(require_api_key)):
 async def update_user(user_id: str, payload: UpdateProfileRequest, _=Depends(require_api_key)):
     try:
         update_data = payload.dict(exclude_unset=True)
+        
+        # Admin override logic for status
+        if 'verification_status' in update_data:
+            # If an admin sets verification to pending or rejected, force the main status to inactive
+            if update_data['verification_status'] in ['pending', 'rejected']:
+                update_data['status'] = 'inactive'
+                print(f"[ADMIN] Admin override: Setting user {user_id} status to 'inactive' due to verification status change.")
+
         if update_data:
             update_data["updated_at"] = dt.datetime.utcnow().isoformat()
             return await db.update("users", update_data, {"id": user_id})

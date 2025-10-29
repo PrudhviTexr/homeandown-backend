@@ -1,4 +1,4 @@
-import { pyFetch } from '@/utils/backend';
+import { pyFetch, getPyApiBase } from '@/utils/backend';
 
 export type LoginResponse = { user?: { id: number | string; email: string } };
 
@@ -308,9 +308,9 @@ export const FilesApi = {
   publicUrlById(id: number | string, url?: string) {
     // If a direct URL is provided (from Supabase storage), use it
     if (url) return url;
-    // Otherwise, construct the API endpoint
-    const base = (typeof window !== 'undefined' ? window.location.origin : '') + '/api';
-    return `${base}/files/${id}`;
+    // Otherwise, construct the API endpoint using the backend base URL
+    const base = getPyApiBase(); // Use the utility function to get the correct backend URL
+    return `${base}/api/files/${id}`;
   },
 };
 
