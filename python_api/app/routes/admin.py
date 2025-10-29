@@ -392,13 +392,25 @@ async def list_documents(
         
         # Build filters if provided
         filters = {}
-        if entity_type:
-            filters['entity_type'] = entity_type
         if entity_id:
             filters['entity_id'] = entity_id
         
-        # Fetch documents with filters
-        documents = await db.admin_select("documents", filters=filters if filters else None) or []
+        # Handle entity_type: if searching for 'user', also include 'user_documents' for backwards compatibility
+        if entity_type:
+            if entity_type == 'user':
+                # Query for both 'user' and 'user_documents' to catch old uploads
+                all_documents = await db.admin_select("documents", filters={'entity_id': entity_id} if entity_id else None) or []
+                # Filter to only user-related documents
+                documents = [doc for doc in all_documents if doc.get('entity_type') in ['user', 'user_documents']]
+            elif entity_type == 'property':
+                filters['entity_type'] = entity_type
+                documents = await db.admin_select("documents", filters=filters if filters else None) or []
+            else:
+                filters['entity_type'] = entity_type
+                documents = await db.admin_select("documents", filters=filters if filters else None) or []
+        else:
+            # No entity_type filter, fetch all
+            documents = await db.admin_select("documents", filters=filters if filters else None) or []
         
         print(f"[ADMIN] Found {len(documents)} documents")
         return documents
