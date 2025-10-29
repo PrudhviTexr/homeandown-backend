@@ -103,7 +103,12 @@ async def get_properties(
         
         # Additional client-side filtering: ensure only verified and active properties are shown
         # This is a safety check in case database filters didn't work
-        properties = [p for p in properties if p.get('status') == 'active' and p.get('verified') == True]
+        # Handle verified as boolean True, string 'true', or integer 1
+        properties = [p for p in properties if 
+                     p.get('status') == 'active' and 
+                     (p.get('verified') is True or 
+                      (isinstance(p.get('verified'), str) and p.get('verified').lower() == 'true') or
+                      p.get('verified') == 1)]
         print(f"[PROPERTIES] After client-side verification filter: {len(properties)} properties")
 
         print(f"[PROPERTIES] Found {len(properties)} properties in database")
@@ -273,10 +278,10 @@ async def create_property(property_data: dict):
         property_data['created_at'] = now
         property_data['updated_at'] = now
         
-        # Ensure required fields with defaults - properties are immediately visible
-        property_data.setdefault('status', 'active')
+        # Ensure required fields with defaults - properties require admin approval
+        property_data.setdefault('status', 'pending')  # Pending until admin approves
         property_data.setdefault('featured', False)
-        property_data.setdefault('verified', True)  # Verified by default so properties show immediately
+        property_data.setdefault('verified', False)  # Must be verified by admin before showing
         property_data.setdefault('priority', 0)
         
         # Handle required fields - set to 'NA' if empty

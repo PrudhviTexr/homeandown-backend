@@ -3,27 +3,33 @@ Agent Assignment Routes
 Handles agent acceptance/rejection of property assignments
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from typing import Optional
 import traceback
 
 from ..services.sequential_agent_notification import SequentialAgentNotificationService
-from ..core.auth import get_current_user_id
+from ..core.security import get_current_user_claims
 
 router = APIRouter(prefix="/agent/property-assignments", tags=["agent-assignments"])
 
 @router.post("/{notification_id}/accept")
 async def accept_property_assignment(
     notification_id: str,
-    agent_id: Optional[str] = Depends(get_current_user_id)
+    request: Request
 ):
     """
     Agent accepts a property assignment
     Requires authentication - agent can only accept their own notifications
     """
     try:
-        if not agent_id:
+        # Get current user ID from token
+        claims = get_current_user_claims(request)
+        if not claims:
             raise HTTPException(status_code=401, detail="Authentication required")
+        
+        agent_id = claims.get("sub")
+        if not agent_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
         
         result = await SequentialAgentNotificationService.accept_assignment(
             notification_id=notification_id,
@@ -52,16 +58,28 @@ async def accept_property_assignment(
 @router.post("/{notification_id}/reject")
 async def reject_property_assignment(
     notification_id: str,
-    request_data: Optional[dict] = None,
-    agent_id: Optional[str] = Depends(get_current_user_id)
+    request: Request
 ):
     """
     Agent rejects a property assignment
     Requires authentication - agent can only reject their own notifications
     """
     try:
-        if not agent_id:
+        # Get current user ID from token
+        claims = get_current_user_claims(request)
+        if not claims:
             raise HTTPException(status_code=401, detail="Authentication required")
+        
+        agent_id = claims.get("sub")
+        if not agent_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        # Get reason from request body
+        request_data = None
+        try:
+            request_data = await request.json() if request.headers.get("content-type") == "application/json" else None
+        except:
+            pass
         
         reason = None
         if request_data and isinstance(request_data, dict):
@@ -94,15 +112,21 @@ async def reject_property_assignment(
 @router.get("/{notification_id}")
 async def get_assignment_notification(
     notification_id: str,
-    agent_id: Optional[str] = Depends(get_current_user_id)
+    request: Request
 ):
     """
     Get assignment notification details
     Requires authentication
     """
     try:
-        if not agent_id:
+        # Get current user ID from token
+        claims = get_current_user_claims(request)
+        if not claims:
             raise HTTPException(status_code=401, detail="Authentication required")
+        
+        agent_id = claims.get("sub")
+        if not agent_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
         
         from ..db.supabase_client import db
         
@@ -130,4 +154,3 @@ async def get_assignment_notification(
         print(f"[AGENT_ASSIGNMENTS] Error getting notification: {e}")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
-
