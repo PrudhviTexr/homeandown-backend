@@ -170,12 +170,13 @@ async def get_agent_inquiries(
         
         print(f"[AGENT] Fetching inquiries for user: {user_id}")
         
-        # Get agent's assigned property IDs - check both agent_id and assigned_agent_id
+        # Get agent's property IDs - check agent_id, assigned_agent_id, and owner_id
         properties_agent_id = await db.select("properties", filters={"agent_id": user_id})
         properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id})
+        properties_owned = await db.select("properties", filters={"owner_id": user_id})
         
-        # Combine both lists and remove duplicates
-        all_properties = (properties_agent_id or []) + (properties_assigned_id or [])
+        # Combine all lists and remove duplicates
+        all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
         property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
         
         print(f"[AGENT] Found {len(property_ids)} assigned properties")
@@ -248,12 +249,13 @@ async def get_agent_bookings(
         
         print(f"[AGENT] Fetching bookings for user: {user_id}")
         
-        # Get agent's assigned property IDs - check both agent_id and assigned_agent_id
+        # Get agent's property IDs - check agent_id, assigned_agent_id, and owner_id
         properties_agent_id = await db.select("properties", filters={"agent_id": user_id})
         properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id})
+        properties_owned = await db.select("properties", filters={"owner_id": user_id})
         
-        # Combine both lists and remove duplicates
-        all_properties = (properties_agent_id or []) + (properties_assigned_id or [])
+        # Combine all lists and remove duplicates
+        all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
         property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
         
         print(f"[AGENT] Found {len(property_ids)} assigned properties")
@@ -331,13 +333,17 @@ async def get_agent_properties(
         
         print(f"[AGENT] Fetching properties for user: {user_id}")
         
-        # Get agent's assigned properties - check both agent_id and assigned_agent_id
-        # Only show verified properties for agents
+        # Get agent's properties - check:
+        # 1. agent_id - legacy field for assignment
+        # 2. assigned_agent_id - current field for assignment  
+        # 3. owner_id - properties owned/created by the agent
+        # Only show verified properties for assigned ones, show all statuses for owned ones
         properties_agent_id = await db.select("properties", filters={"agent_id": user_id, "verified": True})
         properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id, "verified": True})
+        properties_owned = await db.select("properties", filters={"owner_id": user_id})  # Show all owned properties
         
-        # Combine both lists and remove duplicates
-        all_properties = (properties_agent_id or []) + (properties_assigned_id or [])
+        # Combine all lists and remove duplicates
+        all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
         unique_properties = []
         seen_ids = set()
         

@@ -57,8 +57,9 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
       const { AgentApi } = await import('@/services/pyApi');
       
       // Fetch all data in parallel
-      const [profileRes, propertiesRes, inquiriesRes, bookingsRes, assignmentsRes] = await Promise.allSettled([
+      const [profileRes, statsRes, propertiesRes, inquiriesRes, bookingsRes, assignmentsRes] = await Promise.allSettled([
         AgentApi.getAgentProfile(),
+        AgentApi.getDashboardStats(),
         AgentApi.getProperties(),
         AgentApi.getInquiries(),
         AgentApi.getBookings(),
@@ -74,17 +75,39 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
         console.error('[FastDashboard] Error fetching profile:', profileRes.reason);
       }
 
+      // Process dashboard stats
+      if (statsRes.status === 'fulfilled') {
+        const statsData = statsRes.value?.stats || {};
+        console.log('[FastDashboard] Stats fetched:', statsData);
+        setStats(prev => ({
+          ...prev,
+          totalProperties: statsData.total_properties || 0,
+          assignedProperties: statsData.active_properties || 0,
+          totalInquiries: statsData.total_inquiries || 0,
+          totalBookings: statsData.total_bookings || 0,
+          responseRate: statsData.response_rate || 0,
+          monthlyCommission: 0, // This would need to be calculated separately
+          totalEarnings: 0, // This would need to be calculated separately
+          clientSatisfaction: 0 // This would need to be calculated separately
+        }));
+      } else {
+        console.error('[FastDashboard] Error fetching stats:', statsRes.reason);
+      }
+
       // Process properties
       if (propertiesRes.status === 'fulfilled') {
         const response = propertiesRes.value;
         const properties = response?.properties || response || [];
         console.log('[FastDashboard] Properties fetched:', properties.length);
         setAssignedProperties(properties.slice(0, 5)); // Show only 5 recent
-        setStats(prev => ({
-          ...prev,
-          totalProperties: properties.length,
-          assignedProperties: properties.length
-        }));
+        // Don't override stats if they were already set by statsRes
+        if (statsRes.status !== 'fulfilled') {
+          setStats(prev => ({
+            ...prev,
+            totalProperties: properties.length,
+            assignedProperties: properties.length
+          }));
+        }
       } else {
         console.error('[FastDashboard] Error fetching properties:', propertiesRes.reason);
       }
@@ -95,10 +118,13 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
         const inquiries = response?.inquiries || response || [];
         console.log('[FastDashboard] Inquiries fetched:', inquiries.length);
         setRecentInquiries(inquiries.slice(0, 5)); // Show only 5 recent
-        setStats(prev => ({
-          ...prev,
-          totalInquiries: inquiries.length
-        }));
+        // Don't override stats if they were already set by statsRes
+        if (statsRes.status !== 'fulfilled') {
+          setStats(prev => ({
+            ...prev,
+            totalInquiries: inquiries.length
+          }));
+        }
       } else {
         console.error('[FastDashboard] Error fetching inquiries:', inquiriesRes.reason);
       }
@@ -109,10 +135,13 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
         const bookings = response?.bookings || response || [];
         console.log('[FastDashboard] Bookings fetched:', bookings.length);
         setRecentBookings(bookings.slice(0, 5)); // Show only 5 recent
-        setStats(prev => ({
-          ...prev,
-          totalBookings: bookings.length
-        }));
+        // Don't override stats if they were already set by statsRes
+        if (statsRes.status !== 'fulfilled') {
+          setStats(prev => ({
+            ...prev,
+            totalBookings: bookings.length
+          }));
+        }
       } else {
         console.error('[FastDashboard] Error fetching bookings:', bookingsRes.reason);
       }
