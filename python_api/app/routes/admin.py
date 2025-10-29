@@ -348,9 +348,17 @@ async def assign_agent(property_id: str, payload: dict, _=Depends(require_api_ke
                             property_price=prop.get('price') or prop.get('monthly_rent', 'N/A')
                         )
                         subject = f"New Property Assignment: {prop.get('title', 'Property')} - Home & Own"
+                        
+                        await send_email(to=agent_email, subject=subject, html=html_content)
+                        print(f"[ADMIN] ✅ Successfully sent agent assignment email to: {agent_email}")
+
                     except Exception as template_error:
-                        print(f"[ADMIN] Template error, using fallback: {template_error}")
+                        # Add more detailed logging
+                        import traceback
+                        print(f"[ADMIN] !!! Email template error, using fallback: {template_error}")
+                        print(traceback.format_exc())
                         # Fallback simple email
+                        subject = f"You have been assigned to a new property: {prop.get('title')}"
                         html_content = f"""
                         <html>
                         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -378,10 +386,10 @@ async def assign_agent(property_id: str, payload: dict, _=Depends(require_api_ke
                         </body>
                         </html>
                         """
-                        subject = f"You have been assigned to a new property: {prop.get('title')}"
-                    
-                    await send_email(to=agent_email, subject=subject, html=html_content)
-                    print(f"[ADMIN] ✅ Agent assignment email sent to: {agent_email}")
+                        
+                        await send_email(to=agent_email, subject=subject, html=html_content)
+                        print(f"[ADMIN] ✅ Successfully sent FALLBACK agent assignment email to: {agent_email}")
+
                 else:
                     print(f"[ADMIN] ⚠️ Agent email not found for agent_id: {agent_id}")
             else:
