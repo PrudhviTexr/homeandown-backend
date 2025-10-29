@@ -651,12 +651,13 @@ async def admin_upload_document(
         if not user_data:
             raise HTTPException(status_code=404, detail=f"User with id {entity_id} not found.")
 
+        # Use entity_id as uploaded_by since admin uploads should be tracked as the user's own documents
         result = await upload_file_to_storage(
             file=file,
             entity_id=entity_id,
             entity_type=entity_type,
             document_category=document_category,
-            uploaded_by="admin"
+            uploaded_by=entity_id  # Changed from "admin" to entity_id (valid UUID)
         )
         
         return {
