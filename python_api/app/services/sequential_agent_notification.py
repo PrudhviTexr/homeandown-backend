@@ -79,20 +79,20 @@ class SequentialAgentNotificationService:
             await db.insert("property_assignment_queue", queue_data)
             print(f"[SEQUENTIAL_NOTIFICATION] Created assignment queue for property {property_id}")
             
-            # Start the sequential notification process
+            # Start the sequential notification process immediately
             print(f"[SEQUENTIAL_NOTIFICATION] Creating async task to process queue for property {property_id}")
-            task = asyncio.create_task(SequentialAgentNotificationService._process_queue(property_id))
             
-            # Add done callback to catch any errors
-            def handle_task_result(task):
-                try:
-                    if task.exception():
-                        print(f"[SEQUENTIAL_NOTIFICATION] ERROR in queue processing task: {task.exception()}")
-                        traceback.print_exception(type(task.exception()), task.exception(), task.exception().__traceback__)
-                except Exception as e:
-                    print(f"[SEQUENTIAL_NOTIFICATION] ERROR retrieving task exception: {e}")
-            
-            task.add_done_callback(handle_task_result)
+            # CRITICAL: Call _process_queue directly to ensure it runs immediately
+            # Using asyncio.create_task might not execute immediately in FastAPI's event loop
+            try:
+                # Try to process the queue immediately in the current context
+                await SequentialAgentNotificationService._process_queue(property_id)
+                print(f"[SEQUENTIAL_NOTIFICATION] Queue processing initiated successfully for property {property_id}")
+            except Exception as immediate_error:
+                print(f"[SEQUENTIAL_NOTIFICATION] CRITICAL ERROR starting queue: {immediate_error}")
+                traceback.print_exc()
+                # Don't fail the whole operation, but log it
+                pass
             
             return {
                 "success": True,
@@ -298,12 +298,19 @@ class SequentialAgentNotificationService:
             }, {"property_id": property_id})
             
             # Send email
+            print(f"[SEQUENTIAL_NOTIFICATION] Preparing to send email to agent {agent_id}")
             from ..services.email import send_email
             from ..services.templates import get_property_assignment_email
             
             # Get base URL for accept/reject links (use frontend URL)
             base_url = "https://homeandown.com"  # This should match your frontend URL
             
+            agent_email = agent.get("email")
+            if not agent_email:
+                print(f"[SEQUENTIAL_NOTIFICATION] ERROR: Agent {agent_id} has no email address!")
+                return {"success": False, "error": "Agent has no email address"}
+            
+            print(f"[SEQUENTIAL_NOTIFICATION] Generating email template for {agent_email}")
             email_html = await get_property_assignment_email(
                 agent_name=f"{agent.get('first_name', '')} {agent.get('last_name', '')}",
                 property=property_data,
@@ -312,11 +319,13 @@ class SequentialAgentNotificationService:
                 reject_url=f"{base_url}/agent/assignments/{notification_id}/reject"
             )
             
+            print(f"[SEQUENTIAL_NOTIFICATION] Sending email to {agent_email} for property {property_data.get('title')}")
             email_result = await send_email(
-                to=agent.get("email"),
+                to=agent_email,
                 subject=f"New Property Assignment: {property_data.get('title', 'Property')} - Round {notification_round}",
                 html=email_html
             )
+            print(f"[SEQUENTIAL_NOTIFICATION] Email send result: {email_result}")
             
             # Update notification with email status
             await db.update("agent_property_notifications", {
