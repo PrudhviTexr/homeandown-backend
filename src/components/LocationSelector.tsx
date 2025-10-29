@@ -442,7 +442,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
               disabled={!formData.zip_code || formData.zip_code.length < 6}
               className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0ca5e9] focus:border-[#0ca5e9] bg-white appearance-none pr-10 disabled:bg-gray-100 disabled:cursor-not-allowed"
             >
-              <option value="">{formData.zip_code && formData.zip_code.length === 6 ? "Auto-filled" : "Enter zipcode first"}</option>
+              <option value="">{formData.zip_code && formData.zip_code.length === 6 ? (formData.state || "Auto-filled") : "Enter zipcode first"}</option>
               {locationData.states.map((state) => (
                 <option key={state.id} value={state.name}>
                   {state.name}
@@ -452,61 +452,46 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" size={20} />
           </div>
 
-          {/* District Dropdown */}
-          <div className="relative">
+          {/* District Input */}
+          <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">District</label>
-            <select
-              value={selectedDistrict}
-              onChange={(e) => handleDistrictChange(e.target.value)}
-              disabled={!selectedState || !formData.zip_code || formData.zip_code.length < 6}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0ca5e9] focus:border-[#0ca5e9] bg-white appearance-none pr-10 disabled:bg-gray-100 disabled:cursor-not-allowed"
-            >
-              <option value="">{selectedState ? "Auto-filled" : "Select state first"}</option>
-              {locationData.districts.map((district) => (
-                <option key={district.id} value={district.name}>
-                  {district.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" size={20} />
+            <input
+              type="text"
+              name="district"
+              value={formData.district || ''}
+              onChange={handleInputChange}
+              disabled={!formData.zip_code || formData.zip_code.length < 6}
+              placeholder={selectedState ? "Auto-filled" : "Select state first"}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0ca5e9] focus:border-[#0ca5e9] bg-white disabled:bg-gray-100 disabled:cursor-not-allowed"
+            />
           </div>
 
-          {/* Mandal Dropdown */}
-          <div className="relative">
+          {/* Mandal Input */}
+          <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Mandal</label>
-            <select
-              value={selectedMandal}
-              onChange={(e) => handleMandalChange(e.target.value)}
-              disabled={!selectedDistrict || !formData.zip_code || formData.zip_code.length < 6}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0ca5e9] focus:border-[#0ca5e9] bg-white appearance-none pr-10 disabled:bg-gray-100 disabled:cursor-not-allowed"
-            >
-              <option value="">{selectedDistrict ? "Auto-filled" : "Select district first"}</option>
-              {locationData.mandals.map((mandal) => (
-                <option key={mandal.id} value={mandal.name}>
-                  {mandal.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" size={20} />
+            <input
+              type="text"
+              name="mandal"
+              value={formData.mandal || ''}
+              onChange={handleInputChange}
+              disabled={!formData.zip_code || formData.zip_code.length < 6}
+              placeholder={selectedDistrict ? "Auto-filled" : "Enter district first"}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0ca5e9] focus:border-[#0ca5e9] bg-white disabled:bg-gray-100 disabled:cursor-not-allowed"
+            />
           </div>
 
-          {/* City Dropdown */}
-          <div className="relative">
+          {/* City Input */}
+          <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">City</label>
-            <select
-              value={selectedCity}
-              onChange={(e) => handleCityChange(e.target.value)}
-              disabled={!selectedMandal || !formData.zip_code || formData.zip_code.length < 6}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0ca5e9] focus:border-[#0ca5e9] bg-white appearance-none pr-10 disabled:bg-gray-100 disabled:cursor-not-allowed"
-            >
-              <option value="">{selectedMandal ? "Auto-filled" : "Select mandal first"}</option>
-              {locationData.cities.map((city) => (
-                <option key={city.id} value={city.name}>
-                  {city.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" size={20} />
+            <input
+              type="text"
+              name="city"
+              value={formData.city || ''}
+              onChange={handleInputChange}
+              disabled={!formData.zip_code || formData.zip_code.length < 6}
+              placeholder={selectedMandal ? "Auto-filled" : "Enter mandal first"}
+              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0ca5e9] focus:border-[#0ca5e9] bg-white disabled:bg-gray-100 disabled:cursor-not-allowed"
+            />
           </div>
         </div>
       </div>
