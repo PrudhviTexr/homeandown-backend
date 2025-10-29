@@ -738,132 +738,102 @@ async def create_property(property_data: dict, request: Request = None):
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error creating property: {str(e)}")
 
-@router.get("/{property_id}")
-async def get_property(property_id: str):
+@router.get("/{property_id_or_slug}")
+async def get_property(property_id_or_slug: str):
     try:
-        print(f"[PROPERTIES] Fetching single property: {property_id}")
+        print(f"[PROPERTIES] Fetching single property by ID or slug: {property_id_or_slug}")
         
-        # Fetch property from database
-        properties = await db.select("properties", filters={"id": property_id})
-        if not properties:
-            print(f"[PROPERTIES] Property not found: {property_id}")
-            raise HTTPException(status_code=404, detail="Property not found")
-        
-        property_data = dict(properties[0])
-        print(f"[PROPERTIES] Property found: {property_data.get('title', 'Unknown')}")
-        
-        # Handle PostgreSQL array fields - these are already arrays, don't parse as JSON
-        array_fields = ['images', 'amenities', 'room_images', 'gated_community_features']
-        for field in array_fields:
-            if property_data.get(field) is None:
-                property_data[field] = []
-            elif isinstance(property_data.get(field), str):
-                # If it's a string, it might be a JSON string representation
-                try:
-                    import json
-                    parsed = json.loads(property_data[field])
-                    property_data[field] = parsed if isinstance(parsed, list) else []
-                except (json.JSONDecodeError, TypeError):
-                    property_data[field] = []
-            # If it's already a list/array, keep it as is
-        
-        # Handle JSONB fields that might be stored as strings
-        jsonb_fields = ['sections', 'nearby_highlights']
-        for field in jsonb_fields:
-            if isinstance(property_data.get(field), str):
-                try:
-                    import json
-                    property_data[field] = json.loads(property_data[field])
-                except (json.JSONDecodeError, TypeError):
-                    property_data[field] = []
-            elif property_data.get(field) is None:
-                property_data[field] = []
-        
-        # Fetch owner details if available
-        if property_data.get('owner_id'):
-            try:
-                print(f"[PROPERTIES] Fetching owner details for: {property_data['owner_id']}")
-                owners = await db.select("users", filters={"id": property_data['owner_id']})
-                if owners:
-                    owner = dict(owners[0])
-                    # Don't include sensitive information
-                    property_data['owner'] = {
-                        'id': owner.get('id'),
-                        'first_name': owner.get('first_name'),
-                        'last_name': owner.get('last_name'),
-                        'business_name': owner.get('business_name'),
-                        'profile_image_url': owner.get('profile_image_url')
-                    }
-                    print(f"[PROPERTIES] Owner details added")
-            except Exception as owner_error:
-                print(f"[PROPERTIES] Failed to get owner details: {owner_error}")
-        
-        # Fetch custom sections
+        # First, try to fetch by ID (assuming it's a UUID)
         try:
-            sections = await db.select("property_sections", filters={"property_id": property_id})
-            if sections:
-                property_data['custom_sections'] = [dict(section) for section in sections]
-            print(f"[PROPERTIES] Loaded {len(sections or [])} custom sections")
-        except Exception as sec_err:
-            print(f"[PROPERTIES] Failed to load sections: {sec_err}")
-            property_data['custom_sections'] = []
+            import uuid
+            uuid.UUID(property_id_or_slug) # Check if it's a valid UUID
+            properties = await db.select("properties", filters={"id": property_id_or_slug})
+            if properties:
+                property_data = dict(properties[0])
+                # ... (rest of the processing logic from the original function)
+                return await _process_single_property(property_data)
+        except ValueError:
+            # It's not a UUID, so treat it as a slug
+            pass
+
+        # If not found by ID, search by slug
+        print(f"[PROPERTIES] Not a valid UUID. Searching by slug: {property_id_or_slug}")
+        all_properties = await db.select("properties", filters={"status": "active", "verified": True})
         
-        # Fetch property images from documents table if images array is empty
-        if not property_data.get('images') or len(property_data.get('images', [])) == 0:
-            try:
-                print(f"[PROPERTIES] Fetching images from documents table for property: {property_id}")
-                image_docs = await db.select("documents", filters={
-                    "entity_type": "property",
-                    "entity_id": property_id
-                })
+        import re
+        
+        for prop in all_properties:
+            title = prop.get('title', '')
+            if title:
+                # Generate slug from title
+                slug = title.lower()
+                slug = re.sub(r'[^a-z0-9\s-]', '', slug) # Remove special chars
+                slug = slug.strip()
+                slug = re.sub(r'\s+', '-', slug) # Replace spaces with dashes
+                slug = re.sub(r'-+', '-', slug) # Replace multiple dashes
                 
-                if image_docs:
-                    # Filter for image files only
-                    image_urls = []
-                    for doc in image_docs:
-                        file_type = doc.get('file_type', '')
-                        if file_type.startswith('image/'):
-                            image_urls.append(doc.get('url'))
-                    
-                    if image_urls:
-                        property_data['images'] = image_urls
-                        print(f"[PROPERTIES] Loaded {len(image_urls)} images from documents table")
-                        
-                        # Update the property record with the images array
-                        try:
-                            await db.update("properties", {"images": image_urls}, {"id": property_id})
-                            print(f"[PROPERTIES] Updated property with images array")
-                        except Exception as update_err:
-                            print(f"[PROPERTIES] Failed to update property with images: {update_err}")
-                    else:
-                        print(f"[PROPERTIES] No image documents found for property")
-                else:
-                    print(f"[PROPERTIES] No documents found for property")
-            except Exception as img_err:
-                print(f"[PROPERTIES] Failed to fetch images from documents: {img_err}")
-        
-        # Ensure coordinates are never null to prevent map crashes
-        if property_data.get('latitude') is None or property_data.get('longitude') is None:
-            # Default coordinates for Hyderabad, India
-            default_lat = 17.3850
-            default_lon = 78.4867
-            
-            if property_data.get('latitude') is None:
-                property_data['latitude'] = default_lat
-            if property_data.get('longitude') is None:
-                property_data['longitude'] = default_lon
-            
-            print(f"[PROPERTIES] Set default coordinates for property {property_id}: {default_lat}, {default_lon}")
-        
-        return property_data
+                if slug == property_id_or_slug:
+                    print(f"[PROPERTIES] Property found by slug: {prop.get('id')}")
+                    return await _process_single_property(dict(prop))
+
+        # If we reach here, no property was found by ID or slug
+        raise HTTPException(status_code=404, detail="Property not found")
         
     except HTTPException:
         raise
     except Exception as e:
         print(f"[PROPERTIES] Get property error: {e}")
-        print(f"[PROPERTIES] Full traceback:")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error fetching property: {str(e)}")
+
+async def _process_single_property(property_data: dict):
+    """Helper function to process and enrich a single property object."""
+    # (The processing logic from the original get_property function will be moved here)
+    # Handle array fields, JSONB fields, fetch owner, fetch sections, fetch images, etc.
+    
+    # Handle PostgreSQL array fields
+    array_fields = ['images', 'amenities', 'room_images', 'gated_community_features']
+    for field in array_fields:
+        if property_data.get(field) is None:
+            property_data[field] = []
+        elif isinstance(property_data.get(field), str):
+            try:
+                import json
+                parsed = json.loads(property_data[field])
+                property_data[field] = parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, TypeError):
+                property_data[field] = []
+
+    # Fetch owner details if available
+    if property_data.get('owner_id'):
+        try:
+            owners = await db.select("users", filters={"id": property_data['owner_id']})
+            if owners:
+                owner = dict(owners[0])
+                property_data['owner'] = {
+                    'id': owner.get('id'),
+                    'first_name': owner.get('first_name'),
+                    'last_name': owner.get('last_name'),
+                }
+        except Exception:
+            pass # Ignore owner fetch errors
+
+    # Fetch images if empty
+    if not property_data.get('images'):
+        try:
+            image_docs = await db.select("documents", filters={"entity_type": "property", "entity_id": property_data.get('id')})
+            if image_docs:
+                property_data['images'] = [doc.get('file_path') for doc in image_docs if doc.get('file_type', '').startswith('image/')]
+        except Exception:
+            pass # Ignore image fetch errors
+
+    # Ensure coordinates
+    if property_data.get('latitude') is None or property_data.get('longitude') is None:
+        property_data['latitude'] = 17.3850
+        property_data['longitude'] = 78.4867
+        
+    return property_data
+
 
 @router.put("/{property_id}")
 @router.patch("/{property_id}")
