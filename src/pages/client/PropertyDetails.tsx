@@ -30,6 +30,7 @@ import AuthModal from '@/components/AuthModal';
 import TourBookingModal from '@/components/TourBookingModal';
 import PropertyActionButtons from '@/components/PropertyActionButtons';
 import ImageGallery from '@/components/ImageGallery';
+import UserInfo from '@/components/UserInfo'; // Import the new component
 import { useAuth } from '@/contexts/AuthContext';
 import ApiService from '@/services/api';
 import { formatIndianCurrency } from '@/utils/currency';
@@ -913,6 +914,14 @@ const PropertyDetails: React.FC = () => {
                   }}
                   inquiryLoading={inquiryLoading}
                 />
+
+                {/* Owner Information */}
+                {property.owner_id && (
+                  <div className="mt-6">
+                    <h3 className="text-xl font-semibold text-[#162e5a] mb-4">Owner Information</h3>
+                    <UserInfo userId={property.owner_id} />
+                  </div>
+                )}
               </div>
 
               {/* Property Highlights */}

@@ -285,3 +285,29 @@ async def update_user(user_id: str, payload: dict, request: Request):
     except Exception as e:
         print(f"[USERS] Update user error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
+
+@router.get("/users/{user_id}")
+async def get_user_details(user_id: str):
+    """Fetch public details for a single user by their ID."""
+    try:
+        users = await db.select("users", filters={"id": user_id})
+        if not users:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user = users[0]
+        
+        # Return a subset of user data that is safe to be public
+        return {
+            "id": user.get("id"),
+            "first_name": user.get("first_name"),
+            "last_name": user.get("last_name"),
+            "email": user.get("email"),
+            "phone_number": user.get("phone_number"),
+            "user_type": user.get("user_type"),
+            "created_at": user.get("created_at"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[USERS] Error fetching user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching user details.")
