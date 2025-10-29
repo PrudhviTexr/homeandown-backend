@@ -80,7 +80,9 @@ async def upload_file_to_storage(
         "entity_id": entity_id,
         "uploaded_by": uploaded_by or entity_id,  # Default to entity_id if not specified
         "document_category": document_category or None,
-        "status": "pending"
+        "status": "pending",
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
     try:
