@@ -342,39 +342,16 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             value={formData.zip_code || ''}
             onChange={(e) => {
               const zipcode = e.target.value;
-              
-              // Only allow numeric input
-              const numericZipcode = zipcode.replace(/\D/g, '').slice(0, 6); // Limit to 6 digits
-              
-              // Save cursor position before state update
-              const input = e.target as HTMLInputElement;
-              const cursorPosition = input.selectionStart || 0;
-              const newCursorPosition = Math.min(cursorPosition, numericZipcode.length);
-              
-              // Update form data
-              if (setFormData) {
-                setFormData((prev: any) => ({
-                  ...prev,
-                  zip_code: numericZipcode
-                }));
-              }
-              
-              // Restore cursor position after state update
-              setTimeout(() => {
-                if (zipcodeInputRef.current) {
-                  zipcodeInputRef.current.setSelectionRange(newCursorPosition, newCursorPosition);
-                }
-              }, 0);
-              
-              // Auto-populate when exactly 6 digits are entered
-              const previousLength = previousZipcodeLengthRef.current;
-              previousZipcodeLengthRef.current = numericZipcode.length;
-              
-              if (numericZipcode.length === 6 && /^\d{6}$/.test(numericZipcode) && previousLength !== 6) {
-                // Only trigger if we just reached 6 digits (not if already 6)
+              const numericZipcode = zipcode.replace(/\D/g, '').slice(0, 6);
+
+              setFormData((prev: any) => ({
+                ...prev,
+                zip_code: numericZipcode
+              }));
+
+              if (numericZipcode.length === 6) {
                 handleZipcodeAutoPopulation(numericZipcode);
               } else if (numericZipcode.length < 6) {
-                // Clear dropdowns if zipcode is incomplete
                 setSelectedState('');
                 setSelectedDistrict('');
                 setSelectedMandal('');
