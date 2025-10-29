@@ -385,7 +385,15 @@ const AdminDashboard: React.FC = () => {
               {user.user_type}
             </span>
           )},
-          { key: 'status', header: 'Status', render: (user: User) => getStatusBadge(user.status) },
+          { key: 'status', header: 'Status', render: (user: User) => {
+              // If user is verified but status is pending, show as active
+              // This handles cases where verification_status is updated but status wasn't
+              const effectiveStatus = (user.verification_status === 'verified' && (user.status === 'pending' || !user.status)) 
+                ? 'active' 
+                : (user.status || 'pending');
+              return getStatusBadge(effectiveStatus);
+            }
+          },
           { key: 'verification_status', header: 'Verification', render: (user: User) => getStatusBadge(user.verification_status) }
         ];
         return (
@@ -420,7 +428,15 @@ const AdminDashboard: React.FC = () => {
           { key: 'documents', header: 'Documents', render: (user: User) => (
             <span className="text-sm text-gray-700">{(user.documents || []).length || 0}</span>
           )},
-          { key: 'status', header: 'Status', render: (user: User) => getStatusBadge(user.status) },
+          { key: 'status', header: 'Status', render: (user: User) => {
+              // If user is verified but status is pending, show as active
+              // This handles cases where verification_status is updated but status wasn't
+              const effectiveStatus = (user.verification_status === 'verified' && (user.status === 'pending' || !user.status)) 
+                ? 'active' 
+                : (user.status || 'pending');
+              return getStatusBadge(effectiveStatus);
+            }
+          },
           { key: 'verification_status', header: 'Verification', render: (user: User) => getStatusBadge(user.verification_status) }
         ];
         return (
@@ -453,7 +469,15 @@ const AdminDashboard: React.FC = () => {
           { key: 'documents', header: 'Documents', render: (user: User) => (
             <span className="text-sm text-gray-700">{(user.documents || []).length || 0}</span>
           )},
-          { key: 'status', header: 'Status', render: (user: User) => getStatusBadge(user.status) },
+          { key: 'status', header: 'Status', render: (user: User) => {
+              // If user is verified but status is pending, show as active
+              // This handles cases where verification_status is updated but status wasn't
+              const effectiveStatus = (user.verification_status === 'verified' && (user.status === 'pending' || !user.status)) 
+                ? 'active' 
+                : (user.status || 'pending');
+              return getStatusBadge(effectiveStatus);
+            }
+          },
           { key: 'verification_status', header: 'Verification', render: (user: User) => getStatusBadge(user.verification_status) }
         ];
         return (
@@ -486,7 +510,15 @@ const AdminDashboard: React.FC = () => {
           { key: 'documents', header: 'Documents', render: (user: User) => (
             <span className="text-sm text-gray-700">{(user.documents || []).length || 0}</span>
           )},
-          { key: 'status', header: 'Status', render: (user: User) => getStatusBadge(user.status) },
+          { key: 'status', header: 'Status', render: (user: User) => {
+              // If user is verified but status is pending, show as active
+              // This handles cases where verification_status is updated but status wasn't
+              const effectiveStatus = (user.verification_status === 'verified' && (user.status === 'pending' || !user.status)) 
+                ? 'active' 
+                : (user.status || 'pending');
+              return getStatusBadge(effectiveStatus);
+            }
+          },
           { key: 'verification_status', header: 'Verification', render: (user: User) => getStatusBadge(user.verification_status) }
         ];
         return (
