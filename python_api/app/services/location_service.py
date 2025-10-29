@@ -456,6 +456,13 @@ class LocationService:
     @staticmethod
     async def get_pincode_location_data(pincode: str) -> Dict[str, Any]:
         """Get complete location data for property form auto-population"""
+        
+        # First, try the hardcoded fallback for common pincodes
+        fallback_data = LocationService._get_fallback_pincode_data(pincode)
+        if fallback_data:
+            print(f"[LOCATION] Using fallback data for pincode {pincode}")
+            return fallback_data
+            
         try:
             print(f"[LOCATION] Fetching complete location data for pincode: {pincode}")
             
