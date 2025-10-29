@@ -88,7 +88,8 @@ async def upload_file(
             "entity_type": normalized_entity_type,  # Use normalized type for consistent queries
             "entity_id": entity_id if entity_id else str(uuid.uuid4()),
             "uploaded_by": entity_id if entity_id else None,
-            "document_category": document_category if document_category else None
+            "document_category": document_category if document_category else None,
+            "status": "pending"  # Set initial status to pending for admin review
         }
 
         try:

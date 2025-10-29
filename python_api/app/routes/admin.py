@@ -807,28 +807,71 @@ async def assign_agent_to_inquiry(inquiry_id: str, request: Request, _=Depends(r
 async def approve_document(document_id: str, _=Depends(require_api_key)):
     """Approve a document"""
     try:
+        print(f"[ADMIN] Approving document {document_id}")
         update_data = {
             "status": "approved",
             "updated_at": dt.datetime.utcnow().isoformat()
         }
-        return await db.update("documents", update_data, {"id": document_id})
+        result = await db.update("documents", update_data, {"id": document_id})
+        print(f"[ADMIN] Document approval result: {result}")
+        
+        # Verify the update worked
+        if result and len(result) > 0:
+            updated_doc = result[0]
+            print(f"[ADMIN] Document {document_id} approved successfully, status: {updated_doc.get('status')}")
+            return {"success": True, "document": updated_doc}
+        else:
+            print(f"[ADMIN] Warning: Document update returned no results")
+            # Try to fetch the document to see if it exists
+            docs = await db.admin_select("documents", filters={"id": document_id})
+            if not docs:
+                raise HTTPException(status_code=404, detail="Document not found")
+            raise HTTPException(status_code=500, detail="Failed to update document")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        print(f"[ADMIN] Error approving document: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to approve document: {str(e)}")
 
 @router.post("/documents/{document_id}/reject")
 async def reject_document(document_id: str, request: Request, _=Depends(require_api_key)):
     """Reject a document"""
     try:
         payload = await request.json() if request else {}
-        reason = payload.get("reason")
+        reason = payload.get("reason", "")
+        print(f"[ADMIN] Rejecting document {document_id} with reason: {reason}")
+        
         update_data = {
             "status": "rejected",
-            "rejection_reason": reason,
             "updated_at": dt.datetime.utcnow().isoformat()
         }
-        return await db.update("documents", update_data, {"id": document_id})
+        if reason:
+            update_data["rejection_reason"] = reason
+        
+        result = await db.update("documents", update_data, {"id": document_id})
+        print(f"[ADMIN] Document rejection result: {result}")
+        
+        # Verify the update worked
+        if result and len(result) > 0:
+            updated_doc = result[0]
+            print(f"[ADMIN] Document {document_id} rejected successfully, status: {updated_doc.get('status')}")
+            return {"success": True, "document": updated_doc}
+        else:
+            print(f"[ADMIN] Warning: Document update returned no results")
+            # Try to fetch the document to see if it exists
+            docs = await db.admin_select("documents", filters={"id": document_id})
+            if not docs:
+                raise HTTPException(status_code=404, detail="Document not found")
+            raise HTTPException(status_code=500, detail="Failed to update document")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        print(f"[ADMIN] Error rejecting document: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to reject document: {str(e)}")
 
 @router.get("/notifications")
 async def get_notifications(_=Depends(require_api_key), user_id: str = None):
