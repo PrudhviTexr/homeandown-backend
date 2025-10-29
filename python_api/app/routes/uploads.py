@@ -156,12 +156,10 @@ async def upload_file(
                 uploader = final_entity_id
                 print(f"[UPLOAD] Using entity_id as uploader for user document: {uploader}")
             else:
-                # Last resort: raise error with detailed message
-                print(f"[UPLOAD] CRITICAL: No valid uploaded_by found! entity_type={entity_type}, entity_id={final_entity_id}")
-                raise HTTPException(
-                    status_code=401, 
-                    detail=f"Authentication required for {entity_type} uploads. Please ensure you are logged in."
-                )
+                # For property uploads without auth, set to None (will be handled by nullable column)
+                # The property owner can be traced via entity_id
+                print(f"[UPLOAD] Warning: No uploaded_by available for {entity_type} upload. Setting to None.")
+                uploader = None
 
         result_doc = await upload_file_to_storage(
             file=file,
