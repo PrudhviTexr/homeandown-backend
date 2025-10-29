@@ -104,12 +104,18 @@ async def get_properties(
         # Additional client-side filtering: ensure only verified and active properties are shown
         # This is a safety check in case database filters didn't work
         # Handle verified as boolean True, string 'true', or integer 1
+        # IMPORTANT: This filtering does NOT delete properties from database - it only filters the response
+        # Properties with verified=false or status!='active' still exist in the database, just not shown in public listings
+        initial_count = len(properties)
         properties = [p for p in properties if 
                      p.get('status') == 'active' and 
                      (p.get('verified') is True or 
                       (isinstance(p.get('verified'), str) and p.get('verified').lower() == 'true') or
                       p.get('verified') == 1)]
-        print(f"[PROPERTIES] After client-side verification filter: {len(properties)} properties")
+        filtered_out = initial_count - len(properties)
+        if filtered_out > 0:
+            print(f"[PROPERTIES] ⚠️ Filtered out {filtered_out} properties (not verified or not active) - THESE ARE NOT DELETED, just hidden from public view")
+        print(f"[PROPERTIES] After client-side verification filter: {len(properties)} properties shown ({filtered_out} filtered out)")
 
         print(f"[PROPERTIES] Found {len(properties)} properties in database")
 
@@ -1091,16 +1097,32 @@ async def toggle_featured_property(property_id: str, data: dict, _=Depends(requi
         raise HTTPException(status_code=500, detail=f"Error toggling featured status: {str(e)}")
 
 @router.delete("/{property_id}")
-async def delete_property(property_id: str):
+async def delete_property(property_id: str, _=Depends(require_api_key)):
+    """
+    Delete a property - REQUIRES API KEY AUTHENTICATION
+    This endpoint should only be called by admin users or authorized services.
+    """
     try:
-        print(f"[PROPERTIES] Deleting property: {property_id}")
+        print(f"[PROPERTIES] ⚠️ DELETE REQUEST for property: {property_id}")
+        print(f"[PROPERTIES] ⚠️ This is a destructive operation - logging for audit trail")
         
         # Check if property exists and get its title
         existing_properties = await db.select("properties", filters={"id": property_id})
         if not existing_properties:
             raise HTTPException(status_code=404, detail="Property not found")
         
-        property_title = existing_properties[0].get('title', 'Property')
+        property_data = existing_properties[0]
+        property_title = property_data.get('title', 'Property')
+        property_custom_id = property_data.get('custom_id', 'N/A')
+        
+        # LOG DELETION DETAILS FOR AUDIT
+        print(f"[PROPERTIES] ⚠️ DELETING PROPERTY:")
+        print(f"  - ID: {property_id}")
+        print(f"  - Custom ID: {property_custom_id}")
+        print(f"  - Title: {property_title}")
+        print(f"  - Owner ID: {property_data.get('owner_id')}")
+        print(f"  - Status: {property_data.get('status')}")
+        print(f"  - Created: {property_data.get('created_at')}")
         
         # Delete property sections first
         try:
@@ -1112,7 +1134,7 @@ async def delete_property(property_id: str):
         # Delete property
         await db.delete("properties", {"id": property_id})
         
-        print(f"[PROPERTIES] Property deleted successfully: {property_id}")
+        print(f"[PROPERTIES] ⚠️ PROPERTY DELETED SUCCESSFULLY: {property_id} ({property_title})")
         return {"success": True, "message": f"Property '{property_title}' deleted successfully"}
         
     except HTTPException:
