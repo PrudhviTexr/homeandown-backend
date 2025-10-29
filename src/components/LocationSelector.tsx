@@ -55,7 +55,8 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             district: suggestions.district || prev.district,
             mandal: suggestions.mandal || prev.mandal,
             city: suggestions.city || prev.city,
-            address: suggestions.address || prev.address,
+            // Do NOT auto-populate address, let the user enter it.
+            // address: suggestions.address || prev.address, 
             latitude: latitude ? latitude.toString() : prev.latitude,
             longitude: longitude ? longitude.toString() : prev.longitude,
             zip_code: zipcode // Ensure zipcode is preserved
@@ -341,7 +342,11 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             name="zip_code"
             value={formData.zip_code || ''}
             onChange={(e) => {
-              const zipcode = e.target.value;
+              const input = e.target;
+              const cursorPosition = input.selectionStart; // Save cursor position
+              const originalLength = input.value.length;
+
+              const zipcode = input.value;
               const numericZipcode = zipcode.replace(/\D/g, '').slice(0, 6);
 
               setFormData((prev: any) => ({
@@ -349,14 +354,25 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
                 zip_code: numericZipcode
               }));
 
-              if (numericZipcode.length === 6) {
+              // Restore cursor position after state update
+              setTimeout(() => {
+                const newLength = numericZipcode.length;
+                const newCursorPosition = cursorPosition! + (newLength - originalLength);
+                if (zipcodeInputRef.current) {
+                  zipcodeInputRef.current.setSelectionRange(newCursorPosition, newCursorPosition);
+                }
+              }, 0);
+
+              if (numericZipcode.length === 6 && previousZipcodeLengthRef.current !== 6) {
                 handleZipcodeAutoPopulation(numericZipcode);
               } else if (numericZipcode.length < 6) {
-                setSelectedState('');
-                setSelectedDistrict('');
-                setSelectedMandal('');
-                setSelectedCity('');
+                // Clear dependent fields if zipcode is incomplete
+                setFormData((prev: any) => ({
+                  ...prev,
+                  state: '', district: '', mandal: '', city: '', address: ''
+                }));
               }
+              previousZipcodeLengthRef.current = numericZipcode.length;
             }}
             onBlur={async (e) => {
               const zipcode = e.target.value;
