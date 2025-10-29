@@ -11,6 +11,7 @@ class DocumentUpload(BaseModel):
     file_size: int = 0
 
 class SignupRequest(BaseModel):
+    model_config = ConfigDict(extra='allow')  # Allow extra fields for location data and agent-specific fields
     email: EmailStr
     password: str
     first_name: str | None = None
@@ -19,6 +20,17 @@ class SignupRequest(BaseModel):
     phone_number: str | None = None
     city: str | None = None
     state: str | None = None
+    # Location fields (important for agents - zipcode enables property assignment matching)
+    zip_code: str | None = None
+    district: str | None = None
+    mandal: str | None = None
+    address: str | None = None
+    latitude: str | float | None = None
+    longitude: str | float | None = None
+    # Agent-specific fields
+    experience_years: str | None = None
+    specialization: str | None = None
+    # Legacy support
     documents: List[DocumentUpload] | None = None
 
 class LoginRequest(BaseModel):

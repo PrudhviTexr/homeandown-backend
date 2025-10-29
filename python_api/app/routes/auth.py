@@ -79,6 +79,33 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
             "updated_at": now_utc
         }
         
+        # Add location fields if provided (especially important for agents to enable zipcode-based assignment)
+        if hasattr(payload, 'zip_code') and payload.zip_code:
+            user_data["zip_code"] = payload.zip_code
+        if hasattr(payload, 'district') and payload.district:
+            user_data["district"] = payload.district
+        if hasattr(payload, 'mandal') and payload.mandal:
+            user_data["mandal"] = payload.mandal
+        if hasattr(payload, 'address') and payload.address:
+            user_data["address"] = payload.address
+        if hasattr(payload, 'latitude') and payload.latitude:
+            try:
+                user_data["latitude"] = float(payload.latitude) if payload.latitude else None
+            except (ValueError, TypeError):
+                pass
+        if hasattr(payload, 'longitude') and payload.longitude:
+            try:
+                user_data["longitude"] = float(payload.longitude) if payload.longitude else None
+            except (ValueError, TypeError):
+                pass
+        
+        # Add agent-specific fields
+        if payload.role == "agent":
+            if hasattr(payload, 'experience_years') and payload.experience_years:
+                user_data["experience_years"] = payload.experience_years
+            if hasattr(payload, 'specialization') and payload.specialization:
+                user_data["specialization"] = payload.specialization
+        
         # Generate custom ID and license number based on user type
         custom_id = None
         if payload.role in ["buyer", "agent", "seller"]:
