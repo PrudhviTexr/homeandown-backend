@@ -70,6 +70,18 @@ async def upload_file_to_storage(
         raise HTTPException(status_code=500, detail="Failed to obtain public URL")
 
     # Store document record
+    # For uploaded_by, we need a user ID. If not provided and entity_type is 'property',
+    # we should skip setting uploaded_by or use a system default
+    final_uploaded_by = uploaded_by
+    if not final_uploaded_by:
+        # If uploading for a user, use the user's ID
+        if normalized_entity_type == 'user':
+            final_uploaded_by = entity_id
+        # For property uploads, uploaded_by should come from the request context
+        # If not available, set to None (will need to be handled by DB schema)
+        else:
+            final_uploaded_by = None
+    
     doc_data = {
         "id": str(uuid.uuid4()), # Generate a UUID for the new document record
         "name": file.filename or filename,
@@ -78,7 +90,7 @@ async def upload_file_to_storage(
         "file_size": len(content),
         "entity_type": normalized_entity_type,
         "entity_id": entity_id,
-        "uploaded_by": uploaded_by or entity_id,  # Default to entity_id if not specified
+        "uploaded_by": final_uploaded_by,
         "document_category": document_category or None,
         "status": "pending",
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -117,7 +129,24 @@ async def upload_file(
             raise HTTPException(status_code=400, detail="entity_id is required for anonymous uploads.")
 
         # uploaded_by should be the authenticated user if available
-        uploader = current_user_id or final_entity_id
+        # For property uploads, if no auth user, try to get owner_id from property
+        uploader = current_user_id
+        if not uploader and entity_type in ['property', 'property_images']:
+            # Try to fetch the property's owner_id to use as uploaded_by
+            try:
+                property_data = await db.select("properties", filters={"id": final_entity_id})
+                if property_data and len(property_data) > 0:
+                    uploader = property_data[0].get('owner_id') or property_data[0].get('added_by')
+            except Exception as e:
+                print(f"[UPLOAD] Could not fetch property owner: {e}")
+        
+        # Fallback to entity_id only if it's a user upload
+        if not uploader:
+            if entity_type in ['user', 'user_documents']:
+                uploader = final_entity_id
+            else:
+                # Last resort: use a system/admin ID or raise error
+                raise HTTPException(status_code=401, detail="Authentication required for file uploads")
 
         result_doc = await upload_file_to_storage(
             file=file,
