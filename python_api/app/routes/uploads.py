@@ -24,6 +24,7 @@ async def ensure_bucket_exists(bucket: str, public: bool = True):
 async def upload_file(
     entity_type: str = Form(...),
     entity_id: str = Form(default=""),
+    document_category: str = Form(default=""),
     file: UploadFile = File(...),
     _=Depends(require_api_key),
 ):
@@ -32,7 +33,7 @@ async def upload_file(
     Returns the document id and the public URL.
     """
     try:
-        print(f"[UPLOAD] Uploading file: {file.filename} for {entity_type}:{entity_id}")
+        print(f"[UPLOAD] Uploading file: {file.filename} for {entity_type}:{entity_id}, category: {document_category}")
 
         # allow any image type broadly and pdfs
         if not (file.content_type.startswith("image/") or file.content_type == "application/pdf"):
@@ -71,32 +72,31 @@ async def upload_file(
             print(f"[UPLOAD] Failed to build public URL: {e}")
             raise HTTPException(status_code=500, detail="Failed to obtain public URL")
 
-        # Store document record in Supabase
+        # Store document record in Supabase - only use fields that exist in schema
         doc_data = {
-            "id": str(uuid.uuid4()),
-            "entity_type": entity_type,
-            "entity_id": entity_id if entity_id else str(uuid.uuid4()),
             "name": file.filename or filename,
-            "file_path": public_url,  # Use file_path for Supabase Storage URL
-            "url": public_url,  # Also set url field
-            "storage_path": object_path,  # Store the path in bucket
+            "file_path": public_url,  # Store the public URL in file_path
             "file_type": file.content_type,
             "file_size": len(content),
-            "status": "pending",  # Default status
-            "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-            "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()
+            "entity_type": entity_type,
+            "entity_id": entity_id if entity_id else str(uuid.uuid4()),
+            "uploaded_by": entity_id if entity_id else None,
+            "document_category": document_category if document_category else None
         }
 
         try:
-            await db.insert("documents", doc_data)
-            print(f"[UPLOAD] Document uploaded successfully: {doc_data['url']}, entity: {entity_type}:{entity_id}")
-            return {"success": True, "id": doc_data["id"], "url": doc_data["url"]}
+            result = await db.insert("documents", doc_data)
+            print(f"[UPLOAD] Document uploaded successfully: {public_url}, entity: {entity_type}:{entity_id}")
+            
+            # Get the inserted document ID
+            doc_id = result[0].get('id') if result else None
+            return {"success": True, "id": doc_id, "url": public_url}
         except Exception as insert_error:
             print(f"[UPLOAD] Failed to insert document record: {insert_error}")
             import traceback
             print(traceback.format_exc())
             # Still return success with URL even if DB insert fails
-            return {"success": True, "id": doc_data["id"], "url": doc_data["url"]}
+            return {"success": True, "id": None, "url": public_url}
 
     except HTTPException:
         raise
@@ -115,9 +115,10 @@ async def get_file(doc_id: str):
             raise HTTPException(status_code=404, detail="File not found")
 
         doc = docs[0]
-        public_url = doc.get('url')
+        # Use file_path field instead of url
+        public_url = doc.get('file_path')
         if not public_url:
-            print(f"[UPLOAD] Document missing public url: {doc}")
+            print(f"[UPLOAD] Document missing file_path: {doc}")
             raise HTTPException(status_code=404, detail="File not available")
 
         # Redirect client to the public URL (Supabase Storage public object)
@@ -146,7 +147,8 @@ async def list_files(entity_type: str | None = None, entity_id: str | None = Non
                 'entity_type': f.get('entity_type'),
                 'entity_id': f.get('entity_id'),
                 'name': f.get('name'),
-                'url': f.get('url'),
+                'file_path': f.get('file_path'),  # Use file_path instead of url
+                'document_category': f.get('document_category'),
                 'file_type': f.get('file_type'),
                 'file_size': f.get('file_size'),
                 'created_at': f.get('created_at')
