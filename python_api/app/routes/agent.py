@@ -374,17 +374,13 @@ async def get_agent_properties(
         raise HTTPException(status_code=500, detail=f"Failed to fetch properties: {str(e)}")
 
 @router.get("/property-assignments/{notification_id}")
-async def get_property_assignment_details(notification_id: str, request: Request):
-    """Get details of a specific property assignment notification"""
+async def get_property_assignment_details(
+    notification_id: str, 
+    request: Request,
+    token: Optional[str] = Query(None)
+):
+    """Get details of a specific property assignment notification (token-based, no login required)"""
     try:
-        claims = get_current_user_claims(request)
-        if not claims:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
-        user_id = claims.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        
         # Get notification details
         notifications = await db.select("agent_property_notifications", filters={"id": notification_id})
         if not notifications:
@@ -392,9 +388,25 @@ async def get_property_assignment_details(notification_id: str, request: Request
         
         notification = notifications[0]
         
-        # Verify this notification is for the current agent
-        if notification.get("agent_id") != user_id:
-            raise HTTPException(status_code=403, detail="You don't have permission to view this assignment")
+        # Verify secure token (allows access without login)
+        if token:
+            # Token-based authentication (from email link)
+            stored_token = notification.get("secure_token")
+            if not stored_token or stored_token != token:
+                raise HTTPException(status_code=403, detail="Invalid or expired token")
+        else:
+            # Fall back to regular authentication (if agent is logged in)
+            claims = get_current_user_claims(request)
+            if not claims:
+                raise HTTPException(status_code=401, detail="Authentication required. Please use the link from your email.")
+            
+            user_id = claims.get("sub")
+            if not user_id:
+                raise HTTPException(status_code=401, detail="Invalid authentication")
+            
+            # Verify this notification is for the current agent
+            if notification.get("agent_id") != user_id:
+                raise HTTPException(status_code=403, detail="You don't have permission to view this assignment")
         
         # Get property details
         property_id = notification.get("property_id")
@@ -413,22 +425,42 @@ async def get_property_assignment_details(notification_id: str, request: Request
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/property-assignments/{notification_id}/accept")
-async def accept_property_assignment(notification_id: str, request: Request):
-    """Accept a property assignment"""
+async def accept_property_assignment(
+    notification_id: str,
+    request: Request,
+    token: Optional[str] = Query(None)
+):
+    """Accept a property assignment (token-based, no login required)"""
     try:
-        claims = get_current_user_claims(request)
-        if not claims:
-            raise HTTPException(status_code=401, detail="Not authenticated")
+        # Get notification to extract agent_id
+        notifications = await db.select("agent_property_notifications", filters={"id": notification_id})
+        if not notifications:
+            raise HTTPException(status_code=404, detail="Assignment notification not found")
         
-        user_id = claims.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        notification = notifications[0]
+        agent_id = notification.get("agent_id")
         
-        print(f"[AGENT] Agent {user_id} accepting assignment {notification_id}")
+        # Verify secure token (allows access without login)
+        if token:
+            # Token-based authentication (from email link)
+            stored_token = notification.get("secure_token")
+            if not stored_token or stored_token != token:
+                raise HTTPException(status_code=403, detail="Invalid or expired token. Please use the link from your email.")
+        else:
+            # Fall back to regular authentication (if agent is logged in)
+            claims = get_current_user_claims(request)
+            if not claims:
+                raise HTTPException(status_code=401, detail="Authentication required. Please use the link from your email.")
+            
+            user_id = claims.get("sub")
+            if not user_id or user_id != agent_id:
+                raise HTTPException(status_code=403, detail="You don't have permission to accept this assignment")
+        
+        print(f"[AGENT] Agent {agent_id} accepting assignment {notification_id}")
         
         # Call the sequential notification service to handle acceptance
         from ..services.sequential_agent_notification import SequentialAgentNotificationService
-        result = await SequentialAgentNotificationService.accept_assignment(notification_id, user_id)
+        result = await SequentialAgentNotificationService.accept_assignment(notification_id, agent_id)
         
         return result
     except HTTPException:
@@ -439,25 +471,45 @@ async def accept_property_assignment(notification_id: str, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/property-assignments/{notification_id}/reject")
-async def reject_property_assignment(notification_id: str, request: Request):
-    """Reject a property assignment"""
+async def reject_property_assignment(
+    notification_id: str,
+    request: Request,
+    token: Optional[str] = Query(None)
+):
+    """Reject a property assignment (token-based, no login required)"""
     try:
-        claims = get_current_user_claims(request)
-        if not claims:
-            raise HTTPException(status_code=401, detail="Not authenticated")
+        # Get notification to extract agent_id
+        notifications = await db.select("agent_property_notifications", filters={"id": notification_id})
+        if not notifications:
+            raise HTTPException(status_code=404, detail="Assignment notification not found")
         
-        user_id = claims.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        notification = notifications[0]
+        agent_id = notification.get("agent_id")
+        
+        # Verify secure token (allows access without login)
+        if token:
+            # Token-based authentication (from email link)
+            stored_token = notification.get("secure_token")
+            if not stored_token or stored_token != token:
+                raise HTTPException(status_code=403, detail="Invalid or expired token. Please use the link from your email.")
+        else:
+            # Fall back to regular authentication (if agent is logged in)
+            claims = get_current_user_claims(request)
+            if not claims:
+                raise HTTPException(status_code=401, detail="Authentication required. Please use the link from your email.")
+            
+            user_id = claims.get("sub")
+            if not user_id or user_id != agent_id:
+                raise HTTPException(status_code=403, detail="You don't have permission to reject this assignment")
         
         payload = await request.json()
         reason = payload.get("reason", "No reason provided")
         
-        print(f"[AGENT] Agent {user_id} rejecting assignment {notification_id}, reason: {reason}")
+        print(f"[AGENT] Agent {agent_id} rejecting assignment {notification_id}, reason: {reason}")
         
         # Call the sequential notification service to handle rejection
         from ..services.sequential_agent_notification import SequentialAgentNotificationService
-        result = await SequentialAgentNotificationService.reject_assignment(notification_id, user_id, reason)
+        result = await SequentialAgentNotificationService.reject_assignment(notification_id, agent_id, reason)
         
         return result
     except HTTPException:

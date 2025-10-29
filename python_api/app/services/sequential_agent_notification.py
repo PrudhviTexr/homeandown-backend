@@ -268,6 +268,11 @@ class SequentialAgentNotificationService:
             sent_at = dt.datetime.utcnow()
             expires_at = sent_at + dt.timedelta(minutes=5)
             
+            # Generate secure token for this notification (allows accept/reject without login)
+            import hashlib
+            import secrets
+            secure_token = secrets.token_urlsafe(32)  # 32-byte secure random token
+            
             # Create notification record
             notification_id = str(uuid.uuid4())
             notification_data = {
@@ -279,6 +284,7 @@ class SequentialAgentNotificationService:
                 "sent_at": sent_at.isoformat(),
                 "expires_at": expires_at.isoformat(),
                 "email_sent": False,
+                "secure_token": secure_token,  # Add secure token for authentication-free access
                 "created_at": sent_at.isoformat(),
                 "updated_at": sent_at.isoformat()
             }
@@ -311,12 +317,13 @@ class SequentialAgentNotificationService:
                 return {"success": False, "error": "Agent has no email address"}
             
             print(f"[SEQUENTIAL_NOTIFICATION] Generating email template for {agent_email}")
+            # Include secure token in URL for authentication-free access
             email_html = await get_property_assignment_email(
                 agent_name=f"{agent.get('first_name', '')} {agent.get('last_name', '')}",
                 property=property_data,
                 notification_round=notification_round,
-                accept_url=f"{base_url}/agent/assignments/{notification_id}/accept",
-                reject_url=f"{base_url}/agent/assignments/{notification_id}/reject"
+                accept_url=f"{base_url}/agent/assignments/{notification_id}/accept?token={secure_token}",
+                reject_url=f"{base_url}/agent/assignments/{notification_id}/reject?token={secure_token}"
             )
             
             print(f"[SEQUENTIAL_NOTIFICATION] Sending email to {agent_email} for property {property_data.get('title')}")
