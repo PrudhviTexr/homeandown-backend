@@ -105,21 +105,48 @@ async def list_properties(_=Depends(require_api_key)):
         users = await db.admin_select("users")
         
         # Build user map with full names (not IDs)
-        user_map = {user['id']: f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() for user in users}
+        user_map = {}
+        for user in users:
+            user_id = user.get('id')
+            first_name = user.get('first_name', '').strip()
+            last_name = user.get('last_name', '').strip()
+            full_name = f"{first_name} {last_name}".strip()
+            # Only add if we have a valid name
+            if user_id and full_name:
+                user_map[user_id] = full_name
+            elif user_id:
+                # Fallback to email if no name
+                user_map[user_id] = user.get('email', 'Unknown User')
         
         if properties:
             for prop in properties:
                 # Get owner name - check owner_id first, then added_by (who created it)
                 owner_id = prop.get('owner_id') or prop.get('added_by')
-                owner_name = user_map.get(owner_id, 'N/A')
-                # Remove empty strings and set to N/A if no name found
-                prop['owner_name'] = owner_name if owner_name and owner_name.strip() else 'N/A'
+                if owner_id and owner_id in user_map:
+                    owner_name = user_map[owner_id]
+                elif owner_id:
+                    # If ID exists but not in map, try to fetch or use ID
+                    owner_name = f"User {owner_id[:8]}..."
+                else:
+                    owner_name = 'N/A'
+                
+                prop['owner_name'] = owner_name
                 
                 # Get agent name - check assigned_agent_id first, then agent_id
                 agent_id = prop.get('assigned_agent_id') or prop.get('agent_id')
-                agent_name = user_map.get(agent_id, 'Unassigned')
-                # Remove empty strings and set to Unassigned if no name found
-                prop['agent_name'] = agent_name if agent_name and agent_name.strip() else 'Unassigned'
+                if agent_id and agent_id in user_map:
+                    agent_name = user_map[agent_id]
+                elif agent_id:
+                    # If ID exists but not in map, use ID
+                    agent_name = f"Agent {agent_id[:8]}..."
+                else:
+                    agent_name = 'Unassigned'
+                
+                prop['agent_name'] = agent_name
+                
+                # Debug logging for first property
+                if properties.index(prop) == 0:
+                    print(f"[ADMIN] Property {prop.get('id')[:8]}: owner_id={owner_id}, owner_name={owner_name}, agent_id={agent_id}, agent_name={agent_name}")
         
         print(f"[ADMIN] Returning {len(properties) if properties else 0} properties with owner/agent names")
         return properties or []
