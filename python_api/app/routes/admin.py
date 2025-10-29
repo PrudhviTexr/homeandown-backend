@@ -365,6 +365,38 @@ async def list_inquiries(_=Depends(require_api_key)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/users/fix-status-mismatch")
+async def fix_status_mismatch(_=Depends(require_api_key)):
+    """Fix users who have verification_status='verified' but status='pending'"""
+    try:
+        # Find all users with mismatch
+        all_users = await db.admin_select("users")
+        fixed_count = 0
+        
+        for user in all_users:
+            verification_status = (user.get('verification_status') or '').lower()
+            status = (user.get('status') or '').lower()
+            
+            # If verified but status is pending, fix it
+            if verification_status == 'verified' and status in ['pending', '', None]:
+                await db.update("users", {
+                    "status": "active",
+                    "updated_at": dt.datetime.utcnow().isoformat()
+                }, {"id": user['id']})
+                fixed_count += 1
+                print(f"[ADMIN] Fixed status for user {user.get('id')[:8]}: {user.get('email')}")
+        
+        return {
+            "success": True,
+            "message": f"Fixed {fixed_count} users with status mismatch",
+            "fixed_count": fixed_count
+        }
+    except Exception as e:
+        import traceback
+        print(f"[ADMIN] Error fixing status mismatch: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to fix status mismatch: {str(e)}")
+
 @router.post("/users/{user_id}/approve")
 async def approve_user(user_id: str, _=Depends(require_api_key)):
     try:
