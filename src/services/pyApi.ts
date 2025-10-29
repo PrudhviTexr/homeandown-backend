@@ -295,8 +295,23 @@ export const AgentApi = {
   getPendingPropertyAssignments() {
     return pyFetch('/api/agent/pending-assignments', { method: 'GET', useApiKey: false });
   },
+  getPendingAssignments() {
+    return pyFetch('/api/agent/pending-assignments', { method: 'GET', useApiKey: false });
+  },
   acceptPropertyAssignment(notificationId: string) {
     return pyFetch(`/api/agent/property-assignments/${notificationId}/accept`, { 
+      method: 'POST', 
+      useApiKey: false 
+    });
+  },
+  acceptAssignment(notificationId: string) {
+    return pyFetch(`/api/agent/property-assignments/${notificationId}/accept`, { 
+      method: 'POST', 
+      useApiKey: false 
+    });
+  },
+  rejectAssignment(notificationId: string) {
+    return pyFetch(`/api/agent/property-assignments/${notificationId}/reject`, { 
       method: 'POST', 
       useApiKey: false 
     });
