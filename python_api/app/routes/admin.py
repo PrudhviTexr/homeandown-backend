@@ -73,11 +73,18 @@ async def update_user(user_id: str, payload: UpdateProfileRequest, _=Depends(req
         update_data = payload.dict(exclude_unset=True)
         
         # Admin override logic for status
+        # Only auto-set status to inactive if verification is explicitly rejected
+        # Allow pending status for resubmission scenarios
         if 'verification_status' in update_data:
-            # If an admin sets verification to pending or rejected, force the main status to inactive
-            if update_data['verification_status'] in ['pending', 'rejected']:
-                update_data['status'] = 'inactive'
-                print(f"[ADMIN] Admin override: Setting user {user_id} status to 'inactive' due to verification status change.")
+            if update_data['verification_status'] == 'rejected':
+                # User is rejected, force status to inactive
+                if 'status' not in update_data:  # Only if status not explicitly set
+                    update_data['status'] = 'inactive'
+                    print(f"[ADMIN] Admin override: Setting user {user_id} status to 'inactive' due to rejection.")
+            elif update_data['verification_status'] == 'pending':
+                # User is pending resubmission - allow admin to set status explicitly
+                # Don't override status if admin has set it
+                print(f"[ADMIN] User {user_id} set to pending. Status will be: {update_data.get('status', 'not changed')}")
 
         if update_data:
             update_data["updated_at"] = dt.datetime.utcnow().isoformat()
