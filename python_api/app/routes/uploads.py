@@ -1,6 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
-from ..core.security import require_api_key, get_current_user_id
+from ..core.security import require_api_key, try_get_current_user_claims # Use the new optional auth
 from ..db.supabase_client import db
 import os
 import uuid
@@ -99,15 +99,15 @@ async def upload_file(
     entity_id: str = Form(""),
     document_category: str = Form(""),
     file: UploadFile = File(...),
-    request: Request = None,
-    # Make get_current_user_id optional
-    current_user_id: Optional[str] = Depends(get_current_user_id)
+    claims: dict = Depends(try_get_current_user_claims) # Use the new dependency
 ):
     """
     User-facing endpoint to upload a file.
     The user's ID is automatically used as entity_id and uploaded_by if available.
     """
     try:
+        current_user_id = claims.get("sub") if claims else None
+        
         # Prioritize authenticated user, but allow entity_id from form for signups
         final_entity_id = entity_id or current_user_id
         if not final_entity_id:

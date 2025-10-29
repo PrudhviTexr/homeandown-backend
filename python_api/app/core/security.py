@@ -31,6 +31,19 @@ def get_current_user_claims(request: Request):
     
     return claims
 
+def try_get_current_user_claims(request: Request):
+    """
+    Extract JWT claims if available, but do not raise an error if not authenticated.
+    Returns claims dict or None.
+    """
+    try:
+        return get_current_user_claims(request)
+    except HTTPException as e:
+        # If auth fails (e.g., no token, invalid token), return None instead of raising
+        if e.status_code in [401, 403]:
+            return None
+        raise
+
 def get_current_user_id(request: Request) -> str:
     """Get current user ID from JWT token"""
     claims = get_current_user_claims(request)
