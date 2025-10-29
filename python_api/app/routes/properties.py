@@ -758,7 +758,8 @@ async def get_property(property_id_or_slug: str):
 
         # If not found by ID, search by slug
         print(f"[PROPERTIES] Not a valid UUID. Searching by slug: {property_id_or_slug}")
-        all_properties = await db.select("properties", filters={"status": "active", "verified": True})
+        # Fetch ALL properties to search by slug, not just active ones
+        all_properties = await db.select("properties")
         
         import re
         
