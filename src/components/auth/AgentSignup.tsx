@@ -259,6 +259,14 @@ const AgentSignup: React.FC<AgentSignupProps> = ({ onToggleMode }) => {
           onClose={() => setShowOTP(false)}
           email={formData.email}
           onVerify={async () => {
+            // Force refresh user profile to update email_verified status
+            try {
+              await getUserProfile(true);
+              console.log('[AgentSignup] Profile refreshed after OTP verification');
+            } catch (error) {
+              console.error('[AgentSignup] Error refreshing profile:', error);
+            }
+            
             // Immediately proceed to success page - don't wait for document upload
             setShowOTP(false);
             setSuccessData({
