@@ -373,6 +373,100 @@ async def get_agent_properties(
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch properties: {str(e)}")
 
+@router.get("/property-assignments/{notification_id}")
+async def get_property_assignment_details(notification_id: str, request: Request):
+    """Get details of a specific property assignment notification"""
+    try:
+        claims = get_current_user_claims(request)
+        if not claims:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        # Get notification details
+        notifications = await db.select("agent_property_notifications", filters={"id": notification_id})
+        if not notifications:
+            raise HTTPException(status_code=404, detail="Assignment notification not found")
+        
+        notification = notifications[0]
+        
+        # Verify this notification is for the current agent
+        if notification.get("agent_id") != user_id:
+            raise HTTPException(status_code=403, detail="You don't have permission to view this assignment")
+        
+        # Get property details
+        property_id = notification.get("property_id")
+        properties = await db.select("properties", filters={"id": property_id})
+        
+        return {
+            "success": True,
+            "notification": notification,
+            "property": properties[0] if properties else None
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AGENT] Error fetching assignment details: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/property-assignments/{notification_id}/accept")
+async def accept_property_assignment(notification_id: str, request: Request):
+    """Accept a property assignment"""
+    try:
+        claims = get_current_user_claims(request)
+        if not claims:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        print(f"[AGENT] Agent {user_id} accepting assignment {notification_id}")
+        
+        # Call the sequential notification service to handle acceptance
+        from ..services.sequential_agent_notification import SequentialAgentNotificationService
+        result = await SequentialAgentNotificationService.accept_assignment(notification_id, user_id)
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AGENT] Error accepting assignment: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/property-assignments/{notification_id}/reject")
+async def reject_property_assignment(notification_id: str, request: Request):
+    """Reject a property assignment"""
+    try:
+        claims = get_current_user_claims(request)
+        if not claims:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        payload = await request.json()
+        reason = payload.get("reason", "No reason provided")
+        
+        print(f"[AGENT] Agent {user_id} rejecting assignment {notification_id}, reason: {reason}")
+        
+        # Call the sequential notification service to handle rejection
+        from ..services.sequential_agent_notification import SequentialAgentNotificationService
+        result = await SequentialAgentNotificationService.reject_assignment(notification_id, user_id, reason)
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AGENT] Error rejecting assignment: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/pending-assignments")
 async def get_pending_property_assignments(request: Request):
     """Get pending property assignment notifications for the agent"""
