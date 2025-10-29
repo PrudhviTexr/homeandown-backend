@@ -131,22 +131,37 @@ async def upload_file(
         # uploaded_by should be the authenticated user if available
         # For property uploads, if no auth user, try to get owner_id from property
         uploader = current_user_id
+        
+        print(f"[UPLOAD] Upload attempt - entity_type: {entity_type}, entity_id: {final_entity_id}, current_user: {current_user_id}")
+        
         if not uploader and entity_type in ['property', 'property_images']:
             # Try to fetch the property's owner_id to use as uploaded_by
             try:
+                print(f"[UPLOAD] No auth user for property upload, fetching property {final_entity_id} owner...")
                 property_data = await db.select("properties", filters={"id": final_entity_id})
                 if property_data and len(property_data) > 0:
-                    uploader = property_data[0].get('owner_id') or property_data[0].get('added_by')
+                    prop = property_data[0]
+                    uploader = prop.get('owner_id') or prop.get('added_by')
+                    print(f"[UPLOAD] Found property owner: {uploader}")
+                else:
+                    print(f"[UPLOAD] Property {final_entity_id} not found in database!")
             except Exception as e:
-                print(f"[UPLOAD] Could not fetch property owner: {e}")
+                print(f"[UPLOAD] Error fetching property owner: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Fallback to entity_id only if it's a user upload
         if not uploader:
             if entity_type in ['user', 'user_documents']:
                 uploader = final_entity_id
+                print(f"[UPLOAD] Using entity_id as uploader for user document: {uploader}")
             else:
-                # Last resort: use a system/admin ID or raise error
-                raise HTTPException(status_code=401, detail="Authentication required for file uploads")
+                # Last resort: raise error with detailed message
+                print(f"[UPLOAD] CRITICAL: No valid uploaded_by found! entity_type={entity_type}, entity_id={final_entity_id}")
+                raise HTTPException(
+                    status_code=401, 
+                    detail=f"Authentication required for {entity_type} uploads. Please ensure you are logged in."
+                )
 
         result_doc = await upload_file_to_storage(
             file=file,
