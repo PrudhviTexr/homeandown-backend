@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
 from ..core.security import require_api_key, get_current_user_id
 from ..db.supabase_client import db
@@ -99,25 +99,33 @@ async def upload_file(
     entity_id: str = Form(""),
     document_category: str = Form(""),
     file: UploadFile = File(...),
-    current_user_id: str = Depends(get_current_user_id)
+    request: Request = None,
+    # Make get_current_user_id optional
+    current_user_id: Optional[str] = Depends(get_current_user_id)
 ):
     """
     User-facing endpoint to upload a file.
-    The user's ID is automatically used as entity_id and uploaded_by.
+    The user's ID is automatically used as entity_id and uploaded_by if available.
     """
     try:
-        # For user uploads, entity_id should be the current user's ID
+        # Prioritize authenticated user, but allow entity_id from form for signups
         final_entity_id = entity_id or current_user_id
-        
+        if not final_entity_id:
+            raise HTTPException(status_code=400, detail="entity_id is required for anonymous uploads.")
+
+        # uploaded_by should be the authenticated user if available
+        uploader = current_user_id or final_entity_id
+
         result_doc = await upload_file_to_storage(
             file=file,
             entity_id=final_entity_id,
             entity_type=entity_type,
             document_category=document_category,
-            uploaded_by=current_user_id
+            uploaded_by=uploader
         )
         
         if result_doc:
+            # Ensure the response has a 'url' key for frontend compatibility
             return {"success": True, "id": result_doc.get('id'), "url": result_doc.get('file_path')}
         else:
             raise HTTPException(status_code=500, detail="Failed to get document details after upload.")
