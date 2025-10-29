@@ -8,7 +8,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/agent/dashboard/stats")
+@router.get("/dashboard/stats")
 async def get_agent_dashboard_stats(request: Request):
     """Get comprehensive agent dashboard statistics"""
     try:
@@ -94,7 +94,7 @@ async def get_agent_dashboard_stats(request: Request):
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch dashboard stats: {str(e)}")
 
-@router.get("/agent/profile")
+@router.get("/profile")
 async def get_agent_profile(request: Request):
     """Get the current agent's full profile, including license and documents."""
     try:
@@ -144,7 +144,7 @@ async def get_agent_profile(request: Request):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="An error occurred while fetching agent profile.")
 
-@router.get("/agent/inquiries")
+@router.get("/inquiries")
 async def get_agent_inquiries(
     request: Request,
     property_id: Optional[str] = Query(None),
@@ -222,7 +222,7 @@ async def get_agent_inquiries(
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch inquiries: {str(e)}")
 
-@router.get("/agent/bookings")
+@router.get("/bookings")
 async def get_agent_bookings(
     request: Request,
     property_id: Optional[str] = Query(None),
@@ -306,7 +306,7 @@ async def get_agent_bookings(
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch bookings: {str(e)}")
 
-@router.get("/agent/properties")
+@router.get("/properties")
 async def get_agent_properties(
     request: Request,
     status: Optional[str] = Query(None),
@@ -361,7 +361,7 @@ async def get_agent_properties(
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch properties: {str(e)}")
 
-@router.get("/agent/pending-assignments")
+@router.get("/pending-assignments")
 async def get_pending_property_assignments(request: Request):
     """Get pending property assignment notifications for the agent"""
     try:
