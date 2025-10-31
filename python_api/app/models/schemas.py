@@ -66,13 +66,20 @@ class ChangePasswordRequest(BaseModel):
 class UpdateProfileRequest(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
+    email: str | None = None
     phone_number: str | None = None
     city: str | None = None
     state: str | None = None
+    district: str | None = None
+    mandal: str | None = None
+    zip_code: str | None = None
     address: str | None = None
+    latitude: str | float | None = None
+    longitude: str | float | None = None
     bio: str | None = None
     date_of_birth: str | None = None
     profile_image_url: str | None = None
+    business_name: str | None = None
     otp: str | None = None
 
 class PropertyRequest(BaseModel):

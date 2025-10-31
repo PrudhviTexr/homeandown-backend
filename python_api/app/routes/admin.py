@@ -1058,6 +1058,251 @@ async def update_user_profile(user_id: str, request: Request, _=Depends(require_
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/roles/approve")
+async def approve_role_request(request: Request, _=Depends(require_api_key)):
+    """Approve a user's role request"""
+    try:
+        from ..services.user_role_service import UserRoleService
+        import pytz
+        
+        body = await request.json()
+        user_id = body.get("user_id")
+        role = body.get("role", "").lower()
+        
+        if not user_id or not role:
+            raise HTTPException(status_code=400, detail="user_id and role are required")
+        
+        # Get user details
+        users = await db.select("users", filters={"id": user_id})
+        if not users:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user = users[0]
+        
+        # Verify and activate the role
+        await UserRoleService.verify_role(user_id, role)
+        await UserRoleService.activate_role(user_id, role)
+        
+        print(f"[ADMIN] Role '{role}' approved for user: {user_id}")
+        
+        # Send approval email to user
+        try:
+            role_display = {
+                "buyer": "Buyer",
+                "seller": "Seller",
+                "agent": "Agent",
+                "admin": "Administrator"
+            }.get(role, role.title())
+            
+            email_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
+            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                    <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 20px; text-align: center;">
+                        <div style="width: 60px; height: 60px; background-color: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+                            <span style="font-size: 30px;">✓</span>
+                        </div>
+                        <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Role Request Approved!</h1>
+                    </div>
+                    
+                    <div style="padding: 40px 30px;">
+                        <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Congratulations {user.get('first_name', 'User')}!</h2>
+                        
+                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                            Your request for <strong>{role_display}</strong> access has been approved! You now have access to all {role_display.lower()} features.
+                        </p>
+                        
+                        <div style="background-color: #d1fae5; border-left: 4px solid #10b981; padding: 16px; margin: 30px 0; border-radius: 4px;">
+                            <p style="color: #065f46; font-size: 14px; margin: 0; line-height: 1.5;">
+                                <strong>🎉 What you can do now:</strong><br>
+                                • Access {role_display} dashboard and features<br>
+                                • Manage your {role_display.lower()} activities<br>
+                                • Enjoy full platform capabilities for {role_display.lower()}s
+                            </p>
+                        </div>
+                        
+                        <div style="text-align: center; margin: 40px 0;">
+                            <a href="{body.get('site_url', 'https://homeandown.com')}/{role}/dashboard" 
+                               style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                      color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                      font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);">
+                                Go to {role_display} Dashboard
+                            </a>
+                        </div>
+                        
+                        <div style="background-color: #f8fafc; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                            <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0; line-height: 1.6;">
+                                <strong>Approval Details:</strong>
+                            </p>
+                            <p style="color: #64748b; font-size: 14px; margin: 0; line-height: 1.6;">
+                                • Role: {role_display}<br>
+                                • Date: {dt.datetime.now(pytz.UTC).strftime('%B %d, %Y at %I:%M %p UTC')}<br>
+                                • Status: Active
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div style="background-color: #f8fafc; padding: 30px; border-top: 1px solid #e2e8f0; text-align: center;">
+                        <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
+                            Welcome to the team!<br>
+                            <strong>The Home & Own Team</strong>
+                        </p>
+                        <p style="color: #94a3b8; font-size: 12px; margin: 20px 0 0 0;">
+                            © 2025 Home & Own. All rights reserved.
+                        </p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+            
+            await send_email(
+                to_email=user["email"],
+                subject=f"Role Request Approved - Home & Own",
+                html_content=email_html
+            )
+            print(f"[ADMIN] Role approval email sent to: {user['email']}")
+        except Exception as email_error:
+            print(f"[ADMIN] Failed to send role approval email: {email_error}")
+        
+        return {
+            "success": True,
+            "message": f"Role '{role}' approved for user {user_id}"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ADMIN] Role approval error: {e}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/roles/reject")
+async def reject_role_request(request: Request, _=Depends(require_api_key)):
+    """Reject a user's role request"""
+    try:
+        from ..services.user_role_service import UserRoleService
+        import pytz
+        
+        body = await request.json()
+        user_id = body.get("user_id")
+        role = body.get("role", "").lower()
+        reason = body.get("reason", "Your role request did not meet our requirements at this time.")
+        
+        if not user_id or not role:
+            raise HTTPException(status_code=400, detail="user_id and role are required")
+        
+        # Get user details
+        users = await db.select("users", filters={"id": user_id})
+        if not users:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user = users[0]
+        
+        # Delete the role request
+        await UserRoleService.delete_role(user_id, role)
+        
+        print(f"[ADMIN] Role '{role}' rejected for user: {user_id}")
+        
+        # Send rejection email to user
+        try:
+            role_display = {
+                "buyer": "Buyer",
+                "seller": "Seller",
+                "agent": "Agent",
+                "admin": "Administrator"
+            }.get(role, role.title())
+            
+            email_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
+            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                    <div style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 40px 20px; text-align: center;">
+                        <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Role Request Update</h1>
+                    </div>
+                    
+                    <div style="padding: 40px 30px;">
+                        <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user.get('first_name', 'User')},</h2>
+                        
+                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                            Thank you for your interest in becoming a <strong>{role_display}</strong> on Home & Own. After careful review, we're unable to approve your request at this time.
+                        </p>
+                        
+                        <div style="background-color: #fee2e2; border-left: 4px solid #ef4444; padding: 16px; margin: 30px 0; border-radius: 4px;">
+                            <p style="color: #991b1b; font-size: 14px; margin: 0; line-height: 1.5;">
+                                <strong>Reason:</strong><br>
+                                {reason}
+                            </p>
+                        </div>
+                        
+                        <div style="background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 16px; margin: 30px 0; border-radius: 4px;">
+                            <p style="color: #1e40af; font-size: 14px; margin: 0; line-height: 1.5;">
+                                <strong>💡 Next Steps:</strong><br>
+                                • You can reapply after addressing the feedback<br>
+                                • Contact support if you have questions: support@homeandown.com<br>
+                                • Continue using your current account features
+                            </p>
+                        </div>
+                        
+                        <div style="background-color: #f8fafc; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                            <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0; line-height: 1.6;">
+                                <strong>Request Details:</strong>
+                            </p>
+                            <p style="color: #64748b; font-size: 14px; margin: 0; line-height: 1.6;">
+                                • Requested Role: {role_display}<br>
+                                • Date: {dt.datetime.now(pytz.UTC).strftime('%B %d, %Y at %I:%M %p UTC')}<br>
+                                • Status: Not Approved
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div style="background-color: #f8fafc; padding: 30px; border-top: 1px solid #e2e8f0; text-align: center;">
+                        <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
+                            Thank you for your understanding,<br>
+                            <strong>The Home & Own Team</strong>
+                        </p>
+                        <p style="color: #94a3b8; font-size: 12px; margin: 20px 0 0 0;">
+                            © 2025 Home & Own. All rights reserved.
+                        </p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+            
+            await send_email(
+                to_email=user["email"],
+                subject=f"Role Request Update - Home & Own",
+                html_content=email_html
+            )
+            print(f"[ADMIN] Role rejection email sent to: {user['email']}")
+        except Exception as email_error:
+            print(f"[ADMIN] Failed to send role rejection email: {email_error}")
+        
+        return {
+            "success": True,
+            "message": f"Role '{role}' rejected for user {user_id}"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ADMIN] Role rejection error: {e}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/users/{user_id}/bank")
 async def update_user_bank(user_id: str, request: Request, _=Depends(require_api_key)):
     """Update user bank details"""

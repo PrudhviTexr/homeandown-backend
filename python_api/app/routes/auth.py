@@ -345,7 +345,7 @@ async def login(payload: LoginRequest, response: Response, role: Optional[str] =
 
 @router.get("/me")
 async def get_profile(request: Request) -> Dict[str, Any]:
-    """Get current user profile from JWT token."""
+    """Get current user profile from JWT token with ALL fields."""
     try:
         print(f"[AUTH] Profile request received")
         
@@ -366,15 +366,26 @@ async def get_profile(request: Request) -> Dict[str, Any]:
         user = users[0]
         print(f"[AUTH] Profile data retrieved for: {user['email']}")
         
+        # Get user's active roles
+        try:
+            from ..services.user_role_service import UserRoleService
+            active_roles = await UserRoleService.get_active_user_roles(user_id)
+        except Exception as role_error:
+            print(f"[AUTH] Failed to get user roles: {role_error}")
+            active_roles = [user.get("user_type", "buyer")]
+        
+        # Return ALL fields from the database
         return {
             "id": user["id"],
             "email": user["email"],
             "first_name": user.get("first_name", ""),
             "last_name": user.get("last_name", ""),
             "user_type": user.get("user_type", "buyer"),
+            "active_roles": active_roles,
             "custom_id": user.get("custom_id"),
             "email_verified": user.get("email_verified", False),
             "status": user.get("status", "active"),
+            "verification_status": user.get("verification_status", "pending"),
             "phone_number": user.get("phone_number", ""),
             "city": user.get("city", ""),
             "state": user.get("state", ""),
@@ -387,7 +398,19 @@ async def get_profile(request: Request) -> Dict[str, Any]:
             "date_of_birth": user.get("date_of_birth"),
             "bio": user.get("bio", ""),
             "profile_image_url": user.get("profile_image_url"),
-            "verification_status": user.get("verification_status", "pending")
+            "business_name": user.get("business_name", ""),
+            # Agent-specific fields (read-only)
+            "agent_license_number": user.get("agent_license_number"),
+            "experience_years": user.get("experience_years"),
+            "specialization": user.get("specialization"),
+            # Bank details (read-only for security)
+            "bank_account_number": user.get("bank_account_number"),
+            "ifsc_code": user.get("ifsc_code"),
+            "bank_verified": user.get("bank_verified", False),
+            # Timestamps
+            "created_at": user.get("created_at"),
+            "updated_at": user.get("updated_at"),
+            "email_verified_at": user.get("email_verified_at")
         }
         
     except HTTPException:
@@ -807,9 +830,19 @@ async def request_additional_role(request: Request) -> Dict[str, Any]:
         if requested_role not in ["buyer", "seller", "agent", "admin"]:
             raise HTTPException(status_code=400, detail="Invalid role")
         
+        # Get user details
+        users = await db.select("users", filters={"id": user_id})
+        if not users:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user = users[0]
+        
         # Check if user already has this role
         try:
             from ..services.user_role_service import UserRoleService
+            from ..services.email import send_email
+            import pytz
+            
             has_role = await UserRoleService.has_role(user_id, requested_role)
             if has_role:
                 return {
@@ -821,6 +854,162 @@ async def request_additional_role(request: Request) -> Dict[str, Any]:
             success = await UserRoleService.add_additional_role(user_id, requested_role)
             
             if success:
+                role_display = {
+                    "buyer": "Buyer",
+                    "seller": "Seller",
+                    "agent": "Agent",
+                    "admin": "Administrator"
+                }.get(requested_role, requested_role.title())
+                
+                current_role_display = {
+                    "buyer": "Buyer",
+                    "seller": "Seller",
+                    "agent": "Agent",
+                    "admin": "Administrator"
+                }.get(user.get("user_type", "").lower(), "User")
+                
+                # Send confirmation email to user
+                user_email_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                </head>
+                <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                    <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                        <div style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); padding: 40px 20px; text-align: center;">
+                            <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Role Request Submitted</h1>
+                        </div>
+                        
+                        <div style="padding: 40px 30px;">
+                            <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user.get('first_name', 'User')},</h2>
+                            
+                            <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                Your request for <strong>{role_display}</strong> access has been successfully submitted and is now pending admin review.
+                            </p>
+                            
+                            <div style="background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 16px; margin: 30px 0; border-radius: 4px;">
+                                <p style="color: #1e40af; font-size: 14px; margin: 0; line-height: 1.5;">
+                                    <strong>📋 What happens next?</strong><br>
+                                    • Our admin team will review your request<br>
+                                    • You'll receive an email notification once your request is approved or if additional information is needed<br>
+                                    • Review typically takes 1-2 business days
+                                </p>
+                            </div>
+                            
+                            <div style="background-color: #f8fafc; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                                <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0; line-height: 1.6;">
+                                    <strong>Request Details:</strong>
+                                </p>
+                                <p style="color: #64748b; font-size: 14px; margin: 0; line-height: 1.6;">
+                                    • Requested Role: {role_display}<br>
+                                    • Current Role: {current_role_display}<br>
+                                    • Date: {dt.datetime.now(pytz.UTC).strftime('%B %d, %Y at %I:%M %p UTC')}<br>
+                                    • Status: Pending Review
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <div style="background-color: #f8fafc; padding: 30px; border-top: 1px solid #e2e8f0; text-align: center;">
+                            <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
+                                Best regards,<br>
+                                <strong>The Home & Own Team</strong>
+                            </p>
+                            <p style="color: #94a3b8; font-size: 12px; margin: 20px 0 0 0;">
+                                © 2025 Home & Own. All rights reserved.
+                            </p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """
+                
+                try:
+                    await send_email(
+                        to_email=user["email"],
+                        subject=f"Role Request Submitted - Home & Own",
+                        html_content=user_email_html
+                    )
+                    print(f"[AUTH] Role request confirmation email sent to user: {user['email']}")
+                except Exception as email_error:
+                    print(f"[AUTH] Failed to send role request email to user: {email_error}")
+                
+                # Send notification to admins
+                try:
+                    admin_users = await db.select("users", filters={"user_type": "admin"})
+                    
+                    admin_email_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="utf-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    </head>
+                    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                        <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                            <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); padding: 40px 20px; text-align: center;">
+                                <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">New Role Request</h1>
+                            </div>
+                            
+                            <div style="padding: 40px 30px;">
+                                <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Admin Action Required</h2>
+                                
+                                <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                    A user has requested additional role access and requires your review.
+                                </p>
+                                
+                                <div style="background-color: #f8fafc; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                                    <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0; line-height: 1.6;">
+                                        <strong>User Information:</strong>
+                                    </p>
+                                    <p style="color: #64748b; font-size: 14px; margin: 0; line-height: 1.6;">
+                                        • Name: {user.get('first_name', '')} {user.get('last_name', '')}<br>
+                                        • Email: {user.get('email', '')}<br>
+                                        • Current Role: {current_role_display}<br>
+                                        • Requested Role: <strong>{role_display}</strong><br>
+                                        • User ID: {user_id}<br>
+                                        • Date: {dt.datetime.now(pytz.UTC).strftime('%B %d, %Y at %I:%M %p UTC')}
+                                    </p>
+                                </div>
+                                
+                                <div style="text-align: center; margin: 40px 0;">
+                                    <a href="{settings.SITE_URL}/admin/dashboard" 
+                                       style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                              color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                              font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);">
+                                        Review in Admin Dashboard
+                                    </a>
+                                </div>
+                            </div>
+                            
+                            <div style="background-color: #f8fafc; padding: 30px; border-top: 1px solid #e2e8f0; text-align: center;">
+                                <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
+                                    <strong>Home & Own Admin System</strong>
+                                </p>
+                                <p style="color: #94a3b8; font-size: 12px; margin: 20px 0 0 0;">
+                                    © 2025 Home & Own. All rights reserved.
+                                </p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>
+                    """
+                    
+                    for admin in admin_users:
+                        try:
+                            await send_email(
+                                to_email=admin["email"],
+                                subject=f"New Role Request: {role_display} - Home & Own",
+                                html_content=admin_email_html
+                            )
+                            print(f"[AUTH] Role request notification sent to admin: {admin['email']}")
+                        except Exception as admin_email_error:
+                            print(f"[AUTH] Failed to send admin notification: {admin_email_error}")
+                            
+                except Exception as admin_notify_error:
+                    print(f"[AUTH] Failed to send admin notifications: {admin_notify_error}")
+                
                 return {
                     "success": True,
                     "message": f"Role request submitted successfully. Admin approval required for {requested_role} role."
@@ -833,6 +1022,8 @@ async def request_additional_role(request: Request) -> Dict[str, Any]:
                 
         except Exception as role_error:
             print(f"[AUTH] Role request error: {role_error}")
+            import traceback
+            print(traceback.format_exc())
             return {
                 "success": False,
                 "error": f"Failed to submit role request: {str(role_error)}"
@@ -842,6 +1033,8 @@ async def request_additional_role(request: Request) -> Dict[str, Any]:
         raise
     except Exception as e:
         print(f"[AUTH] Request role error: {e}")
+        import traceback
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to submit role request: {str(e)}")
 
 
@@ -851,12 +1044,12 @@ async def forgot_password(request: Request) -> Dict[str, Any]:
     try:
         body = await request.json()
         email = body.get("email", "").lower().strip()
-        redirect_url = body.get("redirect_url", settings.SITE_URL + "/reset-password")
+        user_type = body.get("user_type", "").lower().strip()  # Get requested user type
         
         if not email:
             raise HTTPException(status_code=400, detail="Email is required")
         
-        print(f"[AUTH] Password reset requested for: {email}")
+        print(f"[AUTH] Password reset requested for: {email} (user_type: {user_type})")
         
         # Check if user exists
         users = await db.select("users", filters={"email": email})
@@ -869,51 +1062,120 @@ async def forgot_password(request: Request) -> Dict[str, Any]:
         
         user = users[0]
         user_id = user["id"]
+        actual_user_type = user.get("user_type", "buyer").lower()
         
         # Generate reset token
         reset_token = str(uuid.uuid4())
         expires_at = dt.datetime.now(pytz.UTC) + dt.timedelta(hours=1)
         
-        # Store token in verification_tokens table
+        # Store token in verification_tokens table with user_type metadata
         token_data = {
             "id": str(uuid.uuid4()),
             "user_id": user_id,
             "token": reset_token,
             "type": "password_reset",
+            "metadata": {"user_type": actual_user_type},  # Store user type in metadata
             "expires_at": expires_at.isoformat(),
             "created_at": dt.datetime.now(pytz.UTC).isoformat()
         }
         
         await db.insert("verification_tokens", token_data)
-        print(f"[AUTH] Reset token created for user: {user_id}")
+        print(f"[AUTH] Reset token created for user: {user_id} (type: {actual_user_type})")
+        
+        # Generate role-specific reset URL
+        site_url = settings.SITE_URL or "https://homeandown.com"
+        if actual_user_type == "admin":
+            reset_url = f"{site_url}/admin/reset-password"
+        elif actual_user_type == "agent":
+            reset_url = f"{site_url}/agent/reset-password"
+        elif actual_user_type == "seller":
+            reset_url = f"{site_url}/seller/reset-password"
+        elif actual_user_type == "buyer":
+            reset_url = f"{site_url}/buyer/reset-password"
+        else:
+            reset_url = f"{site_url}/reset-password"
         
         # Send reset email
-        reset_link = f"{redirect_url}?token={reset_token}"
+        reset_link = f"{reset_url}?token={reset_token}"
+        # Get user role display name
+        role_display = {
+            "admin": "Administrator",
+            "agent": "Agent",
+            "seller": "Seller",
+            "buyer": "Buyer"
+        }.get(actual_user_type, "User")
+        
         email_html = f"""
+        <!DOCTYPE html>
         <html>
-        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                <h2 style="color: #2563eb;">Reset Your Password</h2>
-                <p>Hello {user.get('first_name', 'User')},</p>
-                <p>We received a request to reset your password for your Home & Own account.</p>
-                <p>Click the button below to reset your password:</p>
-                <div style="text-align: center; margin: 30px 0;">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+            <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                <!-- Header -->
+                <div style="background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); padding: 40px 20px; text-align: center;">
+                    <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Home & Own</h1>
+                    <p style="color: rgba(255, 255, 255, 0.9); margin: 10px 0 0 0; font-size: 16px;">Password Reset Request</p>
+                </div>
+                
+                <!-- Content -->
+                <div style="padding: 40px 30px;">
+                    <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user.get('first_name', 'User')},</h2>
+                    
+                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                        We received a request to reset the password for your <strong>{role_display}</strong> account on Home & Own.
+                    </p>
+                    
+                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;">
+                        Click the button below to securely reset your password:
+                    </p>
+                    
+                    <!-- Button -->
+                    <div style="text-align: center; margin: 40px 0;">
                     <a href="{reset_link}" 
-                       style="background-color: #2563eb; color: white; padding: 12px 30px; 
-                              text-decoration: none; border-radius: 5px; display: inline-block;">
-                        Reset Password
+                           style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                  color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                  font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);">
+                            Reset Your Password
                     </a>
                 </div>
-                <p>Or copy and paste this link into your browser:</p>
-                <p style="color: #666; word-break: break-all;">{reset_link}</p>
-                <p style="color: #666; font-size: 14px; margin-top: 30px;">
-                    This link will expire in 1 hour.<br>
-                    If you didn't request this reset, please ignore this email.
-                </p>
-                <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
-                <p style="color: #999; font-size: 12px;">
+                    
+                    <!-- Alternative Link -->
+                    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                        <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
+                            Or copy and paste this link into your browser:
+                        </p>
+                        <p style="color: #2563eb; font-size: 14px; word-break: break-all; margin: 0;">
+                            {reset_link}
+                        </p>
+                    </div>
+                    
+                    <!-- Security Notice -->
+                    <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; margin: 30px 0; border-radius: 4px;">
+                        <p style="color: #92400e; font-size: 14px; margin: 0; line-height: 1.5;">
+                            <strong>⚠️ Security Notice:</strong><br>
+                            This link will expire in <strong>1 hour</strong> for your security.<br>
+                            If you didn't request this password reset, please ignore this email and your password will remain unchanged.
+                        </p>
+                    </div>
+                    
+                    <p style="color: #64748b; font-size: 14px; line-height: 1.6; margin: 30px 0 0 0;">
+                        If you're having trouble with the button above, you can also visit your {role_display.lower()} portal directly and use the "Forgot Password" link.
+                    </p>
+                </div>
+                
+                <!-- Footer -->
+                <div style="background-color: #f8fafc; padding: 30px; border-top: 1px solid #e2e8f0; text-align: center;">
+                    <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
+                        Best regards,<br>
+                        <strong>The Home & Own Team</strong>
+                    </p>
+                    <p style="color: #94a3b8; font-size: 12px; margin: 20px 0 0 0;">
                     © 2025 Home & Own. All rights reserved.
                 </p>
+                </div>
             </div>
         </body>
         </html>
@@ -996,25 +1258,95 @@ async def reset_password(request: Request) -> Dict[str, Any]:
         
         print(f"[AUTH] Password reset successful for user: {user_id}")
         
-        # Send confirmation email
+        # Get user details and send confirmation email
         users = await db.select("users", filters={"id": user_id})
+        user_type = "buyer"  # Default
         if users:
             user = users[0]
+            user_type = user.get("user_type", "buyer").lower()
+            
+            # Get role display name and login URL
+            role_info = {
+                "admin": {"name": "Administrator", "url": "/admin/login"},
+                "agent": {"name": "Agent", "url": "/agent/login"},
+                "seller": {"name": "Seller", "url": "/login"},
+                "buyer": {"name": "Buyer", "url": "/login"}
+            }
+            role = role_info.get(user_type, {"name": "User", "url": "/login"})
+            
+            site_url = settings.SITE_URL or "https://homeandown.com"
+            login_url = f"{site_url}{role['url']}"
+            
             confirmation_html = f"""
+            <!DOCTYPE html>
             <html>
-            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                    <h2 style="color: #10b981;">Password Reset Successful</h2>
-                    <p>Hello {user.get('first_name', 'User')},</p>
-                    <p>Your password has been successfully reset.</p>
-                    <p>You can now log in with your new password.</p>
-                    <p style="color: #666; font-size: 14px; margin-top: 30px;">
-                        If you didn't make this change, please contact our support team immediately.
-                    </p>
-                    <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
-                    <p style="color: #999; font-size: 12px;">
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
+            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                    <!-- Header -->
+                    <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 20px; text-align: center;">
+                        <div style="width: 60px; height: 60px; background-color: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+                            <span style="font-size: 30px;">✓</span>
+                        </div>
+                        <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Password Changed Successfully!</h1>
+                    </div>
+                    
+                    <!-- Content -->
+                    <div style="padding: 40px 30px;">
+                        <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user.get('first_name', 'User')},</h2>
+                        
+                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                            Your password has been successfully changed for your <strong>{role['name']}</strong> account on Home & Own.
+                        </p>
+                        
+                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;">
+                            You can now use your new password to log in to your account.
+                        </p>
+                        
+                        <!-- Login Button -->
+                        <div style="text-align: center; margin: 40px 0;">
+                            <a href="{login_url}" 
+                               style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                      color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                      font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);">
+                                Login to Your Account
+                            </a>
+                        </div>
+                        
+                        <!-- Security Alert -->
+                        <div style="background-color: #fee2e2; border-left: 4px solid #ef4444; padding: 16px; margin: 30px 0; border-radius: 4px;">
+                            <p style="color: #991b1b; font-size: 14px; margin: 0; line-height: 1.5;">
+                                <strong>🔒 Security Alert:</strong><br>
+                                If you didn't make this change, please contact our support team immediately at <a href="mailto:support@homeandown.com" style="color: #991b1b; text-decoration: underline;">support@homeandown.com</a>
+                            </p>
+                        </div>
+                        
+                        <!-- Additional Info -->
+                        <div style="background-color: #f8fafc; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                            <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0; line-height: 1.6;">
+                                <strong>Password Reset Details:</strong>
+                            </p>
+                            <p style="color: #64748b; font-size: 14px; margin: 0; line-height: 1.6;">
+                                • Date: {dt.datetime.now(pytz.UTC).strftime('%B %d, %Y at %I:%M %p UTC')}<br>
+                                • Account Type: {role['name']}<br>
+                                • Email: {user.get('email', '')}
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <!-- Footer -->
+                    <div style="background-color: #f8fafc; padding: 30px; border-top: 1px solid #e2e8f0; text-align: center;">
+                        <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
+                            Best regards,<br>
+                            <strong>The Home & Own Team</strong>
+                        </p>
+                        <p style="color: #94a3b8; font-size: 12px; margin: 20px 0 0 0;">
                         © 2025 Home & Own. All rights reserved.
                     </p>
+                    </div>
                 </div>
             </body>
             </html>
@@ -1022,13 +1354,14 @@ async def reset_password(request: Request) -> Dict[str, Any]:
             
             await send_email(
                 to_email=user["email"],
-                subject="Password Reset Successful - Home & Own",
+                subject="Password Changed Successfully - Home & Own",
                 html_content=confirmation_html
             )
         
         return {
             "success": True,
-            "message": "Password reset successful. You can now log in with your new password."
+            "message": "Password reset successful. You can now log in with your new password.",
+            "user_type": user_type
         }
         
     except HTTPException:
