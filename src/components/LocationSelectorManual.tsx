@@ -256,18 +256,39 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
         <div className="relative">
           <input
             type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
             name="zip_code"
             value={formData?.zip_code || ''}
-            onChange={e => {
-              if (readOnly) return; // Prevent changes if read-only
-              const val = e.target.value.replace(/\D/g, '').slice(0, 6);
-              setFormData((prev: any) => ({ ...prev, zip_code: val }));
-              if (val.length === 6) {
-                handleZipcodeAutoPopulation(val);
+            onInput={(e: React.FormEvent<HTMLInputElement>) => {
+              if (readOnly) return;
+              const input = e.currentTarget;
+              const value = input.value;
+              const numericValue = value.replace(/\D/g, '').slice(0, 6);
+              
+              // Only update if value actually changed
+              if (numericValue !== (formData?.zip_code || '')) {
+                setFormData((prev: any) => ({ ...prev, zip_code: numericValue }));
+                
+                // Auto-populate when 6 digits are entered
+                if (numericValue.length === 6) {
+                  handleZipcodeAutoPopulation(numericValue);
+                }
+              }
+            }}
+            onPaste={e => {
+              if (readOnly) return;
+              e.preventDefault();
+              const pastedText = e.clipboardData.getData('text');
+              const numericValue = pastedText.replace(/\D/g, '').slice(0, 6);
+              setFormData((prev: any) => ({ ...prev, zip_code: numericValue }));
+              
+              if (numericValue.length === 6) {
+                handleZipcodeAutoPopulation(numericValue);
               }
             }}
             onBlur={e => {
-              if (readOnly) return; // Prevent changes if read-only
+              if (readOnly) return;
               const val = e.target.value;
               if (val.length === 6) {
                 handleZipcodeAutoPopulation(val);
@@ -276,6 +297,8 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             placeholder="Enter 6-digit zipcode"
             maxLength={6}
             disabled={readOnly}
+            autoComplete="off"
+            spellCheck="false"
             className={`w-full p-2 border border-gray-300 rounded-md ${readOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
           />
           {isFetchingLocation && (

@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { toast } from '@/components/ui/toast';
 import { pyFetch } from '@/utils/backend';
+import RoleBasedPropertyForm from '@/components/RoleBasedPropertyForm';
 
 interface DashboardStats {
   total_properties: number;
@@ -103,6 +104,7 @@ const SellerDashboard: React.FC = () => {
   const [propertyFilter, setPropertyFilter] = useState<string>('all');
   const [inquiryFilter, setInquiryFilter] = useState<string>('all');
   const [bookingFilter, setBookingFilter] = useState<string>('all');
+  const [showAddPropertyModal, setShowAddPropertyModal] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -249,7 +251,7 @@ const SellerDashboard: React.FC = () => {
               <p className="text-gray-600">Manage your properties and track performance</p>
             </div>
             <button
-              onClick={() => window.location.href = '/add-property'}
+              onClick={() => setShowAddPropertyModal(true)}
               className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
             >
               <Plus className="w-4 h-4" />
@@ -672,6 +674,17 @@ const SellerDashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Add Property Modal */}
+      <RoleBasedPropertyForm
+        isOpen={showAddPropertyModal}
+        onClose={() => setShowAddPropertyModal(false)}
+        onSuccess={() => {
+          setShowAddPropertyModal(false);
+          fetchDashboardData(); // Refresh the dashboard data
+        }}
+        mode="add"
+      />
     </div>
   );
 };

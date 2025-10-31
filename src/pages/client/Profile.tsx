@@ -92,7 +92,7 @@ const Profile: React.FC = () => {
       });
       setImagePreview((user as any).profile_image_url || null);
     } catch (error) {
-      console.error('Error fetching profile:', error);
+      // Error fetching profile
     } finally {
       setLoading(false);
     }
@@ -124,7 +124,7 @@ const Profile: React.FC = () => {
       // TODO: call Python /files/upload with entity_type=profile and entity_id=userId
       return imagePreview || null;
     } catch (error) {
-      console.error('Error uploading image:', error);
+      // Error uploading image
       return null;
     }
   };
@@ -135,7 +135,6 @@ const Profile: React.FC = () => {
     setSaving(true);
     
     try {
-      console.log('Saving profile with data:', formData); // Add this line for debugging
       // Upload profile image if changed
       if (profileImage) {
         await uploadProfileImage(user.id);
@@ -145,8 +144,8 @@ const Profile: React.FC = () => {
       const ApiService = (await import('@/services/api')).default;
       await ApiService.updateProfile(formData);
       
-      // Refresh profile data
-      await fetchProfile();
+      // CRITICAL FIX: Update the auth context with new data instead of fetching old data
+      await getUserProfile(true); // Force refresh auth context
       
       setEditing(false);
       setProfileImage(null);
@@ -155,8 +154,6 @@ const Profile: React.FC = () => {
       const toast = (await import('react-hot-toast')).default;
       toast.success('✅ Profile updated successfully!');
     } catch (error: any) {
-      console.error('Error saving profile:', error);
-      
       // Show error toast with appropriate message
       const toast = (await import('react-hot-toast')).default;
       toast.error(error.message || 'Failed to update profile. Please try again.');

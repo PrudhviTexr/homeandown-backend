@@ -341,62 +341,63 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             type="text"
             name="zip_code"
             value={formData.zip_code || ''}
-            onChange={(e) => {
-              const input = e.target;
-              const cursorPosition = input.selectionStart; // Save cursor position
-              const originalLength = input.value.length;
+            onInput={(e: React.FormEvent<HTMLInputElement>) => {
+              const input = e.currentTarget;
+              const cursorPos = input.selectionStart || 0;
+              const value = input.value;
+              const numericValue = value.replace(/\D/g, '');
+              
+              // Only process if we have a valid numeric value
+              if (numericValue !== (formData.zip_code || '')) {
+                // Update the form data
+                setFormData((prev: any) => ({
+                  ...prev,
+                  zip_code: numericValue
+                }));
 
-              const zipcode = input.value;
-              const numericZipcode = zipcode.replace(/\D/g, '').slice(0, 6);
+                // Handle auto-population when reaching 6 digits
+                if (numericValue.length === 6 && previousZipcodeLengthRef.current !== 6) {
+                  handleZipcodeAutoPopulation(numericValue);
+                } else if (numericValue.length < 6 && previousZipcodeLengthRef.current === 6) {
+                  // Clear dependent fields only when going from 6 to less
+                  setFormData((prev: any) => ({
+                    ...prev,
+                    state: '', district: '', mandal: '', city: ''
+                  }));
+                }
+                
+                previousZipcodeLengthRef.current = numericValue.length;
 
+                // Restore cursor position after React updates
+                requestAnimationFrame(() => {
+                  if (zipcodeInputRef.current && document.activeElement === zipcodeInputRef.current) {
+                    const newCursorPos = Math.min(cursorPos, numericValue.length);
+                    zipcodeInputRef.current.setSelectionRange(newCursorPos, newCursorPos);
+                  }
+                });
+              }
+            }}
+            onPaste={(e) => {
+              e.preventDefault();
+              const pastedText = e.clipboardData.getData('text');
+              const numericZipcode = pastedText.replace(/\D/g, '').slice(0, 6);
+              
               setFormData((prev: any) => ({
                 ...prev,
                 zip_code: numericZipcode
               }));
 
-              // Restore cursor position after state update
-              setTimeout(() => {
-                const newLength = numericZipcode.length;
-                const newCursorPosition = cursorPosition! + (newLength - originalLength);
-                if (zipcodeInputRef.current) {
-                  zipcodeInputRef.current.setSelectionRange(newCursorPosition, newCursorPosition);
-                }
-              }, 0);
-
-              if (numericZipcode.length === 6 && previousZipcodeLengthRef.current !== 6) {
+              if (numericZipcode.length === 6) {
                 handleZipcodeAutoPopulation(numericZipcode);
-              } else if (numericZipcode.length < 6) {
-                // Clear dependent fields if zipcode is incomplete
-                setFormData((prev: any) => ({
-                  ...prev,
-                  state: '', district: '', mandal: '', city: '', address: ''
-                }));
               }
               previousZipcodeLengthRef.current = numericZipcode.length;
             }}
             onBlur={async (e) => {
               const zipcode = e.target.value;
               
-              // Auto-populate on blur if we have 6 digits (in case onChange didn't fire)
+              // Auto-populate on blur if we have 6 digits
               if (zipcode.length === 6 && /^\d{6}$/.test(zipcode)) {
                 await handleZipcodeAutoPopulation(zipcode);
-              }
-            }}
-            onKeyDown={(e) => {
-              // Allow backspace, delete, tab, escape, enter
-              if ([8, 9, 27, 13, 46].indexOf(e.keyCode) !== -1 ||
-                  // Allow Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+X
-                  (e.keyCode === 65 && e.ctrlKey === true) ||
-                  (e.keyCode === 67 && e.ctrlKey === true) ||
-                  (e.keyCode === 86 && e.ctrlKey === true) ||
-                  (e.keyCode === 88 && e.ctrlKey === true) ||
-                  // Allow home, end, left, right
-                  (e.keyCode >= 35 && e.keyCode <= 40)) {
-                return;
-              }
-              // Ensure that it is a number and stop the keypress
-              if ((e.shiftKey || (e.keyCode < 48 || e.keyCode > 57)) && (e.keyCode < 96 || e.keyCode > 105)) {
-                e.preventDefault();
               }
             }}
             placeholder="Enter 6-digit zipcode"

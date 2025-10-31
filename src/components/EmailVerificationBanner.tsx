@@ -21,12 +21,6 @@ const EmailVerificationBanner: React.FC = () => {
           // Check both the profile and user object for email_verified status
           const isVerified = profile?.email_verified === true || user?.email_verified === true;
           
-          console.log(`[EMAIL_BANNER] Email verification check:`, {
-            profileVerified: profile?.email_verified,
-            userVerified: user?.email_verified,
-            finalIsVerified: isVerified,
-            userEmail: user?.email
-          });
           
           // IMPORTANT: Only show banner if email is explicitly NOT verified
           // If verification status is undefined/null, assume verified (don't show banner)
@@ -36,7 +30,6 @@ const EmailVerificationBanner: React.FC = () => {
           setIsVisible(shouldShowBanner);
           
         } catch (error) {
-          console.error('[EMAIL_BANNER] Error checking email verification:', error);
           // CHANGED: If we can't check, assume verified (don't show banner)
           // This prevents the banner from showing unnecessarily
           setIsVisible(false);
@@ -62,7 +55,6 @@ const EmailVerificationBanner: React.FC = () => {
       setResendSuccess(true);
       setTimeout(() => setResendSuccess(false), 5000);
     } catch (error) {
-      console.error('Error resending verification email:', error);
       alert('Failed to resend verification email. Please try again.');
     } finally {
       setIsResending(false);

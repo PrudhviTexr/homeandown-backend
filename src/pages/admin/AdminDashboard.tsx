@@ -13,7 +13,7 @@ import ViewBookingModal from '@/components/admin/ViewBookingModal';
 import ViewInquiryModal from '@/components/admin/ViewInquiryModal';
 import AdminSidebar from '@/components/admin/AdminSidebar';
 import AdminHeader from '@/components/admin/AdminHeader';
-import EditPropertyModal from '@/components/admin/EditPropertyModal';
+import RoleBasedPropertyForm from '@/components/RoleBasedPropertyForm';
 import AssignAgentModal from '@/components/admin/AssignAgentModal';
 import DashboardOverview from '@/components/admin/DashboardOverview';
 import CommissionManagement from '@/components/admin/CommissionManagement';
@@ -907,15 +907,15 @@ const AdminDashboard: React.FC = () => {
         users={users}
       />
       
-      <EditPropertyModal
+      <RoleBasedPropertyForm
         isOpen={showEditPropertyModal}
         onClose={() => {
           setShowEditPropertyModal(false);
           setSelectedProperty(null);
         }}
-        onPropertyUpdated={fetchAllData}
+        onSuccess={fetchAllData}
         property={selectedProperty as Property}
-        userRole="admin"
+        mode="edit"
       />
       
       <AssignAgentModal
