@@ -21,7 +21,6 @@ import EnhancedDashboard from '@/components/admin/EnhancedDashboard';
 import PropertyAssignmentManager from '@/components/admin/PropertyAssignmentManager';
 import AdminTable from '@/components/admin/AdminTable';
 import AddUserModal from '@/components/admin/AddUserModal';
-import AddPropertyModal from '@/components/admin/AddPropertyModal';
 import AddBookingModal from '@/components/admin/AddBookingModal';
 import EditUserModal from '@/components/admin/EditUserModal';
 import EditBookingModal from '@/components/admin/EditBookingModal';
@@ -837,10 +836,11 @@ const AdminDashboard: React.FC = () => {
         onUserAdded={fetchAllData}
       />
 
-      <AddPropertyModal
+      <RoleBasedPropertyForm
         isOpen={showAddPropertyModal}
         onClose={() => setShowAddPropertyModal(false)}
-        onPropertyAdded={fetchAllData}
+        onSuccess={fetchAllData}
+        mode="add"
       />
 
       <AddBookingModal
