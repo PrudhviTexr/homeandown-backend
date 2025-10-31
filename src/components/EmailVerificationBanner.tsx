@@ -17,19 +17,29 @@ const EmailVerificationBanner: React.FC = () => {
           // Always fetch fresh profile to get latest email_verified status
           const profile = await getUserProfile(true); // Force refresh
           
-          // The `profile` object is the most up-to-date source of truth.
-          // The backend and DB schema now consistently use a boolean for `email_verified`.
-          const isVerified = profile?.email_verified === true;
+          // CRITICAL FIX: Only show banner for users who are actually not verified
+          // Check both the profile and user object for email_verified status
+          const isVerified = profile?.email_verified === true || user?.email_verified === true;
           
-          console.log(`[EMAIL_BANNER] Fresh profile fetched. Is email verified? ${isVerified}`);
+          console.log(`[EMAIL_BANNER] Email verification check:`, {
+            profileVerified: profile?.email_verified,
+            userVerified: user?.email_verified,
+            finalIsVerified: isVerified,
+            userEmail: user?.email
+          });
           
-          // Hide banner if email is verified, otherwise show it.
-          setIsVisible(!isVerified);
+          // IMPORTANT: Only show banner if email is explicitly NOT verified
+          // If verification status is undefined/null, assume verified (don't show banner)
+          const shouldShowBanner = isVerified === false || 
+                                   (profile?.email_verified === false && user?.email_verified === false);
+          
+          setIsVisible(shouldShowBanner);
           
         } catch (error) {
           console.error('[EMAIL_BANNER] Error checking email verification:', error);
-          // If we can't check, assume not verified (better to show banner than hide it)
-          setIsVisible(true);
+          // CHANGED: If we can't check, assume verified (don't show banner)
+          // This prevents the banner from showing unnecessarily
+          setIsVisible(false);
         }
       } else {
         setIsVisible(false);
@@ -38,7 +48,7 @@ const EmailVerificationBanner: React.FC = () => {
 
     checkEmailVerification();
     // Also check periodically in case verification happens in another tab
-    const interval = setInterval(checkEmailVerification, 10000); // Check every 10 seconds
+    const interval = setInterval(checkEmailVerification, 30000); // Check every 30 seconds (less frequent)
     return () => clearInterval(interval);
   }, [user, getUserProfile]);
 

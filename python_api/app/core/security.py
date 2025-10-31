@@ -17,18 +17,24 @@ def get_current_user_claims(request: Request):
     auth = request.headers.get("Authorization")
     if auth and auth.lower().startswith("bearer "):
         token = auth.split(None, 1)[1].strip()
+        print(f"[SECURITY] Found JWT token in Authorization header: {token[:20]}...")
     
     # Fallback to cookie
     if not token:
         token = request.cookies.get("auth_token")
+        if token:
+            print(f"[SECURITY] Found JWT token in cookie: {token[:20]}...")
     
     if not token:
+        print("[SECURITY] No JWT token found in Authorization header or cookie")
         raise HTTPException(status_code=401, detail="Authentication required")
     
     claims = verify_user_token(token)
     if not claims:
+        print(f"[SECURITY] JWT token verification failed for token: {token[:20]}...")
         raise HTTPException(status_code=401, detail="Invalid or expired authentication token")
     
+    print(f"[SECURITY] JWT token verified successfully for user: {claims.get('sub')}")
     return claims
 
 def try_get_current_user_claims(request: Request):
