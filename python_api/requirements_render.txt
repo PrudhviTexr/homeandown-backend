@@ -9,6 +9,8 @@ supabase==2.22.0
 postgrest==2.22.0
 realtime==2.22.0
 storage3==2.22.0
+supabase-auth==2.22.0
+supabase-functions==2.22.0
 
 # Authentication and security
 python-jose==3.5.0
@@ -28,6 +30,14 @@ pydantic==2.12.0
 pydantic_core==2.41.1
 python-dateutil==2.9.0.post0
 pytz==2025.2
+
+# HTTP and networking
+httpcore==1.0.9
+anyio==4.11.0
+idna==3.10
+certifi==2025.10.5
+urllib3==2.5.0
+yarl==1.22.0
 
 # Environment and configuration
 python-dotenv==1.1.1
