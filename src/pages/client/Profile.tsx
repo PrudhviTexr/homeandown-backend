@@ -8,6 +8,7 @@ import Footer from '@/components/Footer';
 import AuthModal from '@/components/AuthModal';
 import RoleRequestComponent from '@/components/RoleRequestComponent';
 import LocationSelector from '@/components/LocationSelector';
+import PasswordConfirmModal from '@/components/PasswordConfirmModal';
 
 interface UserProfile {
   id: string;
@@ -43,10 +44,12 @@ const Profile: React.FC = () => {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [profileImage, setProfileImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
 
   const [formData, setFormData] = useState({
     first_name: '',
     last_name: '',
+    email: '',
     phone_number: '',
     date_of_birth: '',
     city: '',
@@ -58,6 +61,7 @@ const Profile: React.FC = () => {
     latitude: '',
     longitude: '',
     bio: '',
+    business_name: '',
   });
 
   useEffect(() => {
@@ -65,8 +69,11 @@ const Profile: React.FC = () => {
       setShowAuthModal(true);
       return;
     }
-    fetchProfile();
-  }, [user]);
+    // Only fetch profile if not currently editing to prevent overwriting form data
+    if (!editing) {
+      fetchProfile();
+    }
+  }, [user, editing]);
 
   const fetchProfile = async () => {
     if (!user) return;
@@ -78,6 +85,7 @@ const Profile: React.FC = () => {
       setFormData({
         first_name: user.first_name || '',
         last_name: user.last_name || '',
+        email: user.email || '',
         phone_number: user.phone_number || '',
         date_of_birth: (user as any).date_of_birth || '',
         city: (user as any).city || '',
@@ -89,6 +97,7 @@ const Profile: React.FC = () => {
         latitude: (user as any).latitude || '',
         longitude: (user as any).longitude || '',
         bio: (user as any).bio || '',
+        business_name: (user as any).business_name || '',
       });
       setImagePreview((user as any).profile_image_url || null);
     } catch (error) {
@@ -131,7 +140,13 @@ const Profile: React.FC = () => {
 
   const handleSave = async () => {
     if (!user) return;
+    
+    // Show password confirmation modal for profile updates
+    setShowPasswordConfirm(true);
+  };
 
+  const handlePasswordConfirm = async (currentPassword: string) => {
+    setShowPasswordConfirm(false);
     setSaving(true);
     
     try {
@@ -140,12 +155,53 @@ const Profile: React.FC = () => {
         await uploadProfileImage(user.id);
       }
 
-      // Update user profile using ApiService
+      // Update user profile using ApiService with current password
       const ApiService = (await import('@/services/api')).default;
-      await ApiService.updateProfile(formData);
+      const updateData = {
+        ...formData,
+        current_password: currentPassword // Include current password for validation
+      };
       
-      // CRITICAL FIX: Update the auth context with new data instead of fetching old data
-      await getUserProfile(true); // Force refresh auth context
+      console.log('[PROFILE] Sending update data:', updateData);
+      console.log('[PROFILE] Current user:', user);
+      
+      await ApiService.updateProfile(updateData);
+      
+      // Refresh auth context to get updated profile data
+      const { useAuth } = await import('@/contexts/AuthContext');
+      // We need to get the getUserProfile function from the hook
+      // Since we can't use hooks in this callback, we'll refresh the profile manually
+      try {
+        const { pyFetch } = await import('@/utils/backend');
+        const updatedProfile = await pyFetch('/api/auth/me', { method: 'GET', useApiKey: false });
+        if (updatedProfile && updatedProfile.id) {
+          // Update local state
+          setProfile(updatedProfile as any);
+          setFormData({
+            first_name: updatedProfile.first_name || '',
+            last_name: updatedProfile.last_name || '',
+            email: updatedProfile.email || '',
+            phone_number: updatedProfile.phone_number || '',
+            date_of_birth: updatedProfile.date_of_birth || '',
+            city: updatedProfile.city || '',
+            state: updatedProfile.state || '',
+            district: updatedProfile.district || '',
+            mandal: updatedProfile.mandal || '',
+            zip_code: updatedProfile.zip_code || '',
+            address: updatedProfile.address || '',
+            latitude: updatedProfile.latitude || '',
+            longitude: updatedProfile.longitude || '',
+            bio: updatedProfile.bio || '',
+            business_name: updatedProfile.business_name || '',
+          });
+          // Update sessionStorage
+          try {
+            sessionStorage.setItem('auth_profile', JSON.stringify(updatedProfile));
+          } catch (e) {}
+        }
+      } catch (refreshError) {
+        console.error('[PROFILE] Error refreshing profile:', refreshError);
+      }
       
       setEditing(false);
       setProfileImage(null);
@@ -156,7 +212,12 @@ const Profile: React.FC = () => {
     } catch (error: any) {
       // Show error toast with appropriate message
       const toast = (await import('react-hot-toast')).default;
-      toast.error(error.message || 'Failed to update profile. Please try again.');
+      
+      if (error.message?.includes('Invalid current password')) {
+        toast.error('❌ Invalid current password. Please try again.');
+      } else {
+        toast.error(error.message || '❌ Failed to update profile. Please try again.');
+      }
     } finally {
       setSaving(false);
     }
@@ -170,12 +231,19 @@ const Profile: React.FC = () => {
       setFormData({
         first_name: profile.first_name || '',
         last_name: profile.last_name || '',
+        email: profile.email || '',
         phone_number: profile.phone_number || '',
         date_of_birth: profile.date_of_birth || '',
         city: profile.city || '',
         state: profile.state || '',
+        district: profile.district || '',
+        mandal: profile.mandal || '',
+        zip_code: profile.zip_code || '',
         address: profile.address || '',
+        latitude: profile.latitude || '',
+        longitude: profile.longitude || '',
         bio: profile.bio || '',
+        business_name: profile.business_name || '',
       });
     }
   };
@@ -532,6 +600,14 @@ const Profile: React.FC = () => {
       </main>
 
       <Footer />
+      
+      <PasswordConfirmModal
+        isOpen={showPasswordConfirm}
+        onClose={() => setShowPasswordConfirm(false)}
+        onConfirm={handlePasswordConfirm}
+        title="Confirm Profile Update"
+        description="Please enter your current password to confirm the profile changes."
+      />
     </div>
   );
 };

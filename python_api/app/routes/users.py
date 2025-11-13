@@ -99,8 +99,15 @@ async def update_profile(payload: UpdateProfileRequest, request: Request):
         
         current_user = users[0]
         
-        # For sensitive updates, require OTP verification
-        if payload.otp:
+        # For sensitive updates, require current password or OTP verification
+        if payload.current_password:
+            print(f"[USERS] Current password provided, verifying...")
+            from ..core.crypto import verify_password
+            password_hash = current_user.get("password_hash")
+            if not password_hash or not verify_password(payload.current_password, password_hash):
+                raise HTTPException(status_code=400, detail="Invalid current password")
+            print(f"[USERS] Current password verified for profile update")
+        elif payload.otp:
             print(f"[USERS] OTP provided, verifying...")
             phone = current_user.get("phone_number", "")
             if not verify_otp_simple(phone, payload.otp, "profile_update"):
@@ -165,7 +172,31 @@ async def update_profile(payload: UpdateProfileRequest, request: Request):
         if payload.bio is not None:
             update_data["bio"] = payload.bio
         if payload.date_of_birth is not None:
-            update_data["date_of_birth"] = payload.date_of_birth
+            # Handle date_of_birth with proper validation and formatting
+            try:
+                if payload.date_of_birth and payload.date_of_birth.strip():
+                    # If it's already in YYYY-MM-DD format from HTML date input, keep it
+                    date_str = payload.date_of_birth.strip()
+                    # Validate the date format
+                    if len(date_str) == 10 and date_str.count('-') == 2:
+                        # Parse to validate it's a real date
+                        year, month, day = date_str.split('-')
+                        dt.datetime(int(year), int(month), int(day))  # This will raise ValueError if invalid
+                        update_data["date_of_birth"] = date_str
+                        print(f"[USERS] Valid date_of_birth: {date_str}")
+                    else:
+                        print(f"[USERS] Invalid date format: {date_str}")
+                        raise HTTPException(status_code=400, detail="Invalid date format. Please use YYYY-MM-DD format.")
+                else:
+                    # Empty date - set to None
+                    update_data["date_of_birth"] = None
+                    print(f"[USERS] Setting date_of_birth to None (empty)")
+            except ValueError as date_error:
+                print(f"[USERS] Date validation error: {date_error}")
+                raise HTTPException(status_code=400, detail="Invalid date. Please enter a valid date.")
+            except Exception as date_error:
+                print(f"[USERS] Date processing error: {date_error}")
+                raise HTTPException(status_code=400, detail="Error processing date. Please check the date format.")
         if payload.profile_image_url is not None:
             update_data["profile_image_url"] = payload.profile_image_url
         if payload.business_name is not None:
@@ -173,8 +204,17 @@ async def update_profile(payload: UpdateProfileRequest, request: Request):
         
         if update_data:
             update_data["updated_at"] = dt.datetime.utcnow().isoformat()
-            await db.update("users", update_data, {"id": user_id})
-            print(f"[USERS] Profile updated successfully")
+            print(f"[USERS] About to update user {user_id} with data: {update_data}")
+            
+            try:
+                result = await db.update("users", update_data, {"id": user_id})
+                print(f"[USERS] Database update result: {result}")
+                print(f"[USERS] Profile updated successfully for user: {user_id}")
+            except Exception as db_error:
+                print(f"[USERS] Database update error: {db_error}")
+                import traceback
+                print(f"[USERS] Full traceback: {traceback.format_exc()}")
+                raise HTTPException(status_code=500, detail=f"Database update failed: {str(db_error)}")
             
             # Send confirmation email
             try:
@@ -237,9 +277,9 @@ async def update_profile(payload: UpdateProfileRequest, request: Request):
                 """
                 
                 await send_email(
-                    to_email=current_user["email"],
+                    to=current_user["email"],
                     subject="Profile Updated - Home & Own",
-                    html_content=email_html
+                    html=email_html
                 )
                 print(f"[USERS] Profile update confirmation email sent to: {current_user['email']}")
             except Exception as email_error:
@@ -407,7 +447,28 @@ async def update_user(user_id: str, payload: dict, request: Request):
         if "bio" in payload:
             update_data["bio"] = payload["bio"]
         if "date_of_birth" in payload:
-            update_data["date_of_birth"] = payload["date_of_birth"]
+            # Handle date_of_birth with proper validation
+            try:
+                if payload["date_of_birth"] and str(payload["date_of_birth"]).strip():
+                    date_str = str(payload["date_of_birth"]).strip()
+                    # Validate the date format
+                    if len(date_str) == 10 and date_str.count('-') == 2:
+                        # Parse to validate it's a real date
+                        year, month, day = date_str.split('-')
+                        dt.datetime(int(year), int(month), int(day))  # This will raise ValueError if invalid
+                        update_data["date_of_birth"] = date_str
+                        print(f"[USERS] Valid date_of_birth: {date_str}")
+                    else:
+                        print(f"[USERS] Invalid date format: {date_str}")
+                        # Skip invalid dates instead of failing
+                        pass
+                else:
+                    # Empty date - set to None
+                    update_data["date_of_birth"] = None
+            except (ValueError, TypeError) as date_error:
+                print(f"[USERS] Date validation error: {date_error}")
+                # Skip invalid dates instead of failing the entire update
+                pass
         if "profile_image_url" in payload:
             update_data["profile_image_url"] = payload["profile_image_url"]
         if "verification_status" in payload:
@@ -424,7 +485,7 @@ async def update_user(user_id: str, payload: dict, request: Request):
         print(f"[USERS] Update user error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
 
-@router.get("/users/{user_id}")
+@router.get("/{user_id}")
 async def get_user_details(user_id: str):
     """Fetch public details for a single user by their ID."""
     try:

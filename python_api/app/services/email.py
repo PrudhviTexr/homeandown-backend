@@ -29,24 +29,29 @@ async def send_email(to: str, subject: str, html: str, sender: str | None = None
     msg.set_content("This email requires HTML support to display properly.")
     msg.add_alternative(html, subtype='html')
 
-    if not settings.GMAIL_USERNAME or not settings.GMAIL_APP_PASSWORD:
-        print(f"[EMAIL-DEV] To: {to}")
-        print(f"[EMAIL-DEV] Subject: {subject}")
-        print(f"[EMAIL-DEV] HTML: {html[:200]}...")
-        print("[EMAIL-DEV] Gmail credentials not configured - email logged only")
-        return {"status": "development_logged"}
+    # Check if any email provider is configured
+    resend_key = os.getenv("RESEND_API_KEY") or getattr(settings, "RESEND_API_KEY", None)
+    emailjs_service = os.getenv("EMAILJS_SERVICE_ID") or getattr(settings, "EMAILJS_SERVICE_ID", None)
+    sendgrid_key = os.getenv("SENDGRID_API_KEY") or getattr(settings, "SENDGRID_API_KEY", None)
+    has_gmail = settings.GMAIL_USERNAME and settings.GMAIL_APP_PASSWORD
+    
+    if not resend_key and not emailjs_service and not sendgrid_key and not has_gmail:
+        print(f"[EMAIL-ERROR] No email provider configured!")
+        print(f"[EMAIL-ERROR] To: {to}")
+        print(f"[EMAIL-ERROR] Subject: {subject}")
+        print(f"[EMAIL-ERROR] HTML: {html[:200]}...")
+        print("[EMAIL-ERROR] Please configure one of: RESEND_API_KEY, EMAILJS_*, SENDGRID_API_KEY, or GMAIL_USERNAME/GMAIL_APP_PASSWORD")
+        return {"status": "failed", "error": "No email provider configured"}
 
-    # Clean app password (remove spaces)
-    app_password = settings.GMAIL_APP_PASSWORD.replace(" ", "")
-
-    print(f"[EMAIL] Sending via Gmail SMTP...")
+    # Clean app password (remove spaces) if Gmail is configured
+    app_password = None
+    if has_gmail:
+        app_password = settings.GMAIL_APP_PASSWORD.replace(" ", "")
+        print(f"[EMAIL] Gmail credentials available, will use as fallback if other providers fail")
 
     # Prefer Resend HTTP API if configured (server-side key keeps secrets safe)
-    resend_key = os.getenv("RESEND_API_KEY") or getattr(settings, "RESEND_API_KEY", None)
+    # (resend_key already checked above)
     resend_template = os.getenv("RESEND_TEMPLATE_ID") or getattr(settings, "RESEND_TEMPLATE_ID", None)
-    
-    # Enable Resend for production use
-    # resend_key = None
     
     if resend_key:
         # If a template id is configured, use Resend Templates API for consistent branding
@@ -109,10 +114,11 @@ async def send_email(to: str, subject: str, html: str, sender: str | None = None
             loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(None, lambda: requests.post(resend_url, json=payload, headers=headers, timeout=15))
             if resp.status_code in (200, 201, 202):
-                print(f"[EMAIL]  Resend accepted message for delivery: {resp.status_code}")
+                print(f"[EMAIL] ✅ Resend accepted message for delivery: {resp.status_code}")
                 return {"status": "sent", "provider": "resend", "http_status": resp.status_code}
             else:
-                print(f"[EMAIL]  Resend API returned {resp.status_code}: {resp.text}")
+                print(f"[EMAIL] ❌ Resend API returned {resp.status_code}: {resp.text}")
+                print(f"[EMAIL] Response body: {resp.text}")
         except Exception as e:
             print(f"[EMAIL]  Resend send failed: {e}")
         # Fallthrough to EmailJS/SendGrid/SMTP if Resend fails
@@ -166,16 +172,18 @@ async def send_email(to: str, subject: str, html: str, sender: str | None = None
             loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(None, lambda: requests.post(EMAILJS_ENDPOINT, json=payload, headers=headers, timeout=15))
             if resp.status_code in (200, 202):
-                print(f"[EMAIL]  EmailJS accepted message for delivery: {resp.status_code}")
+                print(f"[EMAIL] ✅ EmailJS accepted message for delivery: {resp.status_code}")
                 return {"status": "sent", "provider": "emailjs", "http_status": resp.status_code}
             else:
-                print(f"[EMAIL]  EmailJS API returned {resp.status_code}: {resp.text}")
+                print(f"[EMAIL] ❌ EmailJS API returned {resp.status_code}: {resp.text}")
         except Exception as e:
-            print(f"[EMAIL]  EmailJS send failed: {e}")
+            print(f"[EMAIL] ❌ EmailJS send failed: {e}")
+            import traceback
+            print(traceback.format_exc())
         # Fallthrough to next provider if EmailJS fails
 
     # If a SendGrid API key is configured, prefer HTTP API sending to avoid SMTP/TLS problems
-    sendgrid_key = os.getenv("SENDGRID_API_KEY") or getattr(settings, "SENDGRID_API_KEY", None)
+    # (sendgrid_key already checked above)
     if sendgrid_key:
         print("[EMAIL]   Sending via SendGrid API (SENDGRID_API_KEY detected)")
         try:
@@ -191,62 +199,77 @@ async def send_email(to: str, subject: str, html: str, sender: str | None = None
             }
             resp = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers, timeout=15)
             if resp.status_code in (200, 202):
-                print(f"[EMAIL]  SendGrid accepted message for delivery: {resp.status_code}")
+                print(f"[EMAIL] ✅ SendGrid accepted message for delivery: {resp.status_code}")
                 return {"status": "sent", "provider": "sendgrid", "http_status": resp.status_code}
             else:
-                print(f"[EMAIL]  SendGrid API returned {resp.status_code}: {resp.text}")
+                print(f"[EMAIL] ❌ SendGrid API returned {resp.status_code}: {resp.text}")
         except Exception as e:
-            print(f"[EMAIL]  SendGrid send failed: {e}")
+            print(f"[EMAIL] ❌ SendGrid send failed: {e}")
+            import traceback
+            print(traceback.format_exc())
         # Fallthrough to SMTP path if SendGrid fails
 
-    # Build a TLS context that prefers the OS trust store but can be augmented:
-    # - If SMTP_CA_BUNDLE is set, trust that bundle (useful for corporate proxies)
-    # - If SMTP_ALLOW_SELF_SIGNED=true is set (dev only), disable verification
-    ca_bundle_path = os.getenv("SMTP_CA_BUNDLE")
-    allow_insecure = os.getenv("SMTP_ALLOW_SELF_SIGNED", "false").lower() in ("1", "true", "yes")  # Default to false for production security
+    # Try Gmail SMTP as final fallback if configured
+    if has_gmail and app_password:
+        print("[EMAIL] Attempting Gmail SMTP as final fallback...")
+        # Build a TLS context that prefers the OS trust store but can be augmented:
+        # - If SMTP_CA_BUNDLE is set, trust that bundle (useful for corporate proxies)
+        # - If SMTP_ALLOW_SELF_SIGNED=true is set (dev only), disable verification
+        ca_bundle_path = os.getenv("SMTP_CA_BUNDLE")
+        allow_insecure = os.getenv("SMTP_ALLOW_SELF_SIGNED", "false").lower() in ("1", "true", "yes")  # Default to false for production security
 
-    if allow_insecure:
-        print("[EMAIL]  SMTP_ALLOW_SELF_SIGNED is enabled - TLS certificate verification is disabled (development only)")
-        tls_ctx = ssl.create_default_context()
-        tls_ctx.check_hostname = False
-        tls_ctx.verify_mode = ssl.CERT_NONE
-    else:
-        tls_ctx = ssl.create_default_context()
-        # If a custom CA bundle path is provided, try loading it first
-        if ca_bundle_path:
+        if allow_insecure:
+            print("[EMAIL] ⚠️ SMTP_ALLOW_SELF_SIGNED is enabled - TLS certificate verification is disabled (development only)")
+            tls_ctx = ssl.create_default_context()
+            tls_ctx.check_hostname = False
+            tls_ctx.verify_mode = ssl.CERT_NONE
+        else:
+            tls_ctx = ssl.create_default_context()
+            # If a custom CA bundle path is provided, try loading it first
+            if ca_bundle_path:
+                try:
+                    tls_ctx.load_verify_locations(cafile=ca_bundle_path)
+                    print(f"[EMAIL] Using custom CA bundle from: {ca_bundle_path}")
+                except Exception as e:
+                    print(f"[EMAIL] ⚠️ Failed to load SMTP_CA_BUNDLE at {ca_bundle_path}: {e}")
+            # Also include certifi's bundle to improve compatibility
             try:
-                tls_ctx.load_verify_locations(cafile=ca_bundle_path)
-                print(f"[EMAIL] Using custom CA bundle from: {ca_bundle_path}")
-            except Exception as e:
-                print(f"[EMAIL]  Failed to load SMTP_CA_BUNDLE at {ca_bundle_path}: {e}")
-        # Also include certifi's bundle to improve compatibility
-        try:
-            tls_ctx.load_verify_locations(cafile=certifi.where())
-        except Exception:
-            pass
+                tls_ctx.load_verify_locations(cafile=certifi.where())
+            except Exception:
+                pass
 
-    try:
-        await aiosmtplib.send(
-            msg,
-            hostname="smtp.gmail.com",
-            port=587,
-            start_tls=True,
-            username=settings.GMAIL_USERNAME,
-            password=app_password,
-            timeout=30,
-            tls_context=tls_ctx,
-        )
-        print(f"[EMAIL]  Email sent successfully to: {to}")
-        return {"status": "sent", "provider": "gmail"}
-    except Exception as e:
-        print(f"[EMAIL]  Failed to send email to {to}: {e}")
+        try:
+            await aiosmtplib.send(
+                msg,
+                hostname="smtp.gmail.com",
+                port=587,
+                start_tls=True,
+                username=settings.GMAIL_USERNAME,
+                password=app_password,
+                timeout=30,
+                tls_context=tls_ctx,
+            )
+            print(f"[EMAIL] ✅ Email sent successfully via Gmail SMTP to: {to}")
+            return {"status": "sent", "provider": "gmail"}
+        except Exception as e:
+            print(f"[EMAIL] ❌ Gmail SMTP failed: {e}")
+            import traceback
+            print(traceback.format_exc())
+    else:
+        print(f"[EMAIL] Gmail SMTP not configured, skipping...")
         
-        # Log email content for debugging
-        print(f"[EMAIL-FALLBACK] Email would have been sent to: {to}")
-        print(f"[EMAIL-FALLBACK] Subject: {subject}")
+    # If we reach here, all email providers failed
+    print(f"[EMAIL] ❌❌❌ ALL EMAIL PROVIDERS FAILED OR NOT CONFIGURED! ❌❌❌")
+    print(f"[EMAIL-ERROR] Email would have been sent to: {to}")
+    print(f"[EMAIL-ERROR] Subject: {subject}")
+    print(f"[EMAIL-ERROR] Please configure one of the following:")
+    print(f"[EMAIL-ERROR]   - RESEND_API_KEY (recommended)")
+    print(f"[EMAIL-ERROR]   - EMAILJS_SERVICE_ID + EMAILJS_TEMPLATE_ID + EMAILJS_USER_ID or EMAILJS_ACCESS_TOKEN")
+    print(f"[EMAIL-ERROR]   - SENDGRID_API_KEY")
+    print(f"[EMAIL-ERROR]   - GMAIL_USERNAME + GMAIL_APP_PASSWORD")
         
-        # Don't raise exception - log and continue
-        return {"status": "failed", "error": str(e)}
+    # Don't raise exception - log and continue (emails shouldn't break the app)
+    return {"status": "failed", "error": "All email providers failed or not configured"}
 
 async def send_otp_email(to: str, otp: str, action: str = "verification"):
     """Send OTP via email as backup to SMS"""

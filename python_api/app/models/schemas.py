@@ -81,6 +81,10 @@ class UpdateProfileRequest(BaseModel):
     profile_image_url: str | None = None
     business_name: str | None = None
     otp: str | None = None
+    current_password: str | None = None  # For password validation when updating sensitive fields
+    status: str | None = None  # For admin user management
+    verification_status: str | None = None  # For admin user management
+    admin_notes: str | None = None  # For admin user management
 
 class PropertyRequest(BaseModel):
     model_config = ConfigDict(extra='allow')
@@ -128,6 +132,7 @@ class BookingRequest(BaseModel):
     notes: str | None = None
 
 class BookingUpdateRequest(BaseModel):
+    agent_id: Optional[str] = None
     status: str
     agent_notes: str | None = None
     booking_date: str | None = None

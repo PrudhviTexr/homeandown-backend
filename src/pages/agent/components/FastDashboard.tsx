@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Target, CheckCircle, MessageCircle, DollarSign, Home, Users, Calendar, 
   TrendingUp, Star, Clock, MapPin, Phone, Mail, Bell, Settings, 
-  FileText, Award, BarChart3, Eye, Edit, Plus, Filter, Search, AlertCircle, XCircle, Download
+  FileText, Award, BarChart3, Eye, Edit, Plus, Filter, Search, AlertCircle, XCircle, Download, RefreshCw
 } from 'lucide-react';
 import { getApiUrl } from '@/utils/backend';
 import { formatIndianCurrency } from '@/utils/currency';
@@ -47,7 +47,61 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
 
   useEffect(() => {
     fetchDashboardData();
-  }, []);
+    
+    // Set up auto-refresh every 30 seconds for real-time data
+    const interval = setInterval(() => {
+      fetchDashboardData();
+    }, 30000); // Refresh every 30 seconds
+    
+    return () => clearInterval(interval);
+  }, [user]);
+  
+  // Expose refresh function for manual refresh
+  const handleManualRefresh = () => {
+    fetchDashboardData();
+  };
+
+  // Handle assignment acceptance/rejection
+  const handleAcceptAssignment = async (notificationId: string) => {
+    try {
+      const { AgentApi } = await import('@/services/pyApi');
+      const toast = (await import('react-hot-toast')).default;
+      const response = await AgentApi.acceptPropertyAssignment(notificationId);
+      if (response?.success) {
+        console.log('[FastDashboard] Assignment accepted:', notificationId);
+        toast.success('Property assignment accepted successfully!');
+        // Refresh dashboard data
+        fetchDashboardData();
+      } else {
+        toast.error(response?.error || 'Failed to accept assignment');
+      }
+    } catch (error: any) {
+      console.error('[FastDashboard] Error accepting assignment:', error);
+      const toast = (await import('react-hot-toast')).default;
+      toast.error(error?.message || 'Failed to accept assignment. Please try again.');
+    }
+  };
+
+  const handleRejectAssignment = async (notificationId: string) => {
+    try {
+      const reason = prompt('Please provide a reason for rejection (optional):') || 'No reason provided';
+      const { AgentApi } = await import('@/services/pyApi');
+      const toast = (await import('react-hot-toast')).default;
+      const response = await AgentApi.rejectPropertyAssignment(notificationId, reason);
+      if (response?.success) {
+        console.log('[FastDashboard] Assignment rejected:', notificationId);
+        toast.success('Property assignment rejected');
+        // Refresh dashboard data
+        fetchDashboardData();
+      } else {
+        toast.error(response?.error || 'Failed to reject assignment');
+      }
+    } catch (error: any) {
+      console.error('[FastDashboard] Error rejecting assignment:', error);
+      const toast = (await import('react-hot-toast')).default;
+      toast.error(error?.message || 'Failed to reject assignment. Please try again.');
+    }
+  };
 
   const fetchDashboardData = async () => {
     try {
@@ -56,15 +110,23 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
       
       const { AgentApi } = await import('@/services/pyApi');
       
-      // Fetch all data in parallel
+      // Fetch all data in parallel with higher limits to get more data
       const [profileRes, statsRes, propertiesRes, inquiriesRes, bookingsRes, assignmentsRes] = await Promise.allSettled([
         AgentApi.getAgentProfile(),
         AgentApi.getDashboardStats(),
-        AgentApi.getProperties(),
-        AgentApi.getInquiries(),
-        AgentApi.getBookings(),
+        AgentApi.getProperties(undefined, 50), // Get up to 50 properties
+        AgentApi.getInquiries(undefined, undefined, 50), // Get up to 50 inquiries
+        AgentApi.getBookings(undefined, undefined, 50), // Get up to 50 bookings
         AgentApi.getPendingPropertyAssignments()
       ]);
+      
+      console.log('[FastDashboard] All API responses received');
+      console.log('[FastDashboard] Profile:', profileRes.status);
+      console.log('[FastDashboard] Stats:', statsRes.status);
+      console.log('[FastDashboard] Properties:', propertiesRes.status);
+      console.log('[FastDashboard] Inquiries:', inquiriesRes.status);
+      console.log('[FastDashboard] Bookings:', bookingsRes.status);
+      console.log('[FastDashboard] Assignments:', assignmentsRes.status);
 
       // Process profile
       if (profileRes.status === 'fulfilled') {
@@ -99,7 +161,12 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
         const response = propertiesRes.value;
         const properties = response?.properties || response || [];
         console.log('[FastDashboard] Properties fetched:', properties.length);
-        setAssignedProperties(properties.slice(0, 5)); // Show only 5 recent
+        console.log('[FastDashboard] Properties data:', properties);
+        // Sort by created_at descending to show most recent first
+        const sortedProperties = [...properties].sort((a, b) => 
+          new Date(b.created_at || b.updated_at || 0).getTime() - new Date(a.created_at || a.updated_at || 0).getTime()
+        );
+        setAssignedProperties(sortedProperties.slice(0, 6)); // Show 6 properties
         // Don't override stats if they were already set by statsRes
         if (statsRes.status !== 'fulfilled') {
           setStats(prev => ({
@@ -110,6 +177,8 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
         }
       } else {
         console.error('[FastDashboard] Error fetching properties:', propertiesRes.reason);
+        console.error('[FastDashboard] Full error:', propertiesRes.reason);
+        setAssignedProperties([]); // Set empty array on error
       }
 
       // Process inquiries
@@ -117,7 +186,11 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
         const response = inquiriesRes.value;
         const inquiries = response?.inquiries || response || [];
         console.log('[FastDashboard] Inquiries fetched:', inquiries.length);
-        setRecentInquiries(inquiries.slice(0, 5)); // Show only 5 recent
+        // Sort by created_at descending to show most recent first
+        const sortedInquiries = [...inquiries].sort((a, b) => 
+          new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+        );
+        setRecentInquiries(sortedInquiries.slice(0, 5)); // Show only 5 most recent
         // Don't override stats if they were already set by statsRes
         if (statsRes.status !== 'fulfilled') {
           setStats(prev => ({
@@ -127,6 +200,8 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
         }
       } else {
         console.error('[FastDashboard] Error fetching inquiries:', inquiriesRes.reason);
+        console.error('[FastDashboard] Full error:', inquiriesRes.reason);
+        setRecentInquiries([]); // Set empty array on error
       }
 
       // Process bookings
@@ -134,7 +209,12 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
         const response = bookingsRes.value;
         const bookings = response?.bookings || response || [];
         console.log('[FastDashboard] Bookings fetched:', bookings.length);
-        setRecentBookings(bookings.slice(0, 5)); // Show only 5 recent
+        console.log('[FastDashboard] Bookings data:', bookings);
+        // Sort by created_at descending to show most recent first
+        const sortedBookings = [...bookings].sort((a, b) => 
+          new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+        );
+        setRecentBookings(sortedBookings.slice(0, 5)); // Show only 5 most recent
         // Don't override stats if they were already set by statsRes
         if (statsRes.status !== 'fulfilled') {
           setStats(prev => ({
@@ -144,16 +224,21 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
         }
       } else {
         console.error('[FastDashboard] Error fetching bookings:', bookingsRes.reason);
+        console.error('[FastDashboard] Full error:', bookingsRes.reason);
+        setRecentBookings([]); // Set empty array on error
       }
       
       // Process assignments
       if (assignmentsRes.status === 'fulfilled') {
         const assignmentsData = assignmentsRes.value;
-        const assignments = assignmentsData?.notifications || assignmentsData || [];
+        const assignments = assignmentsData?.notifications || assignmentsData?.assignments || assignmentsData || [];
         console.log('[FastDashboard] Pending assignments fetched:', assignments.length);
-        setPendingAssignments(assignments);
+        console.log('[FastDashboard] Assignments data:', assignments);
+        setPendingAssignments(Array.isArray(assignments) ? assignments : []);
       } else {
         console.error('[FastDashboard] Error fetching pending assignments:', assignmentsRes.reason);
+        console.error('[FastDashboard] Full error:', assignmentsRes.reason);
+        setPendingAssignments([]); // Set empty array on error
       }
 
       // Calculate mock earnings (replace with real calculation)
@@ -203,16 +288,24 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
       {/* Agent Profile & License Info */}
       {agentProfileData && (
         <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Your Profile</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">Your Profile</h3>
+            {loading && (
+              <span className="text-xs text-blue-600 flex items-center gap-1">
+                <RefreshCw className="h-3 w-3 animate-spin" />
+                Refreshing...
+              </span>
+            )}
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
               <p className="text-sm font-medium text-gray-500">Agent ID</p>
-              <p className="text-md font-semibold text-gray-800">{agentProfileData.custom_id || 'N/A'}</p>
+              <p className="text-md font-semibold text-gray-800 font-mono">{agentProfileData.custom_id || 'N/A'}</p>
             </div>
             <div>
               <p className="text-sm font-medium text-gray-500">License Number</p>
-              <p className="text-md font-semibold text-gray-800">
-                {agentProfileData.agent_license_number || agentProfileData.license_number || 'Not Assigned'}
+              <p className="text-md font-semibold text-gray-800 font-mono">
+                {agentProfileData.agent_license_number || agentProfileData.license_number || agentProfileData.custom_id || 'Not Assigned'}
               </p>
             </div>
             <div>
@@ -418,19 +511,34 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
       )}
 
       {/* Recent Inquiries */}
-      {recentInquiries.length > 0 && (
         <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Inquiries</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-900">Recent Inquiries</h3>
+          <button
+            onClick={() => navigate('/agent/dashboard?tab=inquiries')}
+            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+          >
+            View All →
+          </button>
+        </div>
+        {recentInquiries.length > 0 ? (
           <div className="space-y-4">
-            {recentInquiries.map((inquiry, index) => (
-              <div key={index} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
+            {recentInquiries.map((inquiry, index) => {
+              const inquiryName = inquiry.name || 
+                                 (inquiry.user ? `${inquiry.user.first_name || ''} ${inquiry.user.last_name || ''}`.trim() : '') ||
+                                 'Anonymous';
+              const inquiryEmail = inquiry.email || inquiry.user?.email || 'N/A';
+              const inquiryPhone = inquiry.phone || inquiry.user?.phone_number || 'N/A';
+              
+              return (
+              <div key={inquiry.id || index} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center space-x-3">
+                  <div className="flex items-center space-x-3 flex-1">
                     <div className="p-2 bg-blue-100 rounded-full">
                       <MessageCircle className="h-4 w-4 text-blue-600" />
                     </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{inquiry.name || inquiry.user?.first_name || 'Anonymous'}</p>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-gray-900">{inquiryName}</p>
                       <p className="text-xs text-gray-600">{inquiry.property?.title || 'Property Inquiry'}</p>
                     </div>
                   </div>
@@ -439,99 +547,185 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
                   </span>
                 </div>
                 
-                <div className="mb-3">
-                  <p className="text-sm text-gray-700">{inquiry.message?.substring(0, 100)}...</p>
+                {inquiry.message && (
+                  <div className="mb-3 p-2 bg-gray-50 rounded">
+                    <p className="text-sm text-gray-700">{inquiry.message.length > 150 ? inquiry.message.substring(0, 150) + '...' : inquiry.message}</p>
                 </div>
+                )}
                 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                <div className="mb-3 p-3 bg-gray-50 rounded-lg">
+                  <p className="text-xs font-semibold text-gray-700 mb-2">Contact Information:</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
                   <div className="flex items-center space-x-2">
                     <Mail className="h-4 w-4 text-gray-400" />
-                    <span className="text-gray-600">{inquiry.email || inquiry.user?.email || 'N/A'}</span>
+                      <span className="text-gray-700">{inquiryEmail}</span>
                   </div>
                   <div className="flex items-center space-x-2">
                     <Phone className="h-4 w-4 text-gray-400" />
-                    <span className="text-gray-600">{inquiry.phone || inquiry.user?.phone_number || 'N/A'}</span>
+                      <span className="text-gray-700">{inquiryPhone}</span>
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-2">
+                  {inquiry.property && (
+                    <div className="flex items-center space-x-2 mt-2 text-sm">
                     <MapPin className="h-4 w-4 text-gray-400" />
                     <span className="text-gray-600">
-                      {inquiry.property?.city || 'N/A'}, {inquiry.property?.state || 'N/A'}
+                        {inquiry.property.city || 'N/A'}, {inquiry.property.state || 'N/A'}
                     </span>
                   </div>
+                  )}
                 </div>
                 
                 <div className="mt-3 flex space-x-2">
-                  <button className="flex-1 bg-blue-600 text-white px-3 py-2 rounded text-sm hover:bg-blue-700 transition-colors">
+                  <button
+                    onClick={() => {
+                      if (inquiryEmail && inquiryEmail !== 'N/A') {
+                        window.location.href = `mailto:${inquiryEmail}?subject=Property Inquiry - ${inquiry.property?.title || 'Property'}`;
+                      } else {
+                        import('react-hot-toast').then(({ default: toast }) => {
+                          toast.error('Email not available for this client');
+                        });
+                      }
+                    }}
+                    className="flex-1 bg-blue-600 text-white px-3 py-2 rounded text-sm hover:bg-blue-700 transition-colors text-center"
+                  >
                     Contact Client
                   </button>
-                  <button className="flex-1 bg-green-600 text-white px-3 py-2 rounded text-sm hover:bg-green-700 transition-colors">
-                    View Property
+                  <button
+                    onClick={() => {
+                      if (inquiryPhone && inquiryPhone !== 'N/A') {
+                        window.location.href = `tel:${inquiryPhone}`;
+                      } else {
+                        import('react-hot-toast').then(({ default: toast }) => {
+                          toast.error('Phone number not available for this client');
+                        });
+                      }
+                    }}
+                    className="flex-1 bg-green-600 text-white px-3 py-2 rounded text-sm hover:bg-green-700 transition-colors text-center"
+                  >
+                    Call Client
+                  </button>
+                  <button 
+                    onClick={() => {
+                      // Navigate to inquiries tab
+                      navigate('/agent/dashboard?tab=inquiries');
+                      // Store inquiry ID in sessionStorage for potential highlighting
+                      if (inquiry.id) {
+                        sessionStorage.setItem('selectedInquiryId', inquiry.id);
+                      }
+                    }}
+                    className="flex-1 bg-gray-600 text-white px-3 py-2 rounded text-sm hover:bg-gray-700 transition-colors"
+                  >
+                    View Details
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
+        ) : (
+          <div className="text-center py-8">
+            <MessageCircle className="h-12 w-12 mx-auto mb-3 text-gray-300" />
+            <p className="text-gray-500 font-medium">No inquiries yet</p>
+            <p className="text-gray-400 text-sm">Inquiries from your assigned properties will appear here</p>
         </div>
       )}
+      </div>
 
-      {/* Recent Bookings */}
-      {recentBookings.length > 0 && (
+      {/* Recent Bookings / Tours */}
         <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Bookings</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-900">Recent Bookings / Tours</h3>
+          <button
+            onClick={() => navigate('/agent/dashboard?tab=bookings')}
+            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+          >
+            View All →
+          </button>
+        </div>
+        {recentBookings.length > 0 ? (
           <div className="space-y-4">
-            {recentBookings.map((booking, index) => (
-              <div key={index} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
+            {recentBookings.slice(0, 5).map((booking, index) => {
+              // Get customer information from multiple sources
+              const customerName = booking.customer?.name || 
+                                 booking.name || 
+                                 (booking.user ? `${booking.user.first_name || ''} ${booking.user.last_name || ''}`.trim() : '') ||
+                                 'Guest';
+              const customerEmail = booking.customer?.email || 
+                                   booking.email || 
+                                   booking.user?.email || 
+                                   'N/A';
+              const customerPhone = booking.customer?.phone || 
+                                   booking.phone || 
+                                   booking.user?.phone_number || 
+                                   'N/A';
+              
+              return (
+              <div key={booking.id || index} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center space-x-3">
+                  <div className="flex items-center space-x-3 flex-1">
                     <div className="p-2 bg-green-100 rounded-full">
                       <Calendar className="h-4 w-4 text-green-600" />
                     </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{booking.name || booking.user?.first_name || 'Anonymous'}</p>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-gray-900">
+                        {customerName}
+                        {booking.customer?.user_type && (
+                          <span className="ml-2 text-xs text-gray-500">({booking.customer.user_type})</span>
+                        )}
+                      </p>
                       <p className="text-xs text-gray-600">{booking.property?.title || 'Property Booking'}</p>
                     </div>
                   </div>
-                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                  <div className="flex flex-col items-end">
+                    <span className={`px-2 py-1 rounded text-xs font-medium mb-1 ${
+                      booking.status === 'confirmed' ? 'bg-green-100 text-green-800' :
+                      booking.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+                      booking.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {booking.status?.toUpperCase() || 'PENDING'}
+                    </span>
+                    <span className="text-xs text-gray-500">
                     {new Date(booking.created_at).toLocaleDateString()}
                   </span>
+                  </div>
                 </div>
                 
+                {/* Customer Contact Information */}
+                <div className="mb-3 p-3 bg-gray-50 rounded-lg">
+                  <p className="text-xs font-semibold text-gray-700 mb-2">Customer Contact:</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                    <div className="flex items-center space-x-2">
+                      <Mail className="h-4 w-4 text-gray-400" />
+                      <span className="text-gray-700">{customerEmail}</span>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Phone className="h-4 w-4 text-gray-400" />
+                      <span className="text-gray-700">{customerPhone}</span>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Tour Details */}
                 <div className="mb-3">
+                  <p className="text-xs font-semibold text-gray-700 mb-2">Tour Schedule:</p>
                   <div className="flex items-center space-x-4 text-sm">
                     <div className="flex items-center space-x-1">
                       <Calendar className="h-4 w-4 text-gray-400" />
-                      <span className="text-gray-600">{booking.booking_date || 'TBD'}</span>
+                      <span className="text-gray-700 font-medium">{booking.booking_date || 'TBD'}</span>
                     </div>
                     <div className="flex items-center space-x-1">
                       <Clock className="h-4 w-4 text-gray-400" />
-                      <span className="text-gray-600">{booking.booking_time || 'TBD'}</span>
+                      <span className="text-gray-700 font-medium">{booking.booking_time || 'TBD'}</span>
                     </div>
+                    {booking.property && (
                     <div className="flex items-center space-x-1">
-                      <span className={`px-2 py-1 rounded text-xs font-medium ${
-                        booking.status === 'confirmed' ? 'bg-green-100 text-green-800' :
-                        booking.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                        'bg-gray-100 text-gray-800'
-                      }`}>
-                        {booking.status || 'pending'}
+                        <MapPin className="h-4 w-4 text-gray-400" />
+                        <span className="text-gray-600 text-xs">
+                          {booking.property.city || 'N/A'}, {booking.property.state || 'N/A'}
                       </span>
                     </div>
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                  <div className="flex items-center space-x-2">
-                    <Mail className="h-4 w-4 text-gray-400" />
-                    <span className="text-gray-600">{booking.email || booking.user?.email || 'N/A'}</span>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <Phone className="h-4 w-4 text-gray-400" />
-                    <span className="text-gray-600">{booking.phone || booking.user?.phone_number || 'N/A'}</span>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <MapPin className="h-4 w-4 text-gray-400" />
-                    <span className="text-gray-600">
-                      {booking.property?.city || 'N/A'}, {booking.property?.state || 'N/A'}
-                    </span>
+                    )}
                   </div>
                 </div>
                 
@@ -542,48 +736,133 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
                 )}
                 
                 <div className="mt-3 flex space-x-2">
-                  <button className="flex-1 bg-blue-600 text-white px-3 py-2 rounded text-sm hover:bg-blue-700 transition-colors">
+                  <button
+                    onClick={() => {
+                      if (customerEmail && customerEmail !== 'N/A') {
+                        window.location.href = `mailto:${customerEmail}?subject=Property Tour Inquiry - ${booking.property?.title || 'Property'}`;
+                      } else {
+                        import('react-hot-toast').then(({ default: toast }) => {
+                          toast.error('Email not available for this client');
+                        });
+                      }
+                    }}
+                    className="flex-1 bg-blue-600 text-white px-3 py-2 rounded text-sm hover:bg-blue-700 transition-colors text-center"
+                  >
                     Contact Client
                   </button>
-                  <button className="flex-1 bg-green-600 text-white px-3 py-2 rounded text-sm hover:bg-green-700 transition-colors">
-                    Confirm Tour
+                  <button
+                    onClick={() => {
+                      if (customerPhone && customerPhone !== 'N/A') {
+                        window.location.href = `tel:${customerPhone}`;
+                      } else {
+                        import('react-hot-toast').then(({ default: toast }) => {
+                          toast.error('Phone number not available for this client');
+                        });
+                      }
+                    }}
+                    className="flex-1 bg-green-600 text-white px-3 py-2 rounded text-sm hover:bg-green-700 transition-colors text-center"
+                  >
+                    Call Client
+                  </button>
+                  <button 
+                    onClick={() => {
+                      // Navigate to bookings tab and potentially scroll to this booking
+                      navigate('/agent/dashboard?tab=bookings');
+                      // Store booking ID in sessionStorage for potential highlighting
+                      if (booking.id) {
+                        sessionStorage.setItem('selectedBookingId', booking.id);
+                      }
+                    }}
+                    className="flex-1 bg-gray-600 text-white px-3 py-2 rounded text-sm hover:bg-gray-700 transition-colors"
+                  >
+                    View Details
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
+        ) : (
+          <div className="text-center py-8">
+            <Calendar className="h-12 w-12 mx-auto mb-3 text-gray-300" />
+            <p className="text-gray-500 font-medium">No bookings yet</p>
+            <p className="text-gray-400 text-sm">Tour bookings for your assigned properties will appear here</p>
         </div>
       )}
+      </div>
 
       {/* Assigned Properties */}
-      {assignedProperties.length > 0 && (
         <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Your Properties</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-900">Your Assigned Properties</h3>
+          <button
+            onClick={() => navigate('/agent/dashboard?tab=properties')}
+            className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+          >
+            View All →
+          </button>
+        </div>
+        {assignedProperties.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {assignedProperties.map((property, index) => (
-              <div key={index} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
-                <h4 className="font-semibold text-gray-900 mb-2">{property.title}</h4>
-                <p className="text-sm text-gray-600 mb-2">
+              <div key={property.id || index} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
+                <div className="flex items-start justify-between mb-2">
+                  <h4 className="font-semibold text-gray-900 flex-1">{property.title || 'Property'}</h4>
+                  <span className={`px-2 py-1 rounded text-xs font-medium ${
+                    property.status === 'active' ? 'bg-green-100 text-green-800' :
+                    property.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-gray-100 text-gray-800'
+                  }`}>
+                    {property.status || 'pending'}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-600 mb-2 flex items-center">
                   <MapPin className="h-4 w-4 inline mr-1" />
-                  {property.city}, {property.state}
+                  {property.city || 'N/A'}, {property.state || 'N/A'}
                 </p>
-                <p className="text-lg font-bold text-blue-600">
-                  {formatIndianCurrency(property.price || property.monthly_rent)}
-                  {property.listing_type === 'RENT' && '/month'}
+                <p className="text-lg font-bold text-blue-600 mb-2">
+                  {property.listing_type === 'RENT' 
+                    ? `₹${formatIndianCurrency(property.monthly_rent || 0)}/month`
+                    : `₹${formatIndianCurrency(property.price || 0)}`
+                  }
                 </p>
+                {property.property_type && (
+                  <p className="text-xs text-gray-500 mb-2 capitalize">
+                    Type: {property.property_type.replace(/_/g, ' ')}
+                  </p>
+                )}
+                {(property.bedrooms || property.bathrooms) && (
+                  <p className="text-xs text-gray-500 mb-3">
+                    {property.bedrooms ? `${property.bedrooms} Beds` : ''} 
+                    {property.bedrooms && property.bathrooms ? ' • ' : ''}
+                    {property.bathrooms ? `${property.bathrooms} Baths` : ''}
+                  </p>
+                )}
                 <div className="mt-3 flex space-x-2">
-                  <button className="flex-1 bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700">
+                  <button 
+                    onClick={() => navigate(`/properties/${property.id}`)}
+                    className="flex-1 bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700"
+                  >
                     View Details
                   </button>
-                  <button className="flex-1 bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700">
+                  <button 
+                    onClick={() => navigate('/agent/dashboard?tab=properties')}
+                    className="flex-1 bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700"
+                  >
                     Manage
                   </button>
                 </div>
               </div>
             ))}
           </div>
+        ) : (
+          <div className="text-center py-8">
+            <Home className="h-12 w-12 mx-auto mb-3 text-gray-300" />
+            <p className="text-gray-500 font-medium">No properties assigned yet</p>
+            <p className="text-gray-400 text-sm">Properties assigned to you will appear here</p>
         </div>
       )}
+      </div>
 
       {/* Agent Documents */}
       {documents.length > 0 && (

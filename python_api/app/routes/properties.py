@@ -914,22 +914,22 @@ async def update_property(property_id: str, update_data: dict):
         # Define valid database columns for properties table (based on actual schema)
         valid_property_columns = {
             'id', 'custom_id', 'title', 'description', 'price', 'monthly_rent', 'security_deposit',
-            'property_type', 'bedrooms', 'bathrooms', 'area_sqft', 'address', 'city', 'state',
-            'zip_code', 'latitude', 'longitude', 'images', 'amenities', 'owner_id', 'status',
-            'featured', 'verified', 'listing_type', 'available_from', 'furnishing_status',
+            'property_type', 'bedrooms', 'bathrooms', 'area_sqft', 'area_sqyd', 'area_acres', 'area_unit',  # Added area_unit
+            'address', 'city', 'state', 'zip_code', 'latitude', 'longitude', 'images', 'amenities', 
+            'owner_id', 'status', 'featured', 'verified', 'listing_type', 'available_from', 'furnishing_status',
             'created_at', 'updated_at', 'district', 'mandal', 'room_images', 'maintenance_charges',
-            'rate_per_sqft', 'rate_per_sqyd', 'area_sqyd', 'area_acres', 'carpet_area_sqft',
-            'built_up_area_sqft', 'plot_area_sqft', 'plot_area_sqyd', 'commercial_subtype',
-            'total_floors', 'available_floor', 'parking_slots', 'bhk_config', 'floor_count',
-            'facing', 'private_garden', 'private_driveway', 'plot_dimensions', 'land_type',
-            'soil_type', 'road_access', 'boundary_fencing', 'water_availability',
-            'electricity_availability', 'apartment_type', 'floor_number', 'total_floors_building',
-            'balconies', 'community_type', 'gated_community_features', 'visitor_parking',
-            'legal_status', 'rera_status', 'rera_number', 'video_url', 'virtual_tour_url',
-            'nearby_business_hubs', 'nearby_transport', 'agent_id', 'priority', 'possession_date',
-            'corner_plot', 'water_source', 'amenities_json', 'images_json', 'added_by',
-            'added_by_role', 'state_id', 'district_id', 'mandal_id', 'floor', 'lift_available',
-            'parking_spaces'
+            'rate_per_sqft', 'rate_per_sqyd', 'carpet_area_sqft', 'built_up_area_sqft', 
+            'plot_area_sqft', 'plot_area_sqyd', 'commercial_subtype', 'total_floors', 'available_floor', 
+            'parking_slots', 'bhk_config', 'floor_count', 'facing', 'private_garden', 'private_driveway', 
+            'plot_dimensions', 'land_type', 'soil_type', 'road_access', 'boundary_fencing', 
+            'water_availability', 'electricity_availability', 'apartment_type', 'floor_number', 
+            'total_floors_building', 'balconies', 'community_type', 'gated_community_features', 
+            'visitor_parking', 'legal_status', 'rera_status', 'rera_number', 'video_url', 
+            'virtual_tour_url', 'nearby_business_hubs', 'nearby_transport', 'agent_id', 'priority', 
+            'possession_date', 'corner_plot', 'water_source', 'amenities_json', 'images_json', 
+            'added_by', 'added_by_role', 'state_id', 'district_id', 'mandal_id', 'floor', 
+            'lift_available', 'parking_spaces', 'assigned_agent_id', 'assignment_date', 
+            'assignment_status', 'assignment_notes', 'transfer_reason', 'previous_agent_id', 'seller_id'
         }
         
         # Filter update_data to only include valid database columns
@@ -937,6 +937,9 @@ async def update_property(property_id: str, update_data: dict):
         for key, value in update_data.items():
             if key in valid_property_columns:
                 filtered_update_data[key] = value
+                # Debug: Log area_unit specifically
+                if key == 'area_unit':
+                    print(f"[PROPERTIES] ✅ area_unit included in update: {value}")
             else:
                 print(f"[PROPERTIES] Skipping invalid column '{key}' - not in database schema")
         

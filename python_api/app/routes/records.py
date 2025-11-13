@@ -76,12 +76,15 @@ async def create_contact_message(data: dict):
         </html>
         """
         
-        await send_email(
+        email_result_admin = await send_email(
             to="info@homeandown.com",
             subject=f"New Contact Form Submission from {name}",
             html=admin_html
         )
-        print(f"[RECORDS] Contact form email sent to admin")
+        if email_result_admin.get("status") == "sent":
+            print(f"[RECORDS] ✅ Contact form email sent to admin via {email_result_admin.get('provider', 'unknown')}")
+        else:
+            print(f"[RECORDS] ⚠️ Contact form email to admin may have failed: {email_result_admin.get('error', 'Unknown error')}")
         
         # Send confirmation email to user
         user_html = f"""
@@ -92,7 +95,7 @@ async def create_contact_message(data: dict):
                     <h2 style="color: #2563eb; margin: 0;">Thank You for Contacting Us!</h2>
                 </div>
                 
-                <p>Dear {name},</p>
+                <p>Hello {name},</p>
                 
                 <p>We have received your message and appreciate you reaching out to Home & Own.</p>
                 
@@ -123,12 +126,15 @@ async def create_contact_message(data: dict):
         </html>
         """
         
-        await send_email(
+        email_result_user = await send_email(
             to=email,
             subject="We've Received Your Message - Home & Own",
             html=user_html
         )
-        print(f"[RECORDS] Confirmation email sent to: {email}")
+        if email_result_user.get("status") == "sent":
+            print(f"[RECORDS] ✅ Confirmation email sent to: {email} via {email_result_user.get('provider', 'unknown')}")
+        else:
+            print(f"[RECORDS] ⚠️ Confirmation email may have failed: {email_result_user.get('error', 'Unknown error')}")
         
         return {
             "success": True,
@@ -687,6 +693,16 @@ async def update_booking(booking_id: str, update: BookingUpdateRequest):
         if update.booking_time:
             update_data["booking_time"] = update.booking_time
 
+        # Update agent_id if provided (allow assigning/unassigning agents)
+        if hasattr(update, 'agent_id'):
+            if update.agent_id is not None and update.agent_id != '':
+                update_data["agent_id"] = update.agent_id
+                print(f"[RECORDS] Assigning agent {update.agent_id} to booking {booking_id}")
+            else:
+                # Allow clearing agent assignment
+                update_data["agent_id"] = None
+                print(f"[RECORDS] Clearing agent assignment for booking {booking_id}")
+
         await db.update("bookings", update_data, filters={"id": booking_id})
 
         # Send email notifications
@@ -703,21 +719,105 @@ async def update_booking(booking_id: str, update: BookingUpdateRequest):
                 customer = users[0] if users else None
 
             # Send status update email to customer if we have their email
+            # Check both user_id and booking email/name fields
+            customer_email = None
+            customer_name = None
             if customer and customer.get("email"):
+                customer_email = customer.get("email")
+                customer_name = f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip() or customer.get('email', 'Customer')
+            elif booking.get("email"):
+                customer_email = booking.get("email")
+                customer_name = booking.get("name") or booking.get("email", "Customer")
+            
+            if customer_email:
                 subject, html = booking_status_email(
                     booking, property_details, update.status, update.agent_notes
                 )
-                await send_email(customer.get("email"), subject, html)
+                await send_email(customer_email, subject, html)
+                print(f"[RECORDS] ✅ Sent booking status update email to customer: {customer_email}")
 
-            # Send notification to agent if status changed
-            if booking.get("agent_id"):
-                agent_users = await db.select("users", filters={"id": booking.get("agent_id")})
+            # Send notification to agent if status changed or agent was assigned
+            # Use updated agent_id if it was changed, otherwise use existing
+            agent_id_to_notify = update_data.get("agent_id") if "agent_id" in update_data else booking.get("agent_id")
+            
+            # Also check if property has an assigned agent
+            if not agent_id_to_notify and property_details:
+                agent_id_to_notify = property_details.get("agent_id") or property_details.get("assigned_agent_id")
+            
+            if agent_id_to_notify:
+                agent_users = await db.select("users", filters={"id": agent_id_to_notify})
                 if agent_users and agent_users[0].get("email"):
                     agent_email = agent_users[0]["email"]
+                    agent_name = f"{agent_users[0].get('first_name', '')} {agent_users[0].get('last_name', '')}".strip() or "Agent"
                     agent_subject, agent_html = booking_status_email(
                         booking, property_details, update.status, update.agent_notes, is_agent=True
                     )
                     await send_email(agent_email, agent_subject, agent_html)
+                    print(f"[RECORDS] ✅ Sent booking status update email to agent {agent_name}: {agent_email}")
+            
+            # If agent was just assigned, send assignment notification email
+            if "agent_id" in update_data and update_data["agent_id"] and update_data["agent_id"] != booking.get("agent_id"):
+                try:
+                    new_agent_users = await db.select("users", filters={"id": update_data["agent_id"]})
+                    if new_agent_users and new_agent_users[0].get("email"):
+                        new_agent_email = new_agent_users[0]["email"]
+                        new_agent_name = f"{new_agent_users[0].get('first_name', '')} {new_agent_users[0].get('last_name', '')}".strip() or "Agent"
+                        
+                        # Send assignment notification to agent
+                        from ..services.templates import booking_notification_email
+                        assignment_html = booking_notification_email(
+                            new_agent_name,
+                            customer_name or "Customer",
+                            customer_email or booking.get("email", "N/A"),
+                            property_details.get("title", "Property") if property_details else "Property",
+                            booking.get("booking_date", "TBD"),
+                            booking.get("booking_time", "TBD")
+                        )
+                        await send_email(
+                            to=new_agent_email,
+                            subject=f"New Booking Assignment - {property_details.get('title', 'Property') if property_details else 'Property'}",
+                            html=assignment_html
+                        )
+                        print(f"[RECORDS] ✅ Sent booking assignment email to agent {new_agent_name}: {new_agent_email}")
+                        
+                        # Also notify customer that agent has been assigned
+                        if customer_email:
+                            customer_assignment_html = f"""
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <meta charset="utf-8">
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            </head>
+                            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                                <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                    <div style="background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); padding: 40px 20px; text-align: center;">
+                                        <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Agent Assigned</h1>
+                                    </div>
+                                    <div style="padding: 40px 30px;">
+                                        <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {customer_name},</h2>
+                                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                            Great news! An agent has been assigned to your booking for <strong>{property_details.get('title', 'the property') if property_details else 'the property'}</strong>.
+                                        </p>
+                                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                            <strong>Assigned Agent:</strong> {new_agent_name}
+                                        </p>
+                                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                            Your agent will be in touch with you shortly regarding your tour booking scheduled for <strong>{booking.get('booking_date', 'TBD')}</strong> at <strong>{booking.get('booking_time', 'TBD')}</strong>.
+                                        </p>
+                                    </div>
+                                </div>
+                            </body>
+                            </html>
+                            """
+                            await send_email(
+                                to=customer_email,
+                                subject=f"Agent Assigned to Your Booking - {property_details.get('title', 'Property') if property_details else 'Property'}",
+                                html=customer_assignment_html
+                            )
+                            print(f"[RECORDS] ✅ Sent agent assignment notification to customer: {customer_email}")
+                except Exception as assignment_error:
+                    print(f"[RECORDS] Error sending assignment notification: {assignment_error}")
 
         except Exception as email_error:
             print(f"[RECORDS] Email notification error: {email_error}")
@@ -736,15 +836,20 @@ async def update_booking(booking_id: str, update: BookingUpdateRequest):
             "agent_name": None
         }
         
-        # Add agent name if assigned
-        if booking.get("agent_id"):
+        # Add agent name if assigned (use updated agent_id if changed)
+        agent_id_for_response = update_data.get("agent_id") if "agent_id" in update_data else booking.get("agent_id")
+        if agent_id_for_response:
             try:
-                agent_users = await db.select("users", filters={"id": booking.get("agent_id")})
+                agent_users = await db.select("users", filters={"id": agent_id_for_response})
                 if agent_users:
                     agent = agent_users[0]
                     response_data["agent_name"] = f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip()
+                    response_data["agent_id"] = agent_id_for_response
             except Exception as agent_error:
                 print(f"[RECORDS] Error fetching agent details: {agent_error}")
+        else:
+            response_data["agent_id"] = None
+            response_data["agent_name"] = None
         
         return response_data
     except Exception as e:

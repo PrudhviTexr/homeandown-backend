@@ -69,40 +69,466 @@ async def create_user(payload: SignupRequest, _=Depends(require_api_key)):
 
 @router.patch("/users/{user_id}")
 async def update_user(user_id: str, payload: UpdateProfileRequest, _=Depends(require_api_key)):
+    """Update user - PATCH method (handles status and verification_status changes)"""
     try:
         update_data = payload.dict(exclude_unset=True)
         
-        # Admin override logic for status
-        # Only auto-set status to inactive if verification is explicitly rejected
-        # Allow pending status for resubmission scenarios
+        # Admin override logic for status and verification_status
+        # Allow admin to change status independently of verification_status
         if 'verification_status' in update_data:
             if update_data['verification_status'] == 'rejected':
-                # User is rejected, force status to inactive
-                if 'status' not in update_data:  # Only if status not explicitly set
+                # User is rejected, set status to inactive if not explicitly set
+                if 'status' not in update_data:
                     update_data['status'] = 'inactive'
-                    print(f"[ADMIN] Admin override: Setting user {user_id} status to 'inactive' due to rejection.")
+                # Reset email_verified when rejected
+                update_data['email_verified'] = False
+                print(f"[ADMIN] User {user_id} set to rejected: email_verified=False, status={update_data.get('status')}")
+            elif update_data['verification_status'] == 'verified':
+                # When admin sets verification_status to verified, also set email_verified to True
+                update_data['email_verified'] = True
+                update_data['email_verified_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
+                # Set status to active if not explicitly set
+                if 'status' not in update_data:
+                    update_data['status'] = 'active'
+                print(f"[ADMIN] User {user_id} set to verified: email_verified=True, status={update_data.get('status')}")
             elif update_data['verification_status'] == 'pending':
-                # User is pending resubmission - allow admin to set status explicitly
-                # Don't override status if admin has set it
-                print(f"[ADMIN] User {user_id} set to pending. Status will be: {update_data.get('status', 'not changed')}")
+                # User is pending - allow admin to set status independently
+                print(f"[ADMIN] User {user_id} set to pending: status={update_data.get('status', 'not changed')}")
+        
+        # Allow status changes independently
+        # Admin can set status to active/inactive regardless of verification_status
+        if 'status' in update_data:
+            print(f"[ADMIN] User {user_id} status changed to: {update_data['status']}")
 
         if update_data:
             update_data["updated_at"] = dt.datetime.utcnow().isoformat()
-            return await db.update("users", update_data, {"id": user_id})
+            result = await db.update("users", update_data, {"id": user_id})
+            print(f"[ADMIN] User {user_id} updated successfully via PATCH")
+            
+            # Send email notification for status/verification_status changes (same logic as PUT method)
+            try:
+                # Get updated user data
+                updated_user_data = await db.select("users", filters={"id": user_id})
+                if updated_user_data:
+                    updated_user = updated_user_data[0]
+                    user_email = updated_user.get('email')
+                    user_name = f"{updated_user.get('first_name', '')} {updated_user.get('last_name', '')}".strip() or "User"
+                    user_type = updated_user.get('user_type', 'user').lower()
+                    
+                    # Check if status or verification_status changed
+                    status_changed = 'status' in update_data
+                    verification_changed = 'verification_status' in update_data
+                    
+                    if status_changed or verification_changed:
+                        new_status = update_data.get('status', updated_user.get('status'))
+                        new_verification = update_data.get('verification_status', updated_user.get('verification_status'))
+                        
+                        # Use the same email logic as PUT method
+                        if new_verification == 'verified' and verification_changed:
+                            subject = "Your Home & Own Account Has Been Verified"
+                            html_content = f"""
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <meta charset="utf-8">
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            </head>
+                            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                                <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                    <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 20px; text-align: center;">
+                                        <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Account Verified!</h1>
+                                    </div>
+                                    <div style="padding: 40px 30px;">
+                                        <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user_name},</h2>
+                                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                            Congratulations! Your {user_type} account on Home & Own has been verified and is now active.
+                                        </p>
+                                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                            You can now access all features of your account and start using the platform.
+                                        </p>
+                                        <div style="text-align: center; margin: 40px 0;">
+                                            <a href="https://homeandown.com/login" 
+                                               style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                                      color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                                      font-weight: 600; font-size: 16px;">
+                                                Login to Your Account
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </body>
+                            </html>
+                            """
+                            email_result = await send_email(to=user_email, subject=subject, html=html_content)
+                            if email_result.get("status") == "sent":
+                                print(f"[ADMIN] ✅ Sent verification email to user: {user_email}")
+                            else:
+                                print(f"[ADMIN] ⚠️ Failed to send verification email: {email_result.get('error', 'Unknown error')}")
+                        elif new_verification == 'rejected' and verification_changed:
+                            reason = update_data.get('rejection_reason', 'Not specified')
+                            subject = "Update on Your Home & Own Application"
+                            html_content = f"""
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <meta charset="utf-8">
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            </head>
+                            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                                <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                    <div style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 40px 20px; text-align: center;">
+                                        <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Application Update</h1>
+                                    </div>
+                                    <div style="padding: 40px 30px;">
+                                        <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user_name},</h2>
+                                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                            Thank you for your application to Home & Own. After careful review, we regret to inform you that your application has been rejected.
+                                        </p>
+                                        <div style="background-color: #fee2e2; border-left: 4px solid #ef4444; padding: 16px; margin: 30px 0; border-radius: 4px;">
+                                            <p style="color: #991b1b; font-size: 14px; margin: 0;"><strong>Reason:</strong> {reason}</p>
+                                        </div>
+                                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 30px 0 20px 0;">
+                                            If you have any questions or would like to appeal this decision, please contact our support team.
+                                        </p>
+                                    </div>
+                                </div>
+                            </body>
+                            </html>
+                            """
+                            email_result = await send_email(to=user_email, subject=subject, html=html_content)
+                            if email_result.get("status") == "sent":
+                                print(f"[ADMIN] ✅ Sent rejection email to user: {user_email}")
+                            else:
+                                print(f"[ADMIN] ⚠️ Failed to send rejection email: {email_result.get('error', 'Unknown error')}")
+                        elif new_status == 'inactive' and status_changed:
+                            subject = "Your Home & Own Account Status Update"
+                            html_content = f"""
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <meta charset="utf-8">
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            </head>
+                            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                                <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                    <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); padding: 40px 20px; text-align: center;">
+                                        <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Account Status Update</h1>
+                                    </div>
+                                    <div style="padding: 40px 30px;">
+                                        <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user_name},</h2>
+                                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                            Your {user_type} account status has been changed to <strong>Inactive</strong>.
+                                        </p>
+                                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                            If you have any questions about this change, please contact our support team.
+                                        </p>
+                                    </div>
+                                </div>
+                            </body>
+                            </html>
+                            """
+                            email_result = await send_email(to=user_email, subject=subject, html=html_content)
+                            if email_result.get("status") == "sent":
+                                print(f"[ADMIN] ✅ Sent inactive status email to user: {user_email}")
+                            else:
+                                print(f"[ADMIN] ⚠️ Failed to send inactive status email: {email_result.get('error', 'Unknown error')}")
+                        elif new_status == 'active' and status_changed:
+                            subject = "Your Home & Own Account Has Been Activated"
+                            html_content = f"""
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <meta charset="utf-8">
+                                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            </head>
+                            <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                                <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                    <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 20px; text-align: center;">
+                                        <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Account Activated!</h1>
+                                    </div>
+                                    <div style="padding: 40px 30px;">
+                                        <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user_name},</h2>
+                                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                            Great news! Your {user_type} account has been activated and is now active on Home & Own.
+                                        </p>
+                                        <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                            You can now access all features of your account.
+                                        </p>
+                                        <div style="text-align: center; margin: 40px 0;">
+                                            <a href="https://homeandown.com/login" 
+                                               style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                                      color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                                      font-weight: 600; font-size: 16px;">
+                                                Login to Your Account
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </body>
+                            </html>
+                            """
+                            email_result = await send_email(to=user_email, subject=subject, html=html_content)
+                            if email_result.get("status") == "sent":
+                                print(f"[ADMIN] ✅ Sent activation email to user: {user_email}")
+                            else:
+                                print(f"[ADMIN] ⚠️ Failed to send activation email: {email_result.get('error', 'Unknown error')}")
+            except Exception as email_error:
+                import traceback
+                print(f"[ADMIN] Error sending status change email: {email_error}")
+                print(traceback.format_exc())
+                # Don't fail the update if email fails
+            
+            return result
         return {"message": "No changes to update"}
     except Exception as e:
+        import traceback
+        print(f"[ADMIN] Error updating user {user_id}: {e}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/users/{user_id}")
 async def update_user_put(user_id: str, request: Request, _=Depends(require_api_key)):
-    """Update a user - PUT method"""
+    """Update a user - PUT method (handles status and verification_status changes)"""
     try:
         payload = await request.json()
-        if payload:
-            payload["updated_at"] = dt.datetime.utcnow().isoformat()
-            return await db.update("users", payload, {"id": user_id})
-        return {"message": "No changes to update"}
+        if not payload:
+            return {"message": "No changes to update"}
+        
+        update_data = payload.copy()
+        
+        # Handle status and verification_status changes properly
+        # Allow admin to change status independently of verification_status
+        if 'verification_status' in update_data:
+            if update_data['verification_status'] == 'rejected':
+                # When rejected, set email_verified to False
+                if 'email_verified' not in update_data:
+                    update_data['email_verified'] = False
+                # Only set status to inactive if status is not explicitly provided
+                if 'status' not in update_data:
+                    update_data['status'] = 'inactive'
+                print(f"[ADMIN] User {user_id} set to rejected: email_verified=False, status={update_data.get('status')}")
+            elif update_data['verification_status'] == 'verified':
+                # When verified, set email_verified to True
+                if 'email_verified' not in update_data:
+                    update_data['email_verified'] = True
+                    update_data['email_verified_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
+                # Only set status to active if status is not explicitly provided
+                if 'status' not in update_data:
+                    update_data['status'] = 'active'
+                print(f"[ADMIN] User {user_id} set to verified: email_verified=True, status={update_data.get('status')}")
+            elif update_data['verification_status'] == 'pending':
+                # When set to pending, allow status to be set independently
+                print(f"[ADMIN] User {user_id} set to pending: status={update_data.get('status', 'not changed')}")
+        
+        # Allow status changes independently
+        # Admin can set status to active/inactive regardless of verification_status
+        if 'status' in update_data:
+            print(f"[ADMIN] User {user_id} status changed to: {update_data['status']}")
+        
+        update_data["updated_at"] = dt.datetime.utcnow().isoformat()
+        result = await db.update("users", update_data, {"id": user_id})
+        
+        # Send email notification for status/verification_status changes
+        try:
+            # Get updated user data
+            updated_user_data = await db.select("users", filters={"id": user_id})
+            if updated_user_data:
+                updated_user = updated_user_data[0]
+                user_email = updated_user.get('email')
+                user_name = f"{updated_user.get('first_name', '')} {updated_user.get('last_name', '')}".strip() or "User"
+                user_type = updated_user.get('user_type', 'user').lower()
+                
+                # Check if status or verification_status changed
+                status_changed = 'status' in update_data
+                verification_changed = 'verification_status' in update_data
+                
+                if status_changed or verification_changed:
+                    new_status = update_data.get('status', updated_user.get('status'))
+                    new_verification = update_data.get('verification_status', updated_user.get('verification_status'))
+                    
+                    # Determine email content based on changes
+                    if new_verification == 'verified' and verification_changed:
+                        subject = "Your Home & Own Account Has Been Verified"
+                        html_content = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <meta charset="utf-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        </head>
+                        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                            <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 20px; text-align: center;">
+                                    <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Account Verified!</h1>
+                                </div>
+                                <div style="padding: 40px 30px;">
+                                    <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user_name},</h2>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                        Congratulations! Your {user_type} account on Home & Own has been verified and is now active.
+                                    </p>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                        You can now access all features of your account and start using the platform.
+                                    </p>
+                                    <div style="text-align: center; margin: 40px 0;">
+                                        <a href="https://homeandown.com/login" 
+                                           style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                                  color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                                  font-weight: 600; font-size: 16px;">
+                                            Login to Your Account
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </body>
+                        </html>
+                        """
+                    elif new_verification == 'rejected' and verification_changed:
+                        reason = update_data.get('rejection_reason', 'Not specified')
+                        subject = "Update on Your Home & Own Application"
+                        html_content = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <meta charset="utf-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        </head>
+                        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                            <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                <div style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 40px 20px; text-align: center;">
+                                    <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Application Update</h1>
+                                </div>
+                                <div style="padding: 40px 30px;">
+                                    <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user_name},</h2>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                        Thank you for your application to Home & Own. After careful review, we regret to inform you that your application has been rejected.
+                                    </p>
+                                    <div style="background-color: #fee2e2; border-left: 4px solid #ef4444; padding: 16px; margin: 30px 0; border-radius: 4px;">
+                                        <p style="color: #991b1b; font-size: 14px; margin: 0;"><strong>Reason:</strong> {reason}</p>
+                                    </div>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 30px 0 20px 0;">
+                                        If you have any questions or would like to appeal this decision, please contact our support team.
+                                    </p>
+                                </div>
+                            </div>
+                        </body>
+                        </html>
+                        """
+                    elif new_status == 'inactive' and status_changed:
+                        subject = "Your Home & Own Account Status Update"
+                        html_content = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <meta charset="utf-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        </head>
+                        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                            <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); padding: 40px 20px; text-align: center;">
+                                    <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Account Status Update</h1>
+                                </div>
+                                <div style="padding: 40px 30px;">
+                                    <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user_name},</h2>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                        Your {user_type} account status has been changed to <strong>Inactive</strong>.
+                                    </p>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                        If you have any questions about this change, please contact our support team.
+                                    </p>
+                                </div>
+                            </div>
+                        </body>
+                        </html>
+                        """
+                    elif new_status == 'active' and status_changed:
+                        subject = "Your Home & Own Account Has Been Activated"
+                        html_content = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <meta charset="utf-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        </head>
+                        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                            <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 20px; text-align: center;">
+                                    <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Account Activated!</h1>
+                                </div>
+                                <div style="padding: 40px 30px;">
+                                    <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user_name},</h2>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                        Great news! Your {user_type} account has been activated and is now active.
+                                    </p>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                        You can now access all features of your account.
+                                    </p>
+                                    <div style="text-align: center; margin: 40px 0;">
+                                        <a href="https://homeandown.com/login" 
+                                           style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                                  color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                                  font-weight: 600; font-size: 16px;">
+                                            Login to Your Account
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </body>
+                        </html>
+                        """
+                    else:
+                        # Generic status update
+                        subject = "Your Home & Own Account Status Update"
+                        html_content = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <meta charset="utf-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        </head>
+                        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                            <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                <div style="background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); padding: 40px 20px; text-align: center;">
+                                    <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Account Status Update</h1>
+                                </div>
+                                <div style="padding: 40px 30px;">
+                                    <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user_name},</h2>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                        Your {user_type} account status has been updated.
+                                    </p>
+                                    <div style="background-color: #f0f9ff; border-left: 4px solid #2563eb; padding: 16px; margin: 30px 0; border-radius: 4px;">
+                                        <p style="color: #1e293b; font-size: 14px; margin: 5px 0;"><strong>Status:</strong> {new_status or 'N/A'}</p>
+                                        <p style="color: #1e293b; font-size: 14px; margin: 5px 0;"><strong>Verification:</strong> {new_verification or 'N/A'}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </body>
+                        </html>
+                        """
+                    
+                    if user_email and (status_changed or verification_changed):
+                        email_result = await send_email(to=user_email, subject=subject, html=html_content)
+                        if email_result.get("status") == "sent":
+                            print(f"[ADMIN] ✅ Sent status update email to user: {user_email}")
+                        else:
+                            print(f"[ADMIN] ⚠️ Failed to send status update email: {email_result.get('error', 'Unknown error')}")
+                            print(f"[ADMIN] Email result: {email_result}")
+        except Exception as email_error:
+            print(f"[ADMIN] ⚠️ Failed to send status update email: {email_error}")
+            import traceback
+            print(traceback.format_exc())
+            # Don't fail the update if email fails
+        
+        print(f"[ADMIN] User {user_id} updated successfully")
+        
+        # Return updated user data for frontend refresh
+        updated_user_data = await db.select("users", filters={"id": user_id})
+        if updated_user_data:
+            return updated_user_data[0]
+        return result
     except Exception as e:
+        import traceback
+        print(f"[ADMIN] Error updating user {user_id}: {e}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/users/{user_id}")
@@ -293,9 +719,16 @@ async def reject_property(property_id: str, request: Request, _=Depends(require_
                         user = user_data[0]
                         subject = f"An update on your property listing '{prop.get('title')}'"
                         html_content = f"<p>Hi {user.get('first_name')},</p><p>We have reviewed your property listing, <strong>{prop.get('title')}</strong>. We regret to inform you that it has been rejected.</p><p><strong>Reason:</strong> {reason}</p>"
-                        await send_email(to=user.get('email'), subject=subject, html=html_content)
+                        email_result = await send_email(to=user.get('email'), subject=subject, html=html_content)
+                        if email_result.get("status") == "sent":
+                            print(f"[ADMIN] ✅ Sent property rejection email to: {user.get('email')}")
+                        else:
+                            print(f"[ADMIN] ⚠️ Failed to send property rejection email: {email_result.get('error', 'Unknown error')}")
+                            print(f"[ADMIN] Email result: {email_result}")
         except Exception as email_error:
-            print(f"[ADMIN] !!! Failed to send property rejection email: {email_error}")
+            print(f"[ADMIN] !!! Exception sending property rejection email: {email_error}")
+            import traceback
+            print(traceback.format_exc())
 
         return result
     except Exception as e:
@@ -328,9 +761,16 @@ async def resubmit_property(property_id: str, request: Request, _=Depends(requir
                         user = user_data[0]
                         subject = f"Action required for your property listing '{prop.get('title')}'"
                         html_content = f"<p>Hi {user.get('first_name')},</p><p>Regarding your property listing, <strong>{prop.get('title')}</strong>, we require some changes before it can be approved.</p><p><strong>Reason:</strong> {reason}</p><p>Please log in to your account to edit and resubmit your property for review.</p>"
-                        await send_email(to=user.get('email'), subject=subject, html=html_content)
+                        email_result = await send_email(to=user.get('email'), subject=subject, html=html_content)
+                        if email_result.get("status") == "sent":
+                            print(f"[ADMIN] ✅ Sent property resubmission email to: {user.get('email')}")
+                        else:
+                            print(f"[ADMIN] ⚠️ Failed to send property resubmission email: {email_result.get('error', 'Unknown error')}")
+                            print(f"[ADMIN] Email result: {email_result}")
         except Exception as email_error:
-            print(f"[ADMIN] !!! Failed to send property resubmission email: {email_error}")
+            print(f"[ADMIN] !!! Exception sending property resubmission email: {email_error}")
+            import traceback
+            print(traceback.format_exc())
 
         return result
     except Exception as e:
@@ -357,7 +797,7 @@ async def assign_agent(property_id: str, payload: dict, _=Depends(require_api_ke
         
         print(f"[ADMIN] Assigned agent {agent_id} to property {property_id}")
 
-        # Send email notification with proper email template
+        # Send email notifications to BOTH agent and property owner/seller
         try:
             property_data = await db.select("properties", filters={"id": property_id})
             agent_data = await db.select("users", filters={"id": agent_id})
@@ -367,9 +807,23 @@ async def assign_agent(property_id: str, payload: dict, _=Depends(require_api_ke
                 agent = agent_data[0]
                 agent_name = f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip() or "Agent"
                 agent_email = agent.get('email')
+                agent_phone = agent.get('phone_number', 'N/A')
+                agent_license = agent.get('agent_license_number') or agent.get('license_number') or agent.get('custom_id', 'N/A')
                 
+                # Get property owner/seller information
+                owner_id = prop.get('owner_id') or prop.get('seller_id')
+                owner_data = None
+                owner_email = None
+                owner_name = None
+                if owner_id:
+                    owner_records = await db.select("users", filters={"id": owner_id})
+                    if owner_records:
+                        owner_data = owner_records[0]
+                        owner_email = owner_data.get('email')
+                        owner_name = f"{owner_data.get('first_name', '')} {owner_data.get('last_name', '')}".strip() or "Property Owner"
+                
+                # Send email to AGENT
                 if agent_email:
-                    # Use proper email template service
                     try:
                         from ..services.templates import get_property_assignment_email
                         html_content = await get_property_assignment_email(
@@ -380,54 +834,134 @@ async def assign_agent(property_id: str, payload: dict, _=Depends(require_api_ke
                             property_price=prop.get('price') or prop.get('monthly_rent', 'N/A')
                         )
                         subject = f"New Property Assignment: {prop.get('title', 'Property')} - Home & Own"
-                        
-                        await send_email(to=agent_email, subject=subject, html=html_content)
-                        print(f"[ADMIN] ✅ Successfully sent agent assignment email to: {agent_email}")
-
+                        email_result = await send_email(to=agent_email, subject=subject, html=html_content)
+                        if email_result.get("status") == "sent":
+                            print(f"[ADMIN] ✅ Sent agent assignment email to: {agent_email}")
+                        else:
+                            print(f"[ADMIN] ⚠️ Failed to send agent assignment email: {email_result.get('error', 'Unknown error')}")
+                            print(f"[ADMIN] Email result: {email_result}")
                     except Exception as template_error:
-                        # Add more detailed logging
                         import traceback
-                        print(f"[ADMIN] !!! Email template error, using fallback: {template_error}")
+                        print(f"[ADMIN] Email template error, using fallback: {template_error}")
                         print(traceback.format_exc())
-                        # Fallback simple email
+                        # Fallback email for agent
                         subject = f"You have been assigned to a new property: {prop.get('title')}"
                         html_content = f"""
+                        <!DOCTYPE html>
                         <html>
-                        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                                <h2 style="color: #2563eb;">New Property Assignment</h2>
-                                <p>Hi {agent_name},</p>
-                                <p>You have been assigned as the agent for a new property:</p>
-                                <div style="background-color: #f0f9ff; border-left: 4px solid #2563eb; padding: 15px; margin: 20px 0;">
-                                    <p><strong>Property:</strong> {prop.get('title', 'Property')}</p>
-                                    <p><strong>Address:</strong> {prop.get('address', prop.get('city', 'N/A'))}</p>
-                                    {f'<p><strong>Price:</strong> ₹{prop.get("price"):,}</p>' if prop.get('price') else ''}
-                                    {f'<p><strong>Monthly Rent:</strong> ₹{prop.get("monthly_rent"):,}</p>' if prop.get('monthly_rent') else ''}
+                        <head>
+                            <meta charset="utf-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        </head>
+                        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                            <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                <div style="background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); padding: 40px 20px; text-align: center;">
+                                    <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">New Property Assignment</h1>
                                 </div>
-                                <p>You can view and manage this property in your agent dashboard.</p>
-                                <div style="text-align: center; margin: 30px 0;">
+                                <div style="padding: 40px 30px;">
+                                    <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {agent_name},</h2>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                        You have been assigned as the agent for a new property on Home & Own.
+                                    </p>
+                                    <div style="background-color: #f0f9ff; border-left: 4px solid #2563eb; padding: 20px; margin: 30px 0; border-radius: 4px;">
+                                        <p style="color: #1e293b; font-size: 18px; font-weight: 600; margin: 0 0 10px 0;">{prop.get('title', 'Property')}</p>
+                                        <p style="color: #475569; font-size: 14px; margin: 5px 0;"><strong>Address:</strong> {prop.get('address', prop.get('city', 'N/A'))}</p>
+                                        {f'<p style="color: #475569; font-size: 14px; margin: 5px 0;"><strong>Price:</strong> ₹{prop.get("price"):,}</p>' if prop.get('price') else ''}
+                                        {f'<p style="color: #475569; font-size: 14px; margin: 5px 0;"><strong>Monthly Rent:</strong> ₹{prop.get("monthly_rent"):,}/month</p>' if prop.get('monthly_rent') else ''}
+                                    </div>
+                                    <div style="text-align: center; margin: 40px 0;">
                                     <a href="https://homeandown.com/agent/dashboard" 
-                                       style="background-color: #2563eb; color: white; padding: 12px 30px; 
-                                              text-decoration: none; border-radius: 5px; display: inline-block;">
+                                           style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                                  color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                                  font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);">
                                         View Dashboard
                                     </a>
                                 </div>
-                                <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
-                                <p style="color: #999; font-size: 12px;">© 2025 Home & Own. All rights reserved.</p>
+                                </div>
                             </div>
                         </body>
                         </html>
                         """
-                        
-                        await send_email(to=agent_email, subject=subject, html=html_content)
-                        print(f"[ADMIN] ✅ Successfully sent FALLBACK agent assignment email to: {agent_email}")
-
+                        email_result = await send_email(to=agent_email, subject=subject, html=html_content)
+                        if email_result.get("status") == "sent":
+                            print(f"[ADMIN] ✅ Sent fallback agent assignment email to: {agent_email}")
+                        else:
+                            print(f"[ADMIN] ⚠️ Failed to send agent assignment email: {email_result.get('error', 'Unknown error')}")
+                            print(f"[ADMIN] Email result: {email_result}")
                 else:
                     print(f"[ADMIN] ⚠️ Agent email not found for agent_id: {agent_id}")
+                
+                # Send email to PROPERTY OWNER/SELLER with agent contact details
+                if owner_email:
+                    try:
+                        subject = f"Agent Assigned to Your Property: {prop.get('title', 'Property')} - Home & Own"
+                        html_content = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <meta charset="utf-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        </head>
+                        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                            <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                                <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 20px; text-align: center;">
+                                    <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Agent Assigned to Your Property</h1>
+                                </div>
+                                <div style="padding: 40px 30px;">
+                                    <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {owner_name},</h2>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                        Great news! An agent has been assigned to your property listing on Home & Own.
+                                    </p>
+                                    <div style="background-color: #f0f9ff; border-left: 4px solid #2563eb; padding: 20px; margin: 30px 0; border-radius: 4px;">
+                                        <p style="color: #1e293b; font-size: 18px; font-weight: 600; margin: 0 0 15px 0;">Your Property</p>
+                                        <p style="color: #475569; font-size: 14px; margin: 5px 0;"><strong>Title:</strong> {prop.get('title', 'Property')}</p>
+                                        <p style="color: #475569; font-size: 14px; margin: 5px 0;"><strong>Address:</strong> {prop.get('address', prop.get('city', 'N/A'))}</p>
+                                    </div>
+                                    <div style="background-color: #d1fae5; border-left: 4px solid #10b981; padding: 20px; margin: 30px 0; border-radius: 4px;">
+                                        <p style="color: #065f46; font-size: 18px; font-weight: 600; margin: 0 0 15px 0;">Assigned Agent Details</p>
+                                        <p style="color: #065f46; font-size: 14px; margin: 5px 0;"><strong>Name:</strong> {agent_name}</p>
+                                        <p style="color: #065f46; font-size: 14px; margin: 5px 0;"><strong>Email:</strong> <a href="mailto:{agent_email}" style="color: #059669; text-decoration: none;">{agent_email}</a></p>
+                                        <p style="color: #065f46; font-size: 14px; margin: 5px 0;"><strong>Phone:</strong> <a href="tel:{agent_phone}" style="color: #059669; text-decoration: none;">{agent_phone}</a></p>
+                                        {f'<p style="color: #065f46; font-size: 14px; margin: 5px 0;"><strong>License Number:</strong> {agent_license}</p>' if agent_license != 'N/A' else ''}
+                                    </div>
+                                    <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 30px 0 20px 0;">
+                                        Your assigned agent will help you manage inquiries, bookings, and property viewings. Feel free to contact them directly using the information above.
+                                    </p>
+                                    <div style="text-align: center; margin: 40px 0;">
+                                        <a href="https://homeandown.com/login" 
+                                           style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                                  color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                                  font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);">
+                                            View Your Property
+                                        </a>
+                                    </div>
+                                </div>
+                                <div style="background-color: #f8fafc; padding: 30px; border-top: 1px solid #e2e8f0; text-align: center;">
+                                    <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
+                                        Best regards,<br>
+                                        <strong>The Home & Own Team</strong>
+                                    </p>
+                                </div>
+                            </div>
+                        </body>
+                        </html>
+                        """
+                        email_result = await send_email(to=owner_email, subject=subject, html=html_content)
+                        if email_result.get("status") == "sent":
+                            print(f"[ADMIN] ✅ Sent property assignment notification to owner/seller: {owner_email}")
+                        else:
+                            print(f"[ADMIN] ⚠️ Failed to send email to property owner: {email_result.get('error', 'Unknown error')}")
+                            print(f"[ADMIN] Email result: {email_result}")
+                    except Exception as owner_email_error:
+                        print(f"[ADMIN] ⚠️ Exception sending email to property owner: {owner_email_error}")
+                        import traceback
+                        print(traceback.format_exc())
+                else:
+                    print(f"[ADMIN] ⚠️ Property owner email not found (owner_id: {owner_id})")
             else:
                 print(f"[ADMIN] ⚠️ Property or agent not found")
         except Exception as email_error:
-            print(f"[ADMIN] !!! Failed to send agent assignment email: {email_error}")
+            print(f"[ADMIN] !!! Failed to send assignment emails: {email_error}")
             import traceback
             print(traceback.format_exc())
             # Don't fail the assignment if email fails
@@ -452,15 +986,26 @@ async def list_bookings(_=Depends(require_api_key)):
         property_map = {prop['id']: prop for prop in properties}
 
         for booking in bookings:
-            booking['customer_name'] = user_map.get(booking.get('user_id'), 'N/A')
+            # Get customer name from user_id or booking fields
+            customer_name = user_map.get(booking.get('user_id'), None)
+            if not customer_name:
+                # Fallback to booking name field if user not found
+                customer_name = booking.get('name') or 'N/A'
+            booking['customer_name'] = customer_name
+            
+            # Get property information
             property_info = property_map.get(booking.get('property_id'))
             if property_info:
                 booking['property_title'] = property_info.get('title', 'N/A')
-                agent_id = property_info.get('agent_id')
-                booking['agent_name'] = user_map.get(agent_id, 'Unassigned') if agent_id else 'Unassigned'
             else:
                 booking['property_title'] = 'N/A'
-                booking['agent_name'] = 'N/A'
+            
+            # Get agent name - prioritize booking.agent_id over property.agent_id
+            agent_id = booking.get('agent_id')  # First check booking's direct agent assignment
+            if not agent_id and property_info:
+                agent_id = property_info.get('agent_id') or property_info.get('assigned_agent_id')  # Fallback to property agent
+            booking['agent_name'] = user_map.get(agent_id, 'Unassigned') if agent_id else 'Unassigned'
+            booking['agent_id'] = agent_id  # Ensure agent_id is included in response
         
         return bookings
     except Exception as e:
@@ -522,31 +1067,39 @@ async def approve_user(user_id: str, _=Depends(require_api_key)):
         update_data = {
             "verification_status": "verified",
             "status": "active",  # Ensure status is set to 'active' not 'pending'
+            "email_verified": True,  # Set email_verified to True when admin approves
+            "email_verified_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "updated_at": dt.datetime.utcnow().isoformat()
         }
         
         # For agents, ensure license number is set after approval
         if user_type == 'agent':
             # Get or generate license number
-            license_number = user.get('agent_license_number') or user.get('license_number')
+            license_number = user.get('agent_license_number') or user.get('license_number') or user.get('custom_id')
             if not license_number:
-                # Generate license number from custom_id if available
-                custom_id = user.get('custom_id')
-                if custom_id:
-                    license_number = custom_id
-                else:
-                    # Generate new custom_id for license
-                    try:
-                        from ..services.admin_service import generate_custom_id
-                        license_number = await generate_custom_id('agent')
-                    except Exception as gen_error:
-                        print(f"[ADMIN] Failed to generate license number: {gen_error}")
-                        license_number = f"AGT-{user_id[:8].upper()}"
+                # Generate new license number
+                try:
+                    from ..services.admin_service import generate_custom_id
+                    license_number = await generate_custom_id('agent')
+                    print(f"[ADMIN] Generated new license number: {license_number}")
+                except Exception as gen_error:
+                    print(f"[ADMIN] Failed to generate license number: {gen_error}")
+                    # Fallback to simple format
+                    import time
+                    license_number = f"AGT{int(time.time())%1000000:06d}"
                 
-                # Set license number in both possible fields
+                # Set license number in all possible fields for compatibility
                 update_data['agent_license_number'] = license_number
                 update_data['license_number'] = license_number
+                update_data['custom_id'] = license_number  # Also update custom_id
                 print(f"[ADMIN] Set license number for agent {user_id}: {license_number}")
+            else:
+                # Ensure license number is in all fields
+                update_data['agent_license_number'] = license_number
+                update_data['license_number'] = license_number
+                if not user.get('custom_id'):
+                    update_data['custom_id'] = license_number
+                print(f"[ADMIN] Using existing license number for agent {user_id}: {license_number}")
         
         # For buyers and sellers, ensure license number is set to null or 'NA'
         elif user_type in ['buyer', 'seller']:
@@ -557,20 +1110,88 @@ async def approve_user(user_id: str, _=Depends(require_api_key)):
         
         result = await db.update("users", update_data, {"id": user_id})
 
-        # Send approval email
+        # Send comprehensive approval email
         try:
             updated_user_data = await db.select("users", filters={"id": user_id})
             if updated_user_data:
                 updated_user = updated_user_data[0]
                 license_number = updated_user.get('agent_license_number') or updated_user.get('license_number')
-                subject = "Your Home & Own account has been approved"
-                html_content = f"<p>Hi {updated_user.get('first_name')},</p><p>Congratulations! Your {updated_user.get('user_type')} account on Home & Own has been approved.</p>"
-                if user_type == 'agent' and license_number:
-                    html_content += f"<p><strong>Your License Number:</strong> {license_number}</p>"
-                html_content += "<p>You can now log in and access your dashboard.</p>"
-                await send_email(to=updated_user.get('email'), subject=subject, html=html_content)
+                user_email = updated_user.get('email')
+                user_name = f"{updated_user.get('first_name', '')} {updated_user.get('last_name', '')}".strip() or "User"
+                user_type_display = {
+                    'agent': 'Agent',
+                    'seller': 'Seller',
+                    'buyer': 'Buyer',
+                    'admin': 'Administrator'
+                }.get(user_type, user_type.title())
+                
+                subject = f"Your Home & Own {user_type_display} Account Has Been Approved"
+                html_content = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                </head>
+                <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                    <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                        <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 20px; text-align: center;">
+                            <div style="width: 60px; height: 60px; background-color: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+                                <span style="font-size: 30px; color: #10b981;">✓</span>
+                            </div>
+                            <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Account Approved!</h1>
+                        </div>
+                        <div style="padding: 40px 30px;">
+                            <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Congratulations {user_name}!</h2>
+                            <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                Your {user_type_display} account on Home & Own has been approved and is now active.
+                            </p>
+                            {f'<div style="background-color: #d1fae5; border-left: 4px solid #10b981; padding: 16px; margin: 30px 0; border-radius: 4px;"><p style="color: #065f46; font-size: 14px; margin: 0;"><strong>Your License Number:</strong> {license_number}</p></div>' if user_type == 'agent' and license_number else ''}
+                            <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 30px 0 20px 0;">
+                                You can now log in and access your dashboard to start using all features of the platform.
+                            </p>
+                            <div style="text-align: center; margin: 40px 0;">
+                                <a href="https://homeandown.com/login" 
+                                   style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                          color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                          font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);">
+                                    Login to Your Account
+                                </a>
+                            </div>
+                            <div style="background-color: #f8fafc; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                                <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0; line-height: 1.6;">
+                                    <strong>What you can do now:</strong>
+                                </p>
+                                <ul style="color: #64748b; font-size: 14px; margin: 0; padding-left: 20px; line-height: 1.8;">
+                                    <li>Access your {user_type_display.lower()} dashboard</li>
+                                    <li>Manage your profile and settings</li>
+                                    {f'<li>View and manage assigned properties</li>' if user_type == 'agent' else ''}
+                                    {f'<li>List and manage your properties</li>' if user_type == 'seller' else ''}
+                                    {f'<li>Browse and save properties</li>' if user_type == 'buyer' else ''}
+                                    <li>Contact support if you need assistance</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div style="background-color: #f8fafc; padding: 30px; border-top: 1px solid #e2e8f0; text-align: center;">
+                            <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
+                                Welcome to Home & Own!<br>
+                                <strong>The Home & Own Team</strong>
+                            </p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """
+                email_result = await send_email(to=user_email, subject=subject, html=html_content)
+                if email_result.get("status") == "sent":
+                    print(f"[ADMIN] ✅ Sent comprehensive approval email to: {user_email}")
+                else:
+                    print(f"[ADMIN] ⚠️ Failed to send approval email: {email_result.get('error', 'Unknown error')}")
+                    print(f"[ADMIN] Email result: {email_result}")
         except Exception as email_error:
-            print(f"[ADMIN] !!! Failed to send approval email: {email_error}")
+            print(f"[ADMIN] !!! Exception sending approval email: {email_error}")
+            import traceback
+            print(traceback.format_exc())
 
         return result
     except Exception as e:
@@ -597,9 +1218,16 @@ async def reject_user(user_id: str, request: Request, _=Depends(require_api_key)
                 user = user_data[0]
                 subject = "An update on your Home & Own application"
                 html_content = f"<p>Hi {user.get('first_name')},</p><p>Thank you for your application to Home & Own. After careful review, we regret to inform you that your application has been rejected.</p><p><strong>Reason:</strong> {reason}</p>"
-                await send_email(to=user.get('email'), subject=subject, html=html_content)
+                email_result = await send_email(to=user.get('email'), subject=subject, html=html_content)
+                if email_result.get("status") == "sent":
+                    print(f"[ADMIN] ✅ Sent rejection email to: {user.get('email')}")
+                else:
+                    print(f"[ADMIN] ⚠️ Failed to send rejection email: {email_result.get('error', 'Unknown error')}")
+                    print(f"[ADMIN] Email result: {email_result}")
         except Exception as email_error:
-            print(f"[ADMIN] !!! Failed to send rejection email: {email_error}")
+            print(f"[ADMIN] !!! Exception sending rejection email: {email_error}")
+            import traceback
+            print(traceback.format_exc())
         
         return result
     except Exception as e:
@@ -765,46 +1393,109 @@ async def approve_agent(agent_id: str, request: Request, _=Depends(require_api_k
         user = user_data[0]
         
         # Get or generate license number
-        license_number = user.get('agent_license_number') or user.get('license_number')
+        license_number = user.get('agent_license_number') or user.get('license_number') or user.get('custom_id')
         if not license_number:
-            # Generate from custom_id if available
-            custom_id = user.get('custom_id')
-            if custom_id:
-                license_number = custom_id
-            else:
-                # Generate new license number
-                try:
-                    from ..services.admin_service import generate_custom_id
-                    license_number = await generate_custom_id('agent')
-                except Exception as gen_error:
-                    print(f"[ADMIN] Failed to generate license number: {gen_error}")
-                    license_number = f"AGT-{agent_id[:8].upper()}"
+            # Generate new license number
+            try:
+                from ..services.admin_service import generate_custom_id
+                license_number = await generate_custom_id('agent')
+                print(f"[ADMIN] Generated new license number: {license_number}")
+            except Exception as gen_error:
+                print(f"[ADMIN] Failed to generate license number: {gen_error}")
+                # Fallback to simple format
+                import time
+                license_number = f"AGT{int(time.time())%1000000:06d}"
             
             print(f"[ADMIN] Generated license number for agent {agent_id}: {license_number}")
+        else:
+            print(f"[ADMIN] Using existing license number for agent {agent_id}: {license_number}")
         
         update_data = {
             "verification_status": "verified",
             "status": "active",  # Ensure status is 'active' not 'pending'
             "agent_license_number": license_number,
             "license_number": license_number,  # Set both fields for compatibility
+            "custom_id": license_number,  # Also update custom_id
             "updated_at": dt.datetime.utcnow().isoformat()
         }
         result = await db.update("users", update_data, {"id": agent_id})
 
-        # Send approval email
+        # Send comprehensive approval email
         try:
             updated_user_data = await db.select("users", filters={"id": agent_id})
             if updated_user_data:
                 updated_user = updated_user_data[0]
                 final_license = updated_user.get('agent_license_number') or updated_user.get('license_number') or license_number
-                subject = "Your Home & Own agent account has been approved"
-                html_content = f"<p>Hi {updated_user.get('first_name')},</p><p>Congratulations! Your agent account on Home & Own has been approved.</p>"
-                if final_license:
-                    html_content += f"<p><strong>Your License Number:</strong> {final_license}</p>"
-                html_content += f"<p>You can now log in and access your dashboard.</p><p><strong>Notes:</strong> {approval_notes}</p>"
-                await send_email(to=updated_user.get('email'), subject=subject, html=html_content)
+                agent_email = updated_user.get('email')
+                agent_name = f"{updated_user.get('first_name', '')} {updated_user.get('last_name', '')}".strip() or "Agent"
+                
+                subject = "Your Home & Own Agent Account Has Been Approved"
+                html_content = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                </head>
+                <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                    <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                        <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 20px; text-align: center;">
+                            <div style="width: 60px; height: 60px; background-color: white; border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+                                <span style="font-size: 30px; color: #10b981;">✓</span>
+                            </div>
+                            <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Agent Account Approved!</h1>
+                        </div>
+                        <div style="padding: 40px 30px;">
+                            <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Congratulations {agent_name}!</h2>
+                            <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                Your agent account on Home & Own has been approved and is now active.
+                            </p>
+                            {f'<div style="background-color: #d1fae5; border-left: 4px solid #10b981; padding: 16px; margin: 30px 0; border-radius: 4px;"><p style="color: #065f46; font-size: 16px; margin: 0;"><strong>Your License Number:</strong> <span style="font-family: monospace; font-size: 18px;">{final_license}</span></p></div>' if final_license else ''}
+                            {f'<div style="background-color: #f0f9ff; border-left: 4px solid #2563eb; padding: 16px; margin: 30px 0; border-radius: 4px;"><p style="color: #1e293b; font-size: 14px; margin: 0;"><strong>Admin Notes:</strong> {approval_notes}</p></div>' if approval_notes else ''}
+                            <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 30px 0 20px 0;">
+                                You can now log in and access your agent dashboard to start managing properties, inquiries, and bookings.
+                            </p>
+                            <div style="text-align: center; margin: 40px 0;">
+                                <a href="https://homeandown.com/agent/login" 
+                                   style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                          color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                          font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);">
+                                    Login to Agent Dashboard
+                                </a>
+                            </div>
+                            <div style="background-color: #f8fafc; border-radius: 8px; padding: 20px; margin: 30px 0;">
+                                <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0; line-height: 1.6;">
+                                    <strong>As an approved agent, you can:</strong>
+                                </p>
+                                <ul style="color: #64748b; font-size: 14px; margin: 0; padding-left: 20px; line-height: 1.8;">
+                                    <li>View and manage assigned properties</li>
+                                    <li>Respond to inquiries and bookings</li>
+                                    <li>Schedule property viewings</li>
+                                    <li>Track your performance and earnings</li>
+                                    <li>Update your profile and contact information</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div style="background-color: #f8fafc; padding: 30px; border-top: 1px solid #e2e8f0; text-align: center;">
+                            <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
+                                Welcome to the Home & Own agent team!<br>
+                                <strong>The Home & Own Team</strong>
+                            </p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """
+                email_result = await send_email(to=agent_email, subject=subject, html=html_content)
+                if email_result.get("status") == "sent":
+                    print(f"[ADMIN] ✅ Sent comprehensive agent approval email to: {agent_email}")
+                else:
+                    print(f"[ADMIN] ⚠️ Failed to send agent approval email: {email_result.get('error', 'Unknown error')}")
+                    print(f"[ADMIN] Email result: {email_result}")
         except Exception as email_error:
-            print(f"[ADMIN] Failed to send agent approval email: {email_error}")
+            print(f"[ADMIN] Exception sending agent approval email: {email_error}")
+            import traceback
+            print(traceback.format_exc())
 
         return result
     except Exception as e:
@@ -964,6 +1655,103 @@ async def pay_commission(booking_id: str, request: Request, _=Depends(require_ap
         print(f"[ADMIN] Error paying commission for booking {booking_id}: {e}")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+
+@router.get("/commissions/summary")
+async def get_commissions_summary(_=Depends(require_api_key)):
+    """Get commission summary statistics"""
+    try:
+        # Get all bookings with commissions
+        bookings = await db.select("bookings") or []
+        
+        # Calculate summary statistics
+        total_commissions = 0
+        pending_commissions = 0
+        paid_commissions = 0
+        total_bookings = len(bookings)
+        
+        # Calculate from bookings
+        for booking in bookings:
+            commission_amount = booking.get('commission_amount', 0) or 0
+            commission_status = booking.get('commission_status', 'pending')
+            
+            if commission_amount > 0:
+                total_commissions += commission_amount
+                if commission_status == 'paid':
+                    paid_commissions += commission_amount
+                else:
+                    pending_commissions += commission_amount
+        
+        # Get commission payments if table exists
+        try:
+            commission_payments = await db.select("commission_payments") or []
+            total_payments = len(commission_payments)
+        except:
+            total_payments = 0
+        
+        summary = {
+            "total_commissions": total_commissions,
+            "pending_commissions": pending_commissions,
+            "paid_commissions": paid_commissions,
+            "total_bookings": total_bookings,
+            "total_payments": total_payments,
+            "average_commission": total_commissions / total_bookings if total_bookings > 0 else 0
+        }
+        
+        return {"success": True, "summary": summary}
+    except Exception as e:
+        import traceback
+        print(f"[ADMIN] Error getting commission summary: {e}")
+        print(traceback.format_exc())
+        # Return empty summary on error
+        return {
+            "success": True,
+            "summary": {
+                "total_commissions": 0,
+                "pending_commissions": 0,
+                "paid_commissions": 0,
+                "total_bookings": 0,
+                "total_payments": 0,
+                "average_commission": 0
+            }
+        }
+
+@router.get("/commission-payments")
+async def get_commission_payments(_=Depends(require_api_key)):
+    """Get all commission payments"""
+    try:
+        # Try to get from commission_payments table
+        try:
+            payments = await db.select("commission_payments") or []
+            
+            # Enhance with agent and booking details
+            if payments:
+                users = await db.select("users") or []
+                bookings = await db.select("bookings") or []
+                
+                user_map = {u['id']: f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() for u in users}
+                booking_map = {b['id']: b for b in bookings}
+                
+                for payment in payments:
+                    agent_id = payment.get('agent_id')
+                    booking_id = payment.get('booking_id')
+                    
+                    payment['agent_name'] = user_map.get(agent_id, 'Unknown') if agent_id else 'Unknown'
+                    if booking_id and booking_id in booking_map:
+                        booking = booking_map[booking_id]
+                        payment['property_id'] = booking.get('property_id')
+                        payment['booking_date'] = booking.get('booking_date')
+            
+            return {"success": True, "payments": payments}
+        except Exception as e:
+            print(f"[ADMIN] commission_payments table may not exist: {e}")
+            # Return empty list if table doesn't exist
+            return {"success": True, "payments": []}
+    except Exception as e:
+        import traceback
+        print(f"[ADMIN] Error getting commission payments: {e}")
+        print(traceback.format_exc())
+        # Return empty list on error
+        return {"success": True, "payments": []}
 
 @router.post("/inquiries/{inquiry_id}/agent-response")
 async def agent_response_to_inquiry(inquiry_id: str, request: Request, _=Depends(require_api_key)):
@@ -1339,6 +2127,20 @@ async def update_verification_status(user_id: str, request: Request, _=Depends(r
             "verification_status": status,
             "updated_at": dt.datetime.utcnow().isoformat()
         }
+        
+        # When verification_status is set to 'verified', also set email_verified to True
+        if status == 'verified':
+            update_data['email_verified'] = True
+            update_data['email_verified_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
+            # Also ensure status is active
+            update_data['status'] = 'active'
+            print(f"[ADMIN] Setting email_verified=True for user {user_id} via verify-status endpoint")
+        elif status == 'rejected':
+            # Reset email_verified when rejected
+            update_data['email_verified'] = False
+            update_data['status'] = 'inactive'
+            print(f"[ADMIN] Setting email_verified=False for user {user_id} due to rejection")
+        
         return await db.update("users", update_data, {"id": user_id})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1424,23 +2226,110 @@ async def reject_document(document_id: str, request: Request, _=Depends(require_
         result = await db.update("documents", update_data, {"id": document_id})
         print(f"[ADMIN] Document rejection result: {result}")
         
-        # Send rejection email
+        # Send rejection email with professional template and resubmit instructions
         if user_id:
             try:
                 user_data = await db.select("users", filters={"id": user_id})
                 if user_data:
                     user = user_data[0]
-                    subject = "An update on your submitted document"
+                    user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "User"
+                    document_name = document.get('name', 'your document')
+                    document_category = document.get('category', 'document')
+                    
+                    subject = f"Document Resubmission Required - {document_name}"
+                    
                     html_content = f"""
-                    <p>Hi {user.get('first_name', 'User')},</p>
-                    <p>We have reviewed your document, <strong>{document.get('name', 'a document')}</strong>, and it has been rejected.</p>
-                    <p><strong>Reason:</strong> {reason or 'No reason provided.'}</p>
-                    <p>Please log in to your account to upload a new document or contact support for assistance.</p>
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="utf-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    </head>
+                    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                        <div style="max-width: 600px; margin: 40px auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+                            <!-- Header -->
+                            <div style="background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); padding: 40px 20px; text-align: center;">
+                                <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 700;">Home & Own</h1>
+                                <p style="color: rgba(255, 255, 255, 0.9); margin: 10px 0 0 0; font-size: 16px;">Document Resubmission Required</p>
+                            </div>
+                            
+                            <!-- Content -->
+                            <div style="padding: 40px 30px;">
+                                <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px;">Hello {user_name},</h2>
+                                
+                                <p style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                                    We have reviewed your submitted document <strong>"{document_name}"</strong> and unfortunately, it has been rejected.
+                                </p>
+                                
+                                <div style="background-color: #fef2f2; border-left: 4px solid #dc2626; padding: 20px; margin: 25px 0; border-radius: 4px;">
+                                    <h3 style="color: #dc2626; margin: 0 0 10px 0; font-size: 18px;">Rejection Reason:</h3>
+                                    <p style="color: #7f1d1d; margin: 0; font-size: 16px; line-height: 1.5;">
+                                        {reason or 'No specific reason provided. Please ensure your document meets all requirements.'}
+                                    </p>
+                                </div>
+                                
+                                <h3 style="color: #1e293b; margin: 30px 0 15px 0; font-size: 20px;">Next Steps:</h3>
+                                <ol style="color: #475569; font-size: 16px; line-height: 1.6; margin: 0 0 25px 0; padding-left: 20px;">
+                                    <li style="margin-bottom: 10px;">Review the rejection reason above carefully</li>
+                                    <li style="margin-bottom: 10px;">Prepare a new document that addresses the issues mentioned</li>
+                                    <li style="margin-bottom: 10px;">Log in to your Home & Own account</li>
+                                    <li style="margin-bottom: 10px;">Navigate to your profile/documents section</li>
+                                    <li style="margin-bottom: 10px;">Upload the corrected document</li>
+                                </ol>
+                                
+                                <!-- Action Buttons -->
+                                <div style="text-align: center; margin: 40px 0;">
+                                    <a href="https://homeandown.com/login" 
+                                       style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
+                                              color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                              font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3); margin-right: 15px;">
+                                        Login to Resubmit
+                                    </a>
+                                    <a href="mailto:support@homeandown.com?subject=Document Rejection Query - {document_name}&body=Hi, I need help with my rejected document: {document_name}. Rejection reason: {reason or 'Not specified'}" 
+                                       style="display: inline-block; background: #6b7280; 
+                                              color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
+                                              font-weight: 600; font-size: 16px;">
+                                        Contact Support
+                                    </a>
+                                </div>
+                                
+                                <div style="background-color: #f0f9ff; border-left: 4px solid #0ea5e9; padding: 20px; margin: 25px 0; border-radius: 4px;">
+                                    <p style="color: #0c4a6e; margin: 0; font-size: 14px; line-height: 1.5;">
+                                        <strong>Need Help?</strong> You can reply directly to this email or contact our support team at 
+                                        <a href="mailto:support@homeandown.com" style="color: #0ea5e9;">support@homeandown.com</a>
+                                    </p>
+                                </div>
+                                
+                                <p style="color: #64748b; font-size: 14px; line-height: 1.6; margin: 30px 0 0 0;">
+                                    Thank you for your patience. We're here to help you complete your verification process successfully.
+                                </p>
+                            </div>
+                            
+                            <!-- Footer -->
+                            <div style="background-color: #f8fafc; padding: 30px; border-top: 1px solid #e2e8f0; text-align: center;">
+                                <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
+                                    Best regards,<br>
+                                    <strong>The Home & Own Team</strong>
+                                </p>
+                                <p style="color: #94a3b8; font-size: 12px; margin: 20px 0 0 0;">
+                                    © 2025 Home & Own. All rights reserved.<br>
+                                    This is an automated email, but you can reply for support.
+                                </p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>
                     """
-                    await send_email(to_email=user.get('email'), subject=subject, html_content=html_content)
-                    print(f"[ADMIN] Sent document rejection email to {user.get('email')}")
+                    
+                    email_result = await send_email(to=user.get('email'), subject=subject, html=html_content)
+                    if email_result.get("status") == "sent":
+                        print(f"[ADMIN] ✅ Sent document rejection email to {user.get('email')} via {email_result.get('provider', 'unknown')}")
+                    else:
+                        print(f"[ADMIN] ⚠️ Failed to send document rejection email to {user.get('email')}: {email_result.get('error', 'Unknown error')}")
             except Exception as email_error:
-                print(f"[ADMIN] !!! Failed to send document rejection email: {email_error}")
+                print(f"[ADMIN] ❌ Failed to send document rejection email: {email_error}")
+                import traceback
+                print(traceback.format_exc())
 
         # Verify the update worked
         if result and len(result) > 0:

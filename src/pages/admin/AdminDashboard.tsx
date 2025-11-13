@@ -313,8 +313,43 @@ const AdminDashboard: React.FC = () => {
         property.listing_type === 'SALE' ? formatCurrency(property.price ?? null) : formatCurrency(property.monthly_rent ?? null) + '/month'
       },
       { key: 'area', header: 'Area', render: (property: Property) => {
-        if (property.area_sqft) return `${property.area_sqft} sqft`;
-        if (property.plot_area_sqft) return `${property.plot_area_sqft} sqft`;
+        // Determine the area unit (from property.area_unit or infer from data)
+        const getAreaUnit = (): 'sqft' | 'sqyd' | 'acres' => {
+          if (property.area_unit && ['sqft', 'sqyd', 'acres'].includes(property.area_unit)) {
+            return property.area_unit as 'sqft' | 'sqyd' | 'acres';
+          }
+          // Infer from data
+          if (property.area_acres && parseFloat(String(property.area_acres)) > 0) {
+            return 'acres';
+          }
+          if (property.area_sqyd && parseFloat(String(property.area_sqyd)) > 0) {
+            return 'sqyd';
+          }
+          return 'sqft';
+        };
+        
+        const unit = getAreaUnit();
+        let value: number | null = null;
+        let label = '';
+        
+        if (unit === 'acres' && property.area_acres) {
+          value = parseFloat(String(property.area_acres));
+          label = 'acres';
+        } else if (unit === 'sqyd' && property.area_sqyd) {
+          value = parseFloat(String(property.area_sqyd));
+          label = 'sq yd';
+        } else if (unit === 'sqft' && property.area_sqft) {
+          value = parseFloat(String(property.area_sqft));
+          label = 'sqft';
+        } else if (property.plot_area_sqft) {
+          // Fallback to plot area
+          value = parseFloat(String(property.plot_area_sqft));
+          label = 'sqft';
+        }
+        
+        if (value !== null && !isNaN(value)) {
+          return `${value.toLocaleString('en-IN')} ${label}`;
+        }
         return 'N/A';
       }},
       { key: 'bedrooms', header: 'Beds', render: (property: Property) => property.bedrooms || 'N/A' },
@@ -411,10 +446,28 @@ const AdminDashboard: React.FC = () => {
             );
           }},
           { key: 'phone_number', header: 'Phone' },
-          { key: 'agent_license_number', header: 'License Number', render: (user: User) => user.agent_license_number || 'Pending Verification' },
-          { key: 'documents', header: 'Documents', render: (user: User) => (
-            <span className="text-sm text-gray-700">{(user.documents || []).length || 0}</span>
-          )},
+          { 
+            key: 'agent_license_number', 
+            header: 'License Number', 
+            render: (user: User) => {
+              // Check all possible field names for license number
+              const licenseNumber = (user as any).agent_license_number || 
+                                   (user as any).license_number || 
+                                   (user as any).custom_id || 
+                                   null;
+              
+              if (licenseNumber) {
+                return (
+                  <span className="font-mono text-sm font-semibold text-gray-900 bg-gray-50 px-2 py-1 rounded">
+                    {String(licenseNumber)}
+                  </span>
+                );
+              }
+              return (
+                <span className="text-gray-400 italic text-sm">Not Assigned</span>
+              );
+            }
+          },
           { key: 'status', header: 'Status', render: (user: User) => {
               // If user is verified but status is pending, show as active
               // This handles cases where verification_status is updated but status wasn't
@@ -453,9 +506,6 @@ const AdminDashboard: React.FC = () => {
             );
           }},
           { key: 'phone_number', header: 'Phone' },
-          { key: 'documents', header: 'Documents', render: (user: User) => (
-            <span className="text-sm text-gray-700">{(user.documents || []).length || 0}</span>
-          )},
           { key: 'status', header: 'Status', render: (user: User) => {
               // If user is verified but status is pending, show as active
               // This handles cases where verification_status is updated but status wasn't
@@ -494,9 +544,6 @@ const AdminDashboard: React.FC = () => {
             );
           }},
           { key: 'phone_number', header: 'Phone' },
-          { key: 'documents', header: 'Documents', render: (user: User) => (
-            <span className="text-sm text-gray-700">{(user.documents || []).length || 0}</span>
-          )},
           { key: 'status', header: 'Status', render: (user: User) => {
               // If user is verified but status is pending, show as active
               // This handles cases where verification_status is updated but status wasn't

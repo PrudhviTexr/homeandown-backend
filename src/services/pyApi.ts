@@ -38,23 +38,23 @@ export const RecordsApi = {
     return pyFetch('/api/inquiries', { method: 'POST', body: JSON.stringify(payload) });
   },
   createBooking(payload: { property_id: number; name: string; email?: string; preferred_time?: string }) {
-    return pyFetch('/api/bookings', { method: 'POST', body: JSON.stringify(payload), useApiKey: true });
+    return pyFetch('/api/records/bookings', { method: 'POST', body: JSON.stringify(payload), useApiKey: true });
   },
   updateBookingStatus(id: number, status: string) {
-    return pyFetch(`/api/bookings/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+    return pyFetch(`/api/records/bookings/${id}`, { method: 'PUT', body: JSON.stringify({ status }), useApiKey: true });
   },
   createProperty(payload: { title: string; price?: number; city: string; state: string; description?: string; added_by?: number; added_by_role?: string }) {
     return pyFetch('/api/properties', { method: 'POST', body: JSON.stringify(payload) });
   },
   // Viewings
   createViewing(payload: { property_id: number; user_id?: number; agent_id?: number; scheduled_at?: string; notes?: string }) {
-    return pyFetch('/api/bookings', { method: 'POST', body: JSON.stringify(payload) });
+    return pyFetch('/api/records/bookings', { method: 'POST', body: JSON.stringify(payload) });
   },
   listViewings() {
-    return pyFetch('/api/bookings', { method: 'GET' });
+    return pyFetch('/api/records/bookings', { method: 'GET' });
   },
   updateViewing(id: number, payload: { status: string; completed_at?: string; notes?: string }) {
-    return pyFetch(`/api/bookings/${id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+    return pyFetch(`/api/records/bookings/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
   },
   // Agent Reviews
   createAgentReview(payload: { agent_id: number; reviewer_user_id: number; property_id?: number; rating: number; comment?: string }) {

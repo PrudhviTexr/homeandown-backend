@@ -26,9 +26,9 @@ scripts/
 # Postman collections (if not backend specific)
 postman/
 
-# Root level files (frontend related) - exclude root README/render, allow python_api versions
+# Root level files (frontend related) - exclude root README, allow render.yaml for Render deployment
 README.md
-render.yaml
+!render.yaml
 !python_api/README.md
 !python_api/render.yaml
 

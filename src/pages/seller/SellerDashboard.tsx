@@ -100,7 +100,10 @@ const SellerDashboard: React.FC = () => {
   const [inquiries, setInquiries] = useState<Inquiry[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'properties' | 'inquiries' | 'bookings'>('overview');
+  // Check URL params for tab
+  const urlParams = new URLSearchParams(window.location.search);
+  const initialTab = (urlParams.get('tab') as 'overview' | 'properties' | 'inquiries' | 'bookings') || 'overview';
+  const [activeTab, setActiveTab] = useState<'overview' | 'properties' | 'inquiries' | 'bookings'>(initialTab);
   const [propertyFilter, setPropertyFilter] = useState<string>('all');
   const [inquiryFilter, setInquiryFilter] = useState<string>('all');
   const [bookingFilter, setBookingFilter] = useState<string>('all');
@@ -384,7 +387,23 @@ const SellerDashboard: React.FC = () => {
 
                 {/* Recent Activity */}
                 <div className="bg-gray-50 rounded-lg p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-gray-900">Recent Activity</h3>
+                    {(inquiries.length > 3 || bookings.length > 3) && (
+                      <button
+                        onClick={() => {
+                          if (inquiries.length > 3) {
+                            setActiveTab('inquiries');
+                          } else if (bookings.length > 3) {
+                            setActiveTab('bookings');
+                          }
+                        }}
+                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      >
+                        View All →
+                      </button>
+                    )}
+                  </div>
                   <div className="space-y-4">
                     {inquiries.slice(0, 3).map((inquiry) => (
                       <div key={inquiry.id} className="flex items-center justify-between p-3 bg-white rounded-lg">

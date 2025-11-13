@@ -53,13 +53,18 @@ async def verify_otp_endpoint(payload: Dict[str, Any] = Body(...)):
             if users:
                 user = users[0]
                 # Update email_verified to True (boolean) and set email_verified_at
+                # Also set verification_status to 'verified' since OTP verification is email verification
                 update_data = {
                     "email_verified": True,  # Set as boolean True, not string 'true'
                     "email_verified_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "verification_status": "verified",  # Set verification_status to verified
                     "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()
                 }
+                # Also ensure status is active if it's pending
+                if user.get("status") in ["pending", None, ""]:
+                    update_data["status"] = "active"
                 await db.update("users", update_data, {"id": user["id"]})
-                print(f"[OTP] Updated email_verified to True for user: {email}")
+                print(f"[OTP] Updated email_verified=True and verification_status=verified for user: {email}")
         except Exception as update_error:
             print(f"[OTP] Failed to update email_verified status: {update_error}")
             # Don't fail OTP verification if DB update fails - OTP is already verified

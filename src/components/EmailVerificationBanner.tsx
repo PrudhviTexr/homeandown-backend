@@ -50,12 +50,23 @@ const EmailVerificationBanner: React.FC = () => {
 
     setIsResending(true);
     try {
-  await pyFetch(`/api/auth/resend-verification?email=${encodeURIComponent(user.email)}`, { method: 'POST', useApiKey: true });
+      const response = await pyFetch(`/api/auth/resend-verification?email=${encodeURIComponent(user.email)}`, { 
+        method: 'POST', 
+        useApiKey: false 
+      });
 
-      setResendSuccess(true);
-      setTimeout(() => setResendSuccess(false), 5000);
-    } catch (error) {
-      alert('Failed to resend verification email. Please try again.');
+      if (response?.success) {
+        const toast = (await import('react-hot-toast')).default;
+        toast.success('Verification email sent! Please check your inbox.');
+        setResendSuccess(true);
+        setTimeout(() => setResendSuccess(false), 5000);
+      } else {
+        const toast = (await import('react-hot-toast')).default;
+        toast.error(response?.error || 'Failed to resend verification email. Please try again.');
+      }
+    } catch (error: any) {
+      const toast = (await import('react-hot-toast')).default;
+      toast.error(error?.message || 'Failed to resend verification email. Please try again.');
     } finally {
       setIsResending(false);
     }

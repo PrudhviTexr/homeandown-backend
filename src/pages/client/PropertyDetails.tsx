@@ -33,6 +33,7 @@ import TourBookingModal from '@/components/TourBookingModal';
 import PropertyActionButtons from '@/components/PropertyActionButtons';
 import ImageGallery from '@/components/ImageGallery';
 import UserInfo from '@/components/UserInfo'; // Import the new component
+import PropertyReviews from '@/components/PropertyReviews'; // Import reviews component
 import { useAuth } from '@/contexts/AuthContext';
 import ApiService from '@/services/api';
 import { formatIndianCurrency } from '@/utils/currency';
@@ -238,6 +239,139 @@ const PropertyDetails: React.FC = () => {
 
 
 
+  // Helper function to determine the area unit (sqft, sqyd, or acres)
+  const getAreaUnit = (): 'sqft' | 'sqyd' | 'acres' => {
+    if (!property) return 'sqft';
+    
+    // First, check if area_unit is stored in the property
+    if (property.area_unit && ['sqft', 'sqyd', 'acres'].includes(property.area_unit)) {
+      return property.area_unit as 'sqft' | 'sqyd' | 'acres';
+    }
+    
+    // Infer from data - prioritize the unit with the most meaningful value
+    if (property.area_acres && parseFloat(String(property.area_acres)) > 0) {
+      return 'acres';
+    }
+    if (property.area_sqyd && parseFloat(String(property.area_sqyd)) > 0) {
+      return 'sqyd';
+    }
+    // Default to sqft
+    return 'sqft';
+  };
+
+  // Helper function to get area value and unit label
+  const getAreaDisplay = (areaType: 'main' | 'plot' | 'builtup' | 'carpet' = 'main') => {
+    if (!property) return { value: null, unit: 'sqft', display: 'N/A' };
+    
+    const unit = getAreaUnit();
+    
+    let value: number | null = null;
+    let label = '';
+    
+    if (areaType === 'plot') {
+      // For plot area, use the selected unit and prioritize main area fields
+      if (unit === 'sqyd') {
+        // Prefer area_sqyd (main area) over plot_area_sqyd
+        if (property.area_sqyd) {
+          value = parseFloat(String(property.area_sqyd));
+          label = 'sq yd';
+        } else if (property.plot_area_sqyd) {
+          value = parseFloat(String(property.plot_area_sqyd));
+          label = 'sq yd';
+        }
+      } else if (unit === 'acres' && property.area_acres) {
+        value = parseFloat(String(property.area_acres));
+        label = 'acres';
+      } else if (unit === 'sqft') {
+        // Prefer area_sqft (main area) over plot_area_sqft
+        if (property.area_sqft) {
+          value = parseFloat(String(property.area_sqft));
+          label = 'sq ft';
+        } else if (property.plot_area_sqft) {
+          value = parseFloat(String(property.plot_area_sqft));
+          label = 'sq ft';
+        }
+      } else {
+        // Fallback if unit not determined
+        if (property.plot_area_sqyd) {
+          value = parseFloat(String(property.plot_area_sqyd));
+          label = 'sq yd';
+        } else if (property.area_sqyd) {
+          value = parseFloat(String(property.area_sqyd));
+          label = 'sq yd';
+        } else if (property.plot_area_sqft) {
+          value = parseFloat(String(property.plot_area_sqft));
+          label = 'sq ft';
+        } else if (property.area_sqft) {
+          value = parseFloat(String(property.area_sqft));
+          label = 'sq ft';
+        }
+      }
+    } else if (areaType === 'builtup') {
+      // Built-up area is typically in sqft
+      if (property.built_up_area_sqft) {
+        value = parseFloat(String(property.built_up_area_sqft));
+        label = 'sq ft';
+      }
+    } else if (areaType === 'carpet') {
+      // Carpet area is typically in sqft
+      if (property.carpet_area_sqft) {
+        value = parseFloat(String(property.carpet_area_sqft));
+        label = 'sq ft';
+      }
+    } else {
+      // Main area
+      if (unit === 'sqyd' && property.area_sqyd) {
+        value = parseFloat(String(property.area_sqyd));
+        label = 'sq yd';
+      } else if (unit === 'acres' && property.area_acres) {
+        value = parseFloat(String(property.area_acres));
+        label = 'acres';
+      } else if (property.area_sqft) {
+        value = parseFloat(String(property.area_sqft));
+        label = 'sq ft';
+      }
+    }
+    
+    return {
+      value,
+      unit: label,
+      display: value ? `${value.toLocaleString('en-IN')} ${label}` : 'N/A'
+    };
+  };
+
+  // Helper function to get rate display matching the area unit
+  const getRateDisplay = () => {
+    if (!property || !property.price) return null;
+    
+    const unit = getAreaUnit();
+    let rateValue: number | null = null;
+    let rateUnit = '';
+    
+    if (unit === 'sqyd' && property.rate_per_sqyd) {
+      rateValue = parseFloat(String(property.rate_per_sqyd));
+      rateUnit = 'sq yd';
+    } else if (unit === 'acres' && property.area_acres && property.rate_per_sqft) {
+      // Calculate rate per acre from rate per sqft
+      const ratePerSqft = parseFloat(String(property.rate_per_sqft));
+      rateValue = ratePerSqft * 43560;
+      rateUnit = 'acre';
+    } else if (property.rate_per_sqft) {
+      rateValue = parseFloat(String(property.rate_per_sqft));
+      rateUnit = 'sq ft';
+    }
+    
+    if (rateValue) {
+      return {
+        value: rateValue,
+        unit: rateUnit,
+        display: `Rate: ${formatIndianCurrency(rateValue)} per ${rateUnit}`
+      };
+    }
+    
+    return null;
+  };
+
   // Helper function to get property type display name
   const getPropertyTypeDisplay = (propertyType: string) => {
     const typeMap: { [key: string]: string } = {
@@ -305,11 +439,11 @@ const PropertyDetails: React.FC = () => {
             </div>
             <div className="flex justify-between text-sm md:text-base">
               <span className="text-gray-600">Plot Area</span>
-              <span className="font-medium text-[#162e5a]">{property.plot_area_sqft ? `${property.plot_area_sqft} SFT` : 'N/A'}</span>
+              <span className="font-medium text-[#162e5a]">{getAreaDisplay('plot').display}</span>
             </div>
             <div className="flex justify-between text-sm md:text-base">
               <span className="text-gray-600">Built-up Area</span>
-              <span className="font-medium text-[#162e5a]">{property.built_up_area_sqft ? `${property.built_up_area_sqft} SFT` : 'N/A'}</span>
+              <span className="font-medium text-[#162e5a]">{getAreaDisplay('builtup').display}</span>
             </div>
             <div className="flex justify-between text-sm md:text-base">
               <span className="text-gray-600">Floors</span>
@@ -335,7 +469,7 @@ const PropertyDetails: React.FC = () => {
           <>
             <div className="flex justify-between text-sm md:text-base">
               <span className="text-gray-600">Plot Area</span>
-              <span className="font-medium text-[#162e5a]">{property.plot_area_sqft ? `${property.plot_area_sqft} SFT` : property.area_sqft ? `${property.area_sqft} SFT` : 'N/A'}</span>
+              <span className="font-medium text-[#162e5a]">{getAreaDisplay('plot').display}</span>
             </div>
             <div className="flex justify-between text-sm md:text-base">
               <span className="text-gray-600">Soil Type</span>
@@ -396,7 +530,7 @@ const PropertyDetails: React.FC = () => {
           <>
             <div className="flex justify-between text-sm md:text-base">
               <span className="text-gray-600">Plot Area</span>
-              <span className="font-medium text-[#162e5a]">{property.plot_area_sqft ? `${property.plot_area_sqft} SFT` : property.area_sqft ? `${property.area_sqft} SFT` : 'N/A'}</span>
+              <span className="font-medium text-[#162e5a]">{getAreaDisplay('plot').display}</span>
             </div>
             <div className="flex justify-between text-sm md:text-base">
               <span className="text-gray-600">Soil Type</span>
@@ -426,7 +560,7 @@ const PropertyDetails: React.FC = () => {
           <>
             <div className="flex justify-between text-sm md:text-base">
               <span className="text-gray-600">Property Size</span>
-              <span className="font-medium text-[#162e5a]">{property.area_sqft} SFT</span>
+              <span className="font-medium text-[#162e5a]">{getAreaDisplay('main').display}</span>
             </div>
             <div className="flex justify-between text-sm md:text-base">
               <span className="text-gray-600">Floor</span>
@@ -812,21 +946,30 @@ const PropertyDetails: React.FC = () => {
               )}
 
               {/* Map */}
-              <div className="bg-white rounded-lg p-4 md:p-6 shadow-lg">
-                <h3 className="text-lg font-semibold text-[#3B5998] mb-4">Location</h3>
-                <div className="h-48 md:h-64 rounded-lg overflow-hidden">
-                  <MapContainer
-                    center={[property.latitude, property.longitude]}
-                    zoom={15}
-                    style={{ height: '100%', width: '100%' }}
-                  >
-                    <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                    <Marker position={[property.latitude, property.longitude]}>
-                      <Popup>{property.title}</Popup>
-                    </Marker>
-                  </MapContainer>
+              {property.latitude && property.longitude && (
+                <div className="bg-white rounded-lg p-4 md:p-6 shadow-lg">
+                  <h3 className="text-lg font-semibold text-[#3B5998] mb-4">Location</h3>
+                  <div className="h-48 md:h-64 rounded-lg overflow-hidden">
+                    <MapContainer
+                      center={[parseFloat(String(property.latitude)) || 17.3850, parseFloat(String(property.longitude)) || 78.4867]}
+                      zoom={15}
+                      style={{ height: '100%', width: '100%' }}
+                      key={`${property.latitude}-${property.longitude}`}
+                    >
+                      <TileLayer 
+                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                      />
+                      <Marker position={[parseFloat(String(property.latitude)) || 17.3850, parseFloat(String(property.longitude)) || 78.4867]}>
+                        <Popup>{property.title || 'Property Location'}</Popup>
+                      </Marker>
+                    </MapContainer>
+                  </div>
+                  <p className="text-sm text-gray-600 mt-2">
+                    📍 {property.address || 'Location coordinates: ' + property.latitude + ', ' + property.longitude}
+                  </p>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Right Column - Property Details */}
@@ -898,26 +1041,14 @@ const PropertyDetails: React.FC = () => {
                     </p>
                     {property.listing_type === 'SALE' && (property.property_type === 'land' || property.property_type === 'plot') && (
                       <div className="mt-2 space-y-1">
-                        {property.plot_area_sqft && property.price && (
-                          <p className="text-sm text-gray-600">
-                            {formatIndianCurrency(property.price / property.plot_area_sqft)} per sq ft
-                          </p>
-                        )}
-                        {property.plot_area_sqyd && property.price && (
-                          <p className="text-sm text-gray-600">
-                            {formatIndianCurrency(property.price / property.plot_area_sqyd)} per sq yd
-                          </p>
-                        )}
-                        {property.rate_per_sqft && (
-                          <p className="text-sm text-gray-600">
-                            Rate: {formatIndianCurrency(property.rate_per_sqft)} per sq ft
-                          </p>
-                        )}
-                        {property.rate_per_sqyd && (
-                          <p className="text-sm text-gray-600">
-                            Rate: {formatIndianCurrency(property.rate_per_sqyd)} per sq yd
-                          </p>
-                        )}
+                        {(() => {
+                          const rateInfo = getRateDisplay();
+                          return rateInfo ? (
+                            <p className="text-sm text-gray-600">
+                              {rateInfo.display}
+                            </p>
+                          ) : null;
+                        })()}
                       </div>
                     )}
                     {property.listing_type === 'RENT' && property.security_deposit && (
@@ -969,7 +1100,7 @@ const PropertyDetails: React.FC = () => {
                       </div>
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-gray-600">Area</span>
-                        <span className="font-medium text-[#162e5a]">{property.area_sqft} sq ft</span>
+                        <span className="font-medium text-[#162e5a]">{getAreaDisplay('main').display}</span>
                       </div>
                     </>
                   ) : property.property_type === 'independent_house' || property.property_type === 'villa' || property.property_type === 'farm_house' ? (
@@ -980,11 +1111,11 @@ const PropertyDetails: React.FC = () => {
                       </div>
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-gray-600">Plot Area</span>
-                        <span className="font-medium text-[#162e5a]">{property.plot_area_sqft || property.area_sqft} sq ft</span>
+                        <span className="font-medium text-[#162e5a]">{getAreaDisplay('plot').display}</span>
                       </div>
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-gray-600">Built-up Area</span>
-                        <span className="font-medium text-[#162e5a]">{property.built_up_area_sqft || 'N/A'} sq ft</span>
+                        <span className="font-medium text-[#162e5a]">{getAreaDisplay('builtup').display}</span>
                       </div>
                     </>
                   ) : property.property_type === 'commercial' ? (
@@ -995,7 +1126,7 @@ const PropertyDetails: React.FC = () => {
                       </div>
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-gray-600">Area</span>
-                        <span className="font-medium text-[#162e5a]">{property.area_sqft} sq ft</span>
+                        <span className="font-medium text-[#162e5a]">{getAreaDisplay('main').display}</span>
                       </div>
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-gray-600">Parking</span>
@@ -1006,7 +1137,7 @@ const PropertyDetails: React.FC = () => {
                     <>
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-gray-600">Plot Area</span>
-                        <span className="font-medium text-[#162e5a]">{property.plot_area_sqft || property.area_sqft} sq ft</span>
+                        <span className="font-medium text-[#162e5a]">{getAreaDisplay('plot').display}</span>
                       </div>
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-gray-600">Dimensions</span>
@@ -1021,6 +1152,13 @@ const PropertyDetails: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {/* Property Reviews Section - Full Width */}
+            {property?.id && (
+              <div className="mt-8">
+                <PropertyReviews propertyId={property.id} />
+              </div>
+            )}
           </div>
         </div>
       </main>

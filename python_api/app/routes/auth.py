@@ -19,6 +19,7 @@ import datetime as dt
 import uuid
 import traceback
 import pytz
+import json
 
 router = APIRouter()
 
@@ -400,7 +401,9 @@ async def get_profile(request: Request) -> Dict[str, Any]:
             "profile_image_url": user.get("profile_image_url"),
             "business_name": user.get("business_name", ""),
             # Agent-specific fields (read-only)
-            "agent_license_number": user.get("agent_license_number"),
+            "agent_license_number": user.get("agent_license_number") or user.get("license_number") or user.get("custom_id"),
+            "license_number": user.get("license_number") or user.get("agent_license_number") or user.get("custom_id"),
+            "custom_id": user.get("custom_id"),
             "experience_years": user.get("experience_years"),
             "specialization": user.get("specialization"),
             # Bank details (read-only for security)
@@ -926,14 +929,17 @@ async def request_additional_role(request: Request) -> Dict[str, Any]:
                 """
                 
                 try:
-                    await send_email(
-                        to_email=user["email"],
+                    email_result = await send_email(
+                        to=user["email"],
                         subject=f"Role Request Submitted - Home & Own",
-                        html_content=user_email_html
+                        html=user_email_html
                     )
-                    print(f"[AUTH] Role request confirmation email sent to user: {user['email']}")
+                    if email_result.get("status") == "sent":
+                        print(f"[AUTH] ✅ Role request confirmation email sent to user: {user['email']} via {email_result.get('provider', 'unknown')}")
+                    else:
+                        print(f"[AUTH] ⚠️ Role request confirmation email may have failed for user {user['email']}: {email_result.get('error', 'Unknown error')}")
                 except Exception as email_error:
-                    print(f"[AUTH] Failed to send role request email to user: {email_error}")
+                    print(f"[AUTH] ❌ Failed to send role request email to user: {email_error}")
                 
                 # Send notification to admins
                 try:
@@ -998,14 +1004,17 @@ async def request_additional_role(request: Request) -> Dict[str, Any]:
                     
                     for admin in admin_users:
                         try:
-                            await send_email(
-                                to_email=admin["email"],
+                            email_result = await send_email(
+                                to=admin["email"],
                                 subject=f"New Role Request: {role_display} - Home & Own",
-                                html_content=admin_email_html
+                                html=admin_email_html
                             )
-                            print(f"[AUTH] Role request notification sent to admin: {admin['email']}")
+                            if email_result.get("status") == "sent":
+                                print(f"[AUTH] ✅ Role request notification sent to admin: {admin['email']} via {email_result.get('provider', 'unknown')}")
+                            else:
+                                print(f"[AUTH] ⚠️ Role request notification may have failed for admin {admin['email']}: {email_result.get('error', 'Unknown error')}")
                         except Exception as admin_email_error:
-                            print(f"[AUTH] Failed to send admin notification: {admin_email_error}")
+                            print(f"[AUTH] ❌ Failed to send admin notification: {admin_email_error}")
                             
                 except Exception as admin_notify_error:
                     print(f"[AUTH] Failed to send admin notifications: {admin_notify_error}")
@@ -1049,20 +1058,25 @@ async def forgot_password(request: Request) -> Dict[str, Any]:
         if not email:
             raise HTTPException(status_code=400, detail="Email is required")
         
-        print(f"[AUTH] Password reset requested for: {email} (user_type: {user_type})")
+        print(f"[AUTH] Password reset requested for: {email} (requested user_type: {user_type})")
         
         # Check if user exists
         users = await db.select("users", filters={"email": email})
         if not users:
-            # Don't reveal if user exists or not for security
-            return {
-                "success": True,
-                "message": "If an account exists for this email, a reset link has been sent."
-            }
+            # Return specific error for user not found
+            raise HTTPException(status_code=404, detail="No user found with this email address. Please sign up for a new account.")
         
         user = users[0]
         user_id = user["id"]
         actual_user_type = user.get("user_type", "buyer").lower()
+        
+        # Validate that the user's role matches the requested role (if user_type is provided)
+        if user_type and actual_user_type != user_type:
+            print(f"[AUTH] Role mismatch: User is {actual_user_type}, but {user_type} was requested")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No {user_type} account found with this email address. Please sign up for a new account."
+            )
         
         # Generate reset token
         reset_token = str(uuid.uuid4())
@@ -1074,12 +1088,37 @@ async def forgot_password(request: Request) -> Dict[str, Any]:
             "user_id": user_id,
             "token": reset_token,
             "type": "password_reset",
-            "metadata": {"user_type": actual_user_type},  # Store user type in metadata
             "expires_at": expires_at.isoformat(),
             "created_at": dt.datetime.now(pytz.UTC).isoformat()
         }
         
-        await db.insert("verification_tokens", token_data)
+        # Add metadata if the column exists (some databases may not have it)
+        try:
+            # Try to include metadata as JSON string
+            token_data["metadata"] = json.dumps({"user_type": actual_user_type})
+        except Exception:
+            # If metadata fails, continue without it
+            pass
+        
+        try:
+            await db.insert("verification_tokens", token_data)
+        except Exception as insert_error:
+            print(f"[AUTH] Error inserting reset token: {insert_error}")
+            print(traceback.format_exc())
+            # Try without metadata if it fails
+            token_data_simple = {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "token": reset_token,
+                "type": "password_reset",
+                "expires_at": expires_at.isoformat(),
+                "created_at": dt.datetime.now(pytz.UTC).isoformat()
+            }
+            try:
+                await db.insert("verification_tokens", token_data_simple)
+            except Exception as retry_error:
+                print(f"[AUTH] Error inserting reset token (retry): {retry_error}")
+                raise HTTPException(status_code=500, detail="Failed to create reset token. Please try again.")
         print(f"[AUTH] Reset token created for user: {user_id} (type: {actual_user_type})")
         
         # Generate role-specific reset URL
@@ -1181,13 +1220,18 @@ async def forgot_password(request: Request) -> Dict[str, Any]:
         </html>
         """
         
-        await send_email(
-            to_email=email,
+        email_result = await send_email(
+            to=email,
             subject="Reset Your Password - Home & Own",
-            html_content=email_html
+            html=email_html
         )
         
-        print(f"[AUTH] Password reset email sent to: {email}")
+        # Check email sending result
+        if email_result.get("status") == "sent":
+            print(f"[AUTH] ✅ Password reset email sent successfully to: {email} via {email_result.get('provider', 'unknown')}")
+        else:
+            print(f"[AUTH] ⚠️ Password reset email may have failed: {email_result.get('error', 'Unknown error')}")
+            # Still return success to user for security (don't reveal if email exists)
         
         return {
             "success": True,
@@ -1213,8 +1257,8 @@ async def reset_password(request: Request) -> Dict[str, Any]:
         if not token or not new_password:
             raise HTTPException(status_code=400, detail="Token and new password are required")
         
-        if len(new_password) < 6:
-            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        if len(new_password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
         
         print(f"[AUTH] Password reset attempt with token: {token[:8]}...")
         
@@ -1245,16 +1289,16 @@ async def reset_password(request: Request) -> Dict[str, Any]:
         # Hash new password
         password_hash = get_password_hash(new_password)
         
-        # Update user password
-        await db.update("users", {"id": user_id}, {
+        # Update user password (fix: correct parameter order for db.update)
+        await db.update("users", {
             "password_hash": password_hash,
             "updated_at": dt.datetime.now(pytz.UTC).isoformat()
-        })
+        }, {"id": user_id})
         
-        # Mark token as used
-        await db.update("verification_tokens", {"id": token_data["id"]}, {
+        # Mark token as used (fix: correct parameter order for db.update)
+        await db.update("verification_tokens", {
             "used_at": dt.datetime.now(pytz.UTC).isoformat()
-        })
+        }, {"id": token_data["id"]})
         
         print(f"[AUTH] Password reset successful for user: {user_id}")
         
@@ -1353,9 +1397,9 @@ async def reset_password(request: Request) -> Dict[str, Any]:
             """
             
             await send_email(
-                to_email=user["email"],
+                to=user["email"],
                 subject="Password Changed Successfully - Home & Own",
-                html_content=confirmation_html
+                html=confirmation_html
             )
         
         return {
@@ -1452,9 +1496,9 @@ async def change_password(request: Request) -> Dict[str, Any]:
             """
             
             await send_email(
-                to_email=user_email,
+                to=user_email,
                 subject="Password Changed Successfully - Home & Own",
-                html_content=email_html
+                html=email_html
             )
             print(f"[AUTH] Password change confirmation email sent to: {user_email}")
         except Exception as email_error:

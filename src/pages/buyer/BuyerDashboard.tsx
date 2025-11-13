@@ -89,6 +89,7 @@ const BuyerDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'saved' | 'inquiries' | 'bookings'>('overview');
   const [inquiryFilter, setInquiryFilter] = useState<string>('all');
   const [bookingFilter, setBookingFilter] = useState<string>('all');
+  const [savedPropertyFilter, setSavedPropertyFilter] = useState<string>('all');
 
   useEffect(() => {
     if (user) {
@@ -110,19 +111,51 @@ const BuyerDashboard: React.FC = () => {
 
       // Fetch stats
       const statsData = await pyFetch('/api/buyer/dashboard/stats', fetchOptions);
-      setStats(statsData.stats);
+      if (statsData && statsData.stats) {
+        setStats(statsData.stats);
+      } else if (statsData && statsData.success && statsData.stats) {
+        setStats(statsData.stats);
+      }
 
       // Fetch saved properties
       const savedData = await pyFetch('/api/buyer/saved-properties', fetchOptions);
-      setSavedProperties(savedData.properties);
+      if (savedData && savedData.properties) {
+        setSavedProperties(savedData.properties);
+      } else if (savedData && Array.isArray(savedData)) {
+        setSavedProperties(savedData);
+      } else {
+        setSavedProperties([]);
+      }
 
       // Fetch inquiries
       const inquiriesData = await pyFetch('/api/buyer/inquiries', fetchOptions);
-      setInquiries(inquiriesData.inquiries);
+      if (inquiriesData && inquiriesData.inquiries) {
+        setInquiries(inquiriesData.inquiries);
+      } else if (inquiriesData && inquiriesData.success && inquiriesData.inquiries) {
+        setInquiries(inquiriesData.inquiries);
+      } else {
+        setInquiries([]);
+      }
 
-      // Fetch bookings
+      // Fetch bookings - use stable reference to prevent fluctuations
       const bookingsData = await pyFetch('/api/buyer/bookings', fetchOptions);
-      setBookings(bookingsData.bookings);
+      let bookingsList: Booking[] = [];
+      if (bookingsData && bookingsData.bookings) {
+        bookingsList = Array.isArray(bookingsData.bookings) ? bookingsData.bookings : [];
+      } else if (bookingsData && bookingsData.success && bookingsData.bookings) {
+        bookingsList = Array.isArray(bookingsData.bookings) ? bookingsData.bookings : [];
+      } else if (Array.isArray(bookingsData)) {
+        bookingsList = bookingsData;
+      }
+      // Only update if data actually changed to prevent fluctuations
+      setBookings(prevBookings => {
+        const prevIds = prevBookings.map(b => b.id).sort().join(',');
+        const newIds = bookingsList.map(b => b.id).sort().join(',');
+        if (prevIds !== newIds || prevBookings.length !== bookingsList.length) {
+          return bookingsList;
+        }
+        return prevBookings;
+      });
 
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -402,7 +435,23 @@ const BuyerDashboard: React.FC = () => {
 
                 {/* Recent Activity */}
                 <div className="bg-gray-50 rounded-lg p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-gray-900">Recent Activity</h3>
+                    {(inquiries.length > 3 || bookings.length > 3) && (
+                      <button
+                        onClick={() => {
+                          if (inquiries.length > 3) {
+                            setActiveTab('inquiries');
+                          } else if (bookings.length > 3) {
+                            setActiveTab('bookings');
+                          }
+                        }}
+                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      >
+                        View All →
+                      </button>
+                    )}
+                  </div>
                   <div className="space-y-4">
                     {inquiries.slice(0, 3).map((inquiry) => (
                       <div key={inquiry.id} className="flex items-center justify-between p-3 bg-white rounded-lg">
@@ -442,11 +491,24 @@ const BuyerDashboard: React.FC = () => {
               <div className="space-y-6">
                 <div className="flex justify-between items-center">
                   <h3 className="text-lg font-semibold text-gray-900">Your Saved Properties</h3>
-                  <span className="text-sm text-gray-600">{savedProperties.length} properties</span>
+                  <div className="flex items-center gap-4">
+                    <select
+                      value={savedPropertyFilter}
+                      onChange={(e) => setSavedPropertyFilter(e.target.value)}
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    >
+                      <option value="all">All Properties</option>
+                      <option value="SALE">For Sale</option>
+                      <option value="RENT">For Rent</option>
+                    </select>
+                    <span className="text-sm text-gray-600">{savedProperties.filter(p => savedPropertyFilter === 'all' || p.listing_type === savedPropertyFilter).length} properties</span>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-                  {savedProperties.map((property) => (
+                  {savedProperties
+                    .filter(property => savedPropertyFilter === 'all' || property.listing_type === savedPropertyFilter)
+                    .map((property) => (
                     <div key={property.id} className="bg-white rounded-lg shadow-md overflow-hidden">
                       <div className="h-48 bg-gray-200 flex items-center justify-center">
                         {property.images && property.images.length > 0 ? (
