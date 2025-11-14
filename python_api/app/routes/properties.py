@@ -726,7 +726,9 @@ async def create_property(property_data: dict, request: Request = None):
             'monthly_rent_value', 'price_value', 'area_sqft_value', 'area_sqyd_value',
             'area_acres_value', 'bedrooms_count', 'bathrooms_count', 'total_floors_count',
             'available_floor_number', 'parking_slots_count', 'floor_count_value', 'floor_value',
-            'form_data', 'images_data', 'sections_data', 'ui_fields', 'db_fields'
+            'form_data', 'images_data', 'sections_data', 'ui_fields', 'db_fields',
+            # CRITICAL: Remove city_id as it doesn't exist in the database schema
+            'city_id'
         ]
         
         for field in fields_to_remove:
@@ -1137,7 +1139,13 @@ async def update_property(property_id: str, update_data: dict):
             'assignment_status', 'assignment_notes', 'transfer_reason', 'previous_agent_id', 'seller_id',
             # New pricing fields for new_property and lot types
             'pricing_display_mode', 'starting_price_per_unit', 'pricing_unit_type'
+            # Note: city_id is NOT in the database schema, so it's not included here
         }
+        
+        # CRITICAL: Remove city_id from update_data as it doesn't exist in the database
+        if 'city_id' in update_data:
+            del update_data['city_id']
+            print(f"[PROPERTIES] Removed city_id from update_data (doesn't exist in database schema)")
         
         # Filter update_data to only include valid database columns
         filtered_update_data = {}
