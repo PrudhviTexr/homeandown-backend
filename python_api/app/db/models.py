@@ -77,6 +77,11 @@ class Property(Base):
     rate_per_sqft: Mapped[float | None] = mapped_column(Float, nullable=True)
     rate_per_sqyd: Mapped[float | None] = mapped_column(Float, nullable=True)
     
+    # Pricing display fields for new property types (new_property, lot)
+    pricing_display_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)  # 'starting_from', 'per_unit', 'fixed'
+    starting_price_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)  # Starting price per sqft/sqyd
+    pricing_unit_type: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 'sqft' or 'sqyd'
+    
     property_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     bedrooms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bathrooms: Mapped[int | None] = mapped_column(Integer, nullable=True)

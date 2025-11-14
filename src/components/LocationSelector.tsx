@@ -59,7 +59,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             // address: suggestions.address || prev.address, 
             latitude: latitude ? latitude.toString() : prev.latitude,
             longitude: longitude ? longitude.toString() : prev.longitude,
-            zip_code: zipcode // Ensure zipcode is preserved
+            zip_code: zipcode // CRITICAL: Ensure zipcode is preserved as the full 6 digits
           }));
         }
         
@@ -199,28 +199,29 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
           address: data.address || prev.address,
           latitude: data.latitude ? data.latitude.toString() : prev.latitude,
           longitude: data.longitude ? data.longitude.toString() : prev.longitude,
-          zip_code: zipcode // Ensure zipcode is preserved
+            zip_code: zipcode // CRITICAL: Ensure zipcode is preserved as the full 6 digits
         }));
       }
       
       // Set dropdown selections directly
       if (data.state) {
         setSelectedState(data.state);
-        onStateChange(data.state);
+        handleStateChange(data.state);
       }
       
       if (data.district) {
         setSelectedDistrict(data.district);
-        onDistrictChange(data.district);
+        handleDistrictChange(data.district);
       }
       
       if (data.mandal) {
         setSelectedMandal(data.mandal);
-        onMandalChange(data.mandal);
+        handleMandalChange(data.mandal);
       }
       
       if (data.city) {
         setSelectedCity(data.city);
+        handleCityChange(data.city);
       }
       
       console.log('[LocationSelector] Fallback data applied successfully');
@@ -238,6 +239,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
       setSelectedDistrict(formData.district_id || formData.district || '');
       setSelectedMandal(formData.mandal_id || formData.mandal || '');
       setSelectedCity(formData.city_id || formData.city || '');
+      
     } else {
       // Reset all selections when formData is empty/null
       setSelectedState('');
@@ -341,40 +343,32 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             type="text"
             name="zip_code"
             value={formData.zip_code || ''}
-            onInput={(e: React.FormEvent<HTMLInputElement>) => {
-              const input = e.currentTarget;
-              const cursorPos = input.selectionStart || 0;
-              const value = input.value;
-              const numericValue = value.replace(/\D/g, '');
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+              const value = e.target.value;
+              const numericValue = value.replace(/\D/g, '').slice(0, 6); // Explicitly limit to 6 digits
               
-              // Only process if we have a valid numeric value
-              if (numericValue !== (formData.zip_code || '')) {
-                // Update the form data
+              // Update the form data immediately
+              setFormData((prev: any) => ({
+                ...prev,
+                zip_code: numericValue
+              }));
+
+              // Handle auto-population when reaching 6 digits
+              if (numericValue.length === 6 && previousZipcodeLengthRef.current !== 6) {
+                previousZipcodeLengthRef.current = numericValue.length;
+                // Use setTimeout to allow the input value to update first
+                setTimeout(() => {
+                  handleZipcodeAutoPopulation(numericValue);
+                }, 100);
+              } else if (numericValue.length < 6 && previousZipcodeLengthRef.current === 6) {
+                // Clear dependent fields only when going from 6 to less
                 setFormData((prev: any) => ({
                   ...prev,
-                  zip_code: numericValue
+                  state: '', district: '', mandal: '', city: ''
                 }));
-
-                // Handle auto-population when reaching 6 digits
-                if (numericValue.length === 6 && previousZipcodeLengthRef.current !== 6) {
-                  handleZipcodeAutoPopulation(numericValue);
-                } else if (numericValue.length < 6 && previousZipcodeLengthRef.current === 6) {
-                  // Clear dependent fields only when going from 6 to less
-                  setFormData((prev: any) => ({
-                    ...prev,
-                    state: '', district: '', mandal: '', city: ''
-                  }));
-                }
-                
                 previousZipcodeLengthRef.current = numericValue.length;
-
-                // Restore cursor position after React updates
-                requestAnimationFrame(() => {
-                  if (zipcodeInputRef.current && document.activeElement === zipcodeInputRef.current) {
-                    const newCursorPos = Math.min(cursorPos, numericValue.length);
-                    zipcodeInputRef.current.setSelectionRange(newCursorPos, newCursorPos);
-                  }
-                });
+              } else {
+                previousZipcodeLengthRef.current = numericValue.length;
               }
             }}
             onPaste={(e) => {

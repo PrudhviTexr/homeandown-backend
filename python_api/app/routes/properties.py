@@ -8,6 +8,122 @@ import datetime as dt
 
 router = APIRouter()
 
+def _format_property_pricing(property_data: dict) -> dict:
+    """
+    Format property pricing based on pricing_display_mode.
+    Returns a dict with display_text and calculation_info.
+    """
+    pricing_mode = property_data.get('pricing_display_mode', 'fixed')
+    listing_type = property_data.get('listing_type', 'SALE')
+    
+    # For rent properties
+    if listing_type == 'RENT':
+        monthly_rent = property_data.get('monthly_rent')
+        if monthly_rent:
+            return {
+                'display_text': f'₹{monthly_rent:,.0f}/month',
+                'display_mode': 'fixed',
+                'value': monthly_rent,
+                'unit': 'month'
+            }
+        return {
+            'display_text': 'Price on request',
+            'display_mode': 'fixed',
+            'value': None
+        }
+    
+    # For sale properties
+    if pricing_mode == 'starting_from':
+        # New property/apartment: "Starting from ₹X/sqft"
+        price_per_unit = property_data.get('starting_price_per_unit')
+        unit_type = property_data.get('pricing_unit_type', 'sqft')
+        
+        if price_per_unit:
+            unit_label = 'sqft' if unit_type == 'sqft' else 'sqyd'
+            return {
+                'display_text': f'Starting from ₹{price_per_unit:,.0f}/{unit_label}',
+                'display_mode': 'starting_from',
+                'value': price_per_unit,
+                'unit': unit_label,
+                'unit_type': unit_type,
+                'description': f'Buy any size. Price calculated per {unit_label}.'
+            }
+        # Fallback to rate_per_sqft if starting_price_per_unit not set
+        price_per_unit = property_data.get('rate_per_sqft')
+        if price_per_unit:
+            return {
+                'display_text': f'Starting from ₹{price_per_unit:,.0f}/sqft',
+                'display_mode': 'starting_from',
+                'value': price_per_unit,
+                'unit': 'sqft',
+                'unit_type': 'sqft',
+                'description': 'Buy any size. Price calculated per sqft.'
+            }
+    
+    elif pricing_mode == 'per_unit':
+        # Lot: "₹X/sqyd - buy 1, 2, 3... sq yards"
+        price_per_unit = property_data.get('starting_price_per_unit')
+        unit_type = property_data.get('pricing_unit_type', 'sqyd')
+        
+        if price_per_unit:
+            unit_label = 'sqyd' if unit_type == 'sqyd' else 'sqft'
+            # Generate example calculations for 1, 2, 3 units
+            examples = []
+            for qty in [1, 2, 3, 5]:
+                total_price = price_per_unit * qty
+                examples.append({
+                    'quantity': qty,
+                    'unit': unit_label,
+                    'total_price': total_price,
+                    'display': f'{qty} {unit_label} = ₹{total_price:,.0f}'
+                })
+            
+            return {
+                'display_text': f'₹{price_per_unit:,.0f}/{unit_label}',
+                'display_mode': 'per_unit',
+                'value': price_per_unit,
+                'unit': unit_label,
+                'unit_type': unit_type,
+                'description': f'Buy any quantity (1, 2, 3... {unit_label}s). Price calculated per {unit_label}.',
+                'examples': examples
+            }
+        # Fallback to rate_per_sqyd if starting_price_per_unit not set
+        price_per_unit = property_data.get('rate_per_sqyd')
+        if price_per_unit:
+            examples = []
+            for qty in [1, 2, 3, 5]:
+                total_price = price_per_unit * qty
+                examples.append({
+                    'quantity': qty,
+                    'unit': 'sqyd',
+                    'total_price': total_price,
+                    'display': f'{qty} sqyd = ₹{total_price:,.0f}'
+                })
+            return {
+                'display_text': f'₹{price_per_unit:,.0f}/sqyd',
+                'display_mode': 'per_unit',
+                'value': price_per_unit,
+                'unit': 'sqyd',
+                'unit_type': 'sqyd',
+                'description': 'Buy any quantity (1, 2, 3... sq yards). Price calculated per sqyd.',
+                'examples': examples
+            }
+    
+    # Default: fixed pricing
+    price = property_data.get('price')
+    if price:
+        return {
+            'display_text': f'₹{price:,.0f}',
+            'display_mode': 'fixed',
+            'value': price
+        }
+    
+    return {
+        'display_text': 'Price on request',
+        'display_mode': 'fixed',
+        'value': None
+    }
+
 @router.get("")
 @router.get("/")
 async def get_properties(
@@ -265,6 +381,10 @@ async def get_properties(
                 if prop.get('longitude') is None:
                     prop['longitude'] = default_lon
 
+        # Add formatted pricing display to each property
+        for prop in filtered_properties:
+            prop['formatted_pricing'] = _format_property_pricing(prop)
+
         print(f"[PROPERTIES] Returning {len(filtered_properties)} filtered properties")
         return filtered_properties
 
@@ -319,8 +439,12 @@ async def create_property(property_data: dict, request: Request = None):
         property_data.setdefault('priority', 0)
         
         # Handle required fields - set to 'NA' if empty
+        # Note: area_sqft is not required for new_property, new_apartment, and lot types
+        property_type = property_data.get('property_type', 'independent_house').lower()
+        area_not_required_types = ['new_property', 'new_apartment', 'lot']
+        is_area_not_required = property_type in area_not_required_types
+        
         required_fields = {
-            'area_sqft': 0,  # Must be numeric, not null
             'address': 'NA',
             'city': 'NA', 
             'state': 'NA',
@@ -328,6 +452,17 @@ async def create_property(property_data: dict, request: Request = None):
             'listing_type': 'SALE',
             'property_type': 'independent_house'
         }
+        
+        # Only require area_sqft for property types that need it
+        if not is_area_not_required:
+            required_fields['area_sqft'] = 0  # Must be numeric, not null
+        else:
+            # For new_property, new_apartment, and lot, set area_sqft to None if not provided
+            if 'area_sqft' not in property_data or property_data['area_sqft'] is None or property_data['area_sqft'] == '':
+                property_data['area_sqft'] = None
+                property_data['area_sqyd'] = None
+                property_data['area_acres'] = None
+                print(f"[PROPERTIES] Area fields set to None for {property_type} (area not required)")
         
         for field, default_value in required_fields.items():
             if field not in property_data or property_data[field] is None or property_data[field] == '':
@@ -340,16 +475,26 @@ async def create_property(property_data: dict, request: Request = None):
             'rate_per_sqft', 'rate_per_sqyd', 'area_sqft', 'area_sqyd', 'area_acres',
             'carpet_area_sqft', 'built_up_area_sqft', 'plot_area_sqft', 'plot_area_sqyd',
             'latitude', 'longitude', 'bedrooms', 'bathrooms', 'balconies',
-            'total_floors', 'floor', 'parking_spaces', 'floor_count'
+            'total_floors', 'floor', 'parking_spaces', 'floor_count',
+            # New pricing fields for new_property and lot types
+            'starting_price_per_unit'
         ]
         
         for field in numeric_fields:
             if field in property_data:
                 value = property_data[field]
                 if value is None or value == '' or value == 'NA':
-                    # For required numeric fields, set to 0 instead of None
-                    if field in ['area_sqft']:
-                        property_data[field] = 0
+                    # For area fields, check if area is required for this property type
+                    if field in ['area_sqft', 'area_sqyd', 'area_acres']:
+                        # If area is not required for this property type, set to None
+                        if is_area_not_required:
+                            property_data[field] = None
+                        else:
+                            # For required area fields, set to 0
+                            if field == 'area_sqft':
+                                property_data[field] = 0
+                            else:
+                                property_data[field] = None
                     else:
                         property_data[field] = None
                 else:
@@ -359,12 +504,20 @@ async def create_property(property_data: dict, request: Request = None):
                         else:
                             property_data[field] = float(value) if value else None
                     except (ValueError, TypeError):
-                        # For required numeric fields, set to 0 instead of None
-                        if field in ['area_sqft']:
-                            property_data[field] = 0
+                        # For area fields, check if area is required for this property type
+                        if field in ['area_sqft', 'area_sqyd', 'area_acres']:
+                            # If area is not required for this property type, set to None
+                            if is_area_not_required:
+                                property_data[field] = None
+                            else:
+                                # For required area fields, set to 0
+                                if field == 'area_sqft':
+                                    property_data[field] = 0
+                                else:
+                                    property_data[field] = None
                         else:
                             property_data[field] = None
-                        print(f"[PROPERTIES] Invalid numeric value for {field}: {value}, set to {'0' if field in ['area_sqft'] else 'None'}")
+                        print(f"[PROPERTIES] Invalid numeric value for {field}: {value}, set to {'None' if (field in ['area_sqft', 'area_sqyd', 'area_acres'] and is_area_not_required) else ('0' if field == 'area_sqft' else 'None')}")
         
         # Handle boolean fields
         boolean_fields = [
@@ -471,7 +624,9 @@ async def create_property(property_data: dict, request: Request = None):
             'bhk_config', 'plot_dimensions', 'soil_type', 'water_source', 'apartment_type',
             'legal_status', 'rera_status', 'rera_number',
             'nearby_business_hubs', 'nearby_transport', 'furnishing_status',
-            'district', 'mandal', 'state_id', 'district_id', 'mandal_id'
+            'district', 'mandal', 'state_id', 'district_id', 'mandal_id',
+            # New pricing fields for new_property and lot types
+            'pricing_display_mode', 'pricing_unit_type'
         ]
         
         for field in string_fields:
@@ -479,6 +634,31 @@ async def create_property(property_data: dict, request: Request = None):
                 value = property_data[field]
                 if value is None or value == '' or value == 'NA':
                     property_data[field] = None
+        
+        # Auto-set pricing_display_mode and related fields based on property_type
+        property_type = property_data.get('property_type', '').lower()
+        if property_type == 'new_property' or property_type == 'new_apartment':
+            # New property/apartment: "Starting from ₹X/sqft"
+            if not property_data.get('pricing_display_mode'):
+                property_data['pricing_display_mode'] = 'starting_from'
+            if not property_data.get('pricing_unit_type'):
+                property_data['pricing_unit_type'] = 'sqft'
+            # If starting_price_per_unit is provided, use it; otherwise use rate_per_sqft
+            if property_data.get('starting_price_per_unit') is None and property_data.get('rate_per_sqft'):
+                property_data['starting_price_per_unit'] = property_data.get('rate_per_sqft')
+        elif property_type == 'lot':
+            # Lot: "₹X/sqyd - buy 1, 2, 3... sq yards"
+            if not property_data.get('pricing_display_mode'):
+                property_data['pricing_display_mode'] = 'per_unit'
+            if not property_data.get('pricing_unit_type'):
+                property_data['pricing_unit_type'] = 'sqyd'
+            # If starting_price_per_unit is provided, use it; otherwise use rate_per_sqyd
+            if property_data.get('starting_price_per_unit') is None and property_data.get('rate_per_sqyd'):
+                property_data['starting_price_per_unit'] = property_data.get('rate_per_sqyd')
+        else:
+            # Default: fixed pricing
+            if not property_data.get('pricing_display_mode'):
+                property_data['pricing_display_mode'] = 'fixed'
         
         # Handle date fields
         date_fields = ['available_from', 'possession_date']
@@ -849,6 +1029,9 @@ async def _process_single_property(property_data: dict):
     if property_data.get('latitude') is None or property_data.get('longitude') is None:
         property_data['latitude'] = 17.3850
         property_data['longitude'] = 78.4867
+    
+    # Add formatted pricing display
+    property_data['formatted_pricing'] = _format_property_pricing(property_data)
         
     return property_data
 
@@ -911,6 +1094,28 @@ async def update_property(property_id: str, update_data: dict):
         # Remove sections from update_data as it's handled separately
         sections_data = update_data.pop('sections', None)
         
+        # Auto-set pricing_display_mode and related fields based on property_type (if property_type is being updated)
+        if 'property_type' in update_data:
+            property_type = update_data.get('property_type', '').lower()
+            if property_type == 'new_property' or property_type == 'new_apartment':
+                # New property/apartment: "Starting from ₹X/sqft"
+                if not update_data.get('pricing_display_mode'):
+                    update_data['pricing_display_mode'] = 'starting_from'
+                if not update_data.get('pricing_unit_type'):
+                    update_data['pricing_unit_type'] = 'sqft'
+                # If starting_price_per_unit is provided, use it; otherwise use rate_per_sqft
+                if update_data.get('starting_price_per_unit') is None and update_data.get('rate_per_sqft'):
+                    update_data['starting_price_per_unit'] = update_data.get('rate_per_sqft')
+            elif property_type == 'lot':
+                # Lot: "₹X/sqyd - buy 1, 2, 3... sq yards"
+                if not update_data.get('pricing_display_mode'):
+                    update_data['pricing_display_mode'] = 'per_unit'
+                if not update_data.get('pricing_unit_type'):
+                    update_data['pricing_unit_type'] = 'sqyd'
+                # If starting_price_per_unit is provided, use it; otherwise use rate_per_sqyd
+                if update_data.get('starting_price_per_unit') is None and update_data.get('rate_per_sqyd'):
+                    update_data['starting_price_per_unit'] = update_data.get('rate_per_sqyd')
+        
         # Define valid database columns for properties table (based on actual schema)
         valid_property_columns = {
             'id', 'custom_id', 'title', 'description', 'price', 'monthly_rent', 'security_deposit',
@@ -929,7 +1134,9 @@ async def update_property(property_id: str, update_data: dict):
             'possession_date', 'corner_plot', 'water_source', 'amenities_json', 'images_json', 
             'added_by', 'added_by_role', 'state_id', 'district_id', 'mandal_id', 'floor', 
             'lift_available', 'parking_spaces', 'assigned_agent_id', 'assignment_date', 
-            'assignment_status', 'assignment_notes', 'transfer_reason', 'previous_agent_id', 'seller_id'
+            'assignment_status', 'assignment_notes', 'transfer_reason', 'previous_agent_id', 'seller_id',
+            # New pricing fields for new_property and lot types
+            'pricing_display_mode', 'starting_price_per_unit', 'pricing_unit_type'
         }
         
         # Filter update_data to only include valid database columns
@@ -1054,6 +1261,9 @@ async def update_property(property_id: str, update_data: dict):
                                 property_data['images'] = image_urls
                                 # Update the property record with the images array
                                 await db.update("properties", {"images": image_urls}, {"id": property_id})
+                    
+                    # Add formatted pricing display
+                    property_data['formatted_pricing'] = _format_property_pricing(property_data)
                     
                     print(f"[PROPERTIES] Property updated successfully: {property_id}")
                     return {

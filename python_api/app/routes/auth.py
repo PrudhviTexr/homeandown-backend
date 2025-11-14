@@ -980,7 +980,7 @@ async def request_additional_role(request: Request) -> Dict[str, Any]:
                                 </div>
                                 
                                 <div style="text-align: center; margin: 40px 0;">
-                                    <a href="{settings.SITE_URL}/admin/dashboard" 
+                                    <a href="https://homeandown.com/admin/dashboard" 
                                        style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); 
                                               color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; 
                                               font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);">
@@ -1122,7 +1122,13 @@ async def forgot_password(request: Request) -> Dict[str, Any]:
         print(f"[AUTH] Reset token created for user: {user_id} (type: {actual_user_type})")
         
         # Generate role-specific reset URL
+        # Always use production URL for password reset links (never localhost)
         site_url = settings.SITE_URL or "https://homeandown.com"
+        # Ensure we never use localhost for password reset links
+        if "localhost" in site_url.lower() or "127.0.0.1" in site_url or site_url.startswith("http://"):
+            print(f"[AUTH] ⚠️ SITE_URL is set to localhost/development URL: {site_url}, using production URL instead")
+            site_url = "https://homeandown.com"
+        
         if actual_user_type == "admin":
             reset_url = f"{site_url}/admin/reset-password"
         elif actual_user_type == "agent":
@@ -1318,7 +1324,12 @@ async def reset_password(request: Request) -> Dict[str, Any]:
             }
             role = role_info.get(user_type, {"name": "User", "url": "/login"})
             
+            # Always use production URL for login links (never localhost)
             site_url = settings.SITE_URL or "https://homeandown.com"
+            # Ensure we never use localhost for login links
+            if "localhost" in site_url.lower() or "127.0.0.1" in site_url or site_url.startswith("http://"):
+                print(f"[AUTH] ⚠️ SITE_URL is set to localhost/development URL: {site_url}, using production URL instead")
+                site_url = "https://homeandown.com"
             login_url = f"{site_url}{role['url']}"
             
             confirmation_html = f"""
