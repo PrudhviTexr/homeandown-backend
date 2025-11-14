@@ -718,7 +718,11 @@ async def create_property(property_data: dict, request: Request = None):
         # Apply field mapping
         for ui_field, db_field in field_mapping.items():
             if ui_field in property_data and ui_field != db_field:
-                if db_field not in property_data:  # Only map if target field doesn't exist
+                # CRITICAL: For area_sqft, don't overwrite if it's already set (we set it to 0 for special property types)
+                if db_field == 'area_sqft' and property_data.get('area_sqft') is not None and property_data.get('area_sqft') != '':
+                    # Don't overwrite area_sqft if it's already set (we set it to 0 for special property types)
+                    print(f"[PROPERTIES] Skipping mapping {ui_field} -> {db_field} (area_sqft already set to {property_data.get('area_sqft')})")
+                elif db_field not in property_data:  # Only map if target field doesn't exist
                     property_data[db_field] = property_data[ui_field]
                 del property_data[ui_field]
                 print(f"[PROPERTIES] Mapped field {ui_field} -> {db_field}")
@@ -743,9 +747,32 @@ async def create_property(property_data: dict, request: Request = None):
                 print(f"[PROPERTIES] Removed unsupported field: {field}")
         
         # CRITICAL: Final safety check - ensure area_sqft is never None (database requires NOT NULL)
-        if property_data.get('area_sqft') is None:
+        # This MUST be the last check before database insert
+        # Check if area_sqft is missing, None, empty string, or invalid
+        if 'area_sqft' not in property_data or property_data.get('area_sqft') is None or property_data.get('area_sqft') == '':
             property_data['area_sqft'] = 0
-            print(f"[PROPERTIES] ⚠️ Final safety check: Set area_sqft to 0 (was None)")
+            print(f"[PROPERTIES] ⚠️ Final safety check: Set area_sqft to 0 (was missing/None/empty)")
+        
+        # Ensure area_sqft is a number, not a string or None
+        if isinstance(property_data.get('area_sqft'), str):
+            try:
+                property_data['area_sqft'] = float(property_data['area_sqft'])
+            except (ValueError, TypeError):
+                property_data['area_sqft'] = 0
+                print(f"[PROPERTIES] ⚠️ Converted area_sqft string to 0 (invalid value)")
+        elif property_data.get('area_sqft') is None:
+            property_data['area_sqft'] = 0
+            print(f"[PROPERTIES] ⚠️ Final safety check: Set area_sqft to 0 (was None after string check)")
+        
+        # ABSOLUTE FINAL CHECK: Ensure area_sqft exists and is a number (not None)
+        try:
+            area_value = property_data.get('area_sqft', 0)
+            if area_value is None or area_value == '':
+                area_value = 0
+            property_data['area_sqft'] = float(area_value)
+        except (ValueError, TypeError):
+            property_data['area_sqft'] = 0.0
+            print(f"[PROPERTIES] ⚠️ ABSOLUTE FINAL: Set area_sqft to 0.0 (conversion failed)")
         
         print(f"[PROPERTIES] Final property data keys: {list(property_data.keys())}")
         print(f"[PROPERTIES] Required fields check:")
@@ -759,6 +786,11 @@ async def create_property(property_data: dict, request: Request = None):
         
         # Insert property
         try:
+            # ONE MORE CHECK: Ensure area_sqft is definitely set before insert
+            if 'area_sqft' not in property_data or property_data['area_sqft'] is None:
+                property_data['area_sqft'] = 0.0
+                print(f"[PROPERTIES] ⚠️ PRE-INSERT CHECK: Set area_sqft to 0.0 before database insert")
+            
             result = await db.insert("properties", property_data)
             print(f"[PROPERTIES] Property created with ID: {property_id}")
             
