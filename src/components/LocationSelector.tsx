@@ -235,10 +235,11 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
   // Initialize from formData
   useEffect(() => {
     if (formData) {
-      setSelectedState(formData.state_id || formData.state || '');
-      setSelectedDistrict(formData.district_id || formData.district || '');
-      setSelectedMandal(formData.mandal_id || formData.mandal || '');
-      setSelectedCity(formData.city_id || formData.city || '');
+      // Use state/district/mandal/city fields directly (no _id fields)
+      setSelectedState(formData.state || '');
+      setSelectedDistrict(formData.district || '');
+      setSelectedMandal(formData.mandal || '');
+      setSelectedCity(formData.city || '');
       
     } else {
       // Reset all selections when formData is empty/null
@@ -268,14 +269,11 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     
     setFormData((prev: any) => ({
       ...prev,
-      state_id: value,
-      district_id: '',
-      mandal_id: '',
-      city_id: '',
       state: value,
       district: '',
       mandal: '',
       city: ''
+      // Note: state_id, district_id, mandal_id, city_id are not used - removed to prevent backend errors
     }));
 
     if (value) {
@@ -290,12 +288,10 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     
     setFormData((prev: any) => ({
       ...prev,
-      district_id: value,
-      mandal_id: '',
-      city_id: '',
       district: value,
       mandal: '',
       city: ''
+      // Note: state_id, district_id, mandal_id, city_id are not used - removed to prevent backend errors
     }));
 
     if (value && selectedState) {
@@ -309,10 +305,9 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     
     setFormData((prev: any) => ({
       ...prev,
-      mandal_id: value,
-      city_id: '',
       mandal: value,
       city: ''
+      // Note: state_id, district_id, mandal_id, city_id are not used - removed to prevent backend errors
     }));
 
     if (value) {
@@ -325,8 +320,8 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     
     setFormData((prev: any) => ({
       ...prev,
-      city_id: value,
       city: value
+      // Note: state_id, district_id, mandal_id, city_id are not used - removed to prevent backend errors
     }));
   };
 
@@ -347,28 +342,34 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
               const value = e.target.value;
               const numericValue = value.replace(/\D/g, '').slice(0, 6); // Explicitly limit to 6 digits
               
-              // Update the form data immediately
+              // Update the form data immediately without triggering auto-population
               setFormData((prev: any) => ({
                 ...prev,
                 zip_code: numericValue
               }));
 
-              // Handle auto-population when reaching 6 digits
-              if (numericValue.length === 6 && previousZipcodeLengthRef.current !== 6) {
-                previousZipcodeLengthRef.current = numericValue.length;
-                // Use setTimeout to allow the input value to update first
-                setTimeout(() => {
-                  handleZipcodeAutoPopulation(numericValue);
-                }, 100);
-              } else if (numericValue.length < 6 && previousZipcodeLengthRef.current === 6) {
+              // Only clear dependent fields if zipcode becomes less than 6 digits
+              if (numericValue.length < 6 && previousZipcodeLengthRef.current === 6) {
                 // Clear dependent fields only when going from 6 to less
                 setFormData((prev: any) => ({
                   ...prev,
                   state: '', district: '', mandal: '', city: ''
                 }));
-                previousZipcodeLengthRef.current = numericValue.length;
-              } else {
-                previousZipcodeLengthRef.current = numericValue.length;
+              }
+              
+              previousZipcodeLengthRef.current = numericValue.length;
+            }}
+            onKeyUp={(e: React.KeyboardEvent<HTMLInputElement>) => {
+              // Only trigger auto-population on Enter or after 6 digits are entered
+              const input = e.currentTarget;
+              const zipcode = input.value.replace(/\D/g, '').slice(0, 6);
+              
+              if (zipcode.length === 6 && previousZipcodeLengthRef.current !== 6) {
+                previousZipcodeLengthRef.current = 6;
+                // Use setTimeout to allow the input value to update first
+                setTimeout(() => {
+                  handleZipcodeAutoPopulation(zipcode);
+                }, 300);
               }
             }}
             onPaste={(e) => {

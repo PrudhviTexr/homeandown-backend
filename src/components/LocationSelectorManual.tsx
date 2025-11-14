@@ -264,6 +264,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
               if (readOnly) return;
               const input = e.currentTarget;
               const value = input.value;
+              // Explicitly limit to 6 digits - ensure no more than 6 can be entered
               const numericValue = value.replace(/\D/g, '').slice(0, 6);
               
               // Only update if value actually changed
