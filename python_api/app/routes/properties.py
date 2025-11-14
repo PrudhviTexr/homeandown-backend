@@ -454,15 +454,17 @@ async def create_property(property_data: dict, request: Request = None):
         }
         
         # Only require area_sqft for property types that need it
+        # CRITICAL: Database requires area_sqft to be NOT NULL, so set to 0 for property types that don't require area input
         if not is_area_not_required:
             required_fields['area_sqft'] = 0  # Must be numeric, not null
         else:
-            # For new_property, new_apartment, and lot, set area_sqft to None if not provided
+            # For new_property, new_apartment, and lot, set area_sqft to 0 (not None) since DB requires NOT NULL
+            # These property types don't require area input from user, but DB constraint requires a value
             if 'area_sqft' not in property_data or property_data['area_sqft'] is None or property_data['area_sqft'] == '':
-                property_data['area_sqft'] = None
-                property_data['area_sqyd'] = None
-                property_data['area_acres'] = None
-                print(f"[PROPERTIES] Area fields set to None for {property_type} (area not required)")
+                property_data['area_sqft'] = 0  # Set to 0 instead of None to satisfy NOT NULL constraint
+                property_data['area_sqyd'] = 0  # Set to 0 instead of None
+                property_data['area_acres'] = 0.0  # Set to 0.0 instead of None
+                print(f"[PROPERTIES] Area fields set to 0 for {property_type} (area not required but DB requires NOT NULL)")
         
         for field, default_value in required_fields.items():
             if field not in property_data or property_data[field] is None or property_data[field] == '':
@@ -486,15 +488,17 @@ async def create_property(property_data: dict, request: Request = None):
                 if value is None or value == '' or value == 'NA':
                     # For area fields, check if area is required for this property type
                     if field in ['area_sqft', 'area_sqyd', 'area_acres']:
-                        # If area is not required for this property type, set to None
-                        if is_area_not_required:
-                            property_data[field] = None
+                        # CRITICAL: Database requires area_sqft to be NOT NULL, so always set to 0 if None/empty
+                        # For property types that don't require area input (new_property, new_apartment, lot),
+                        # we still need to set area_sqft to 0 (not None) to satisfy the DB constraint
+                        if field == 'area_sqft':
+                            property_data[field] = 0  # Always set to 0 for NOT NULL constraint
+                        elif field == 'area_sqyd':
+                            property_data[field] = 0 if is_area_not_required else None
+                        elif field == 'area_acres':
+                            property_data[field] = 0.0 if is_area_not_required else None
                         else:
-                            # For required area fields, set to 0
-                            if field == 'area_sqft':
-                                property_data[field] = 0
-                            else:
-                                property_data[field] = None
+                            property_data[field] = None
                     else:
                         property_data[field] = None
                 else:
@@ -506,15 +510,17 @@ async def create_property(property_data: dict, request: Request = None):
                     except (ValueError, TypeError):
                         # For area fields, check if area is required for this property type
                         if field in ['area_sqft', 'area_sqyd', 'area_acres']:
-                            # If area is not required for this property type, set to None
-                            if is_area_not_required:
-                                property_data[field] = None
+                            # CRITICAL: Database requires area_sqft to be NOT NULL, so always set to 0 if invalid
+                            # For property types that don't require area input (new_property, new_apartment, lot),
+                            # we still need to set area_sqft to 0 (not None) to satisfy the DB constraint
+                            if field == 'area_sqft':
+                                property_data[field] = 0  # Always set to 0 for NOT NULL constraint
+                            elif field == 'area_sqyd':
+                                property_data[field] = 0 if is_area_not_required else None
+                            elif field == 'area_acres':
+                                property_data[field] = 0.0 if is_area_not_required else None
                             else:
-                                # For required area fields, set to 0
-                                if field == 'area_sqft':
-                                    property_data[field] = 0
-                                else:
-                                    property_data[field] = None
+                                property_data[field] = None
                         else:
                             property_data[field] = None
                         print(f"[PROPERTIES] Invalid numeric value for {field}: {value}, set to {'None' if (field in ['area_sqft', 'area_sqyd', 'area_acres'] and is_area_not_required) else ('0' if field == 'area_sqft' else 'None')}")
@@ -736,9 +742,14 @@ async def create_property(property_data: dict, request: Request = None):
                 del property_data[field]
                 print(f"[PROPERTIES] Removed unsupported field: {field}")
         
+        # CRITICAL: Final safety check - ensure area_sqft is never None (database requires NOT NULL)
+        if property_data.get('area_sqft') is None:
+            property_data['area_sqft'] = 0
+            print(f"[PROPERTIES] ⚠️ Final safety check: Set area_sqft to 0 (was None)")
+        
         print(f"[PROPERTIES] Final property data keys: {list(property_data.keys())}")
         print(f"[PROPERTIES] Required fields check:")
-        print(f"  - area_sqft: {property_data.get('area_sqft')}")
+        print(f"  - area_sqft: {property_data.get('area_sqft')} (type: {type(property_data.get('area_sqft')).__name__})")
         print(f"  - address: {property_data.get('address')}")
         print(f"  - city: {property_data.get('city')}")
         print(f"  - state: {property_data.get('state')}")
