@@ -8,20 +8,48 @@ import datetime as dt
 
 router = APIRouter()
 
+
 def _format_property_pricing(property_data: dict) -> dict:
     """
     Format property pricing based on pricing_display_mode.
     Returns a dict with display_text and calculation_info.
+    Uses Indian numbering system for all prices (e.g., ₹12,34,567).
     """
     pricing_mode = property_data.get('pricing_display_mode', 'fixed')
     listing_type = property_data.get('listing_type', 'SALE')
+    
+    # Helper function to format with Indian commas and 2 decimal places
+    def format_indian(num: float) -> str:
+        """Format number with Indian comma style and 2 decimal places (paisa)"""
+        if num is None:
+            return '0.00'
+        # Format with 2 decimal places
+        formatted_num = f'{num:.2f}'
+        # Split into integer and decimal parts
+        parts = formatted_num.split('.')
+        integer_part = parts[0]
+        decimal_part = parts[1] if len(parts) > 1 else '00'
+        
+        # Indian numbering: last 3 digits, then groups of 2
+        if len(integer_part) <= 3:
+            return f'{integer_part}.{decimal_part}'
+        
+        last_three = integer_part[-3:]
+        rest = integer_part[:-3]
+        if rest:
+            # Group rest by 2 from right
+            rest_reversed = rest[::-1]
+            rest_grouped = ','.join(rest_reversed[i:i+2] for i in range(0, len(rest_reversed), 2))
+            rest_final = rest_grouped[::-1]
+            return f'{rest_final},{last_three}.{decimal_part}'
+        return f'{last_three}.{decimal_part}'
     
     # For rent properties
     if listing_type == 'RENT':
         monthly_rent = property_data.get('monthly_rent')
         if monthly_rent:
             return {
-                'display_text': f'₹{monthly_rent:,.0f}/month',
+                'display_text': f'₹{format_indian(monthly_rent)}/month',
                 'display_mode': 'fixed',
                 'value': monthly_rent,
                 'unit': 'month'
@@ -41,7 +69,7 @@ def _format_property_pricing(property_data: dict) -> dict:
         if price_per_unit:
             unit_label = 'sqft' if unit_type == 'sqft' else 'sqyd'
             return {
-                'display_text': f'Starting from ₹{price_per_unit:,.0f}/{unit_label}',
+                'display_text': f'Starting from ₹{format_indian(price_per_unit)}/{unit_label}',
                 'display_mode': 'starting_from',
                 'value': price_per_unit,
                 'unit': unit_label,
@@ -52,7 +80,7 @@ def _format_property_pricing(property_data: dict) -> dict:
         price_per_unit = property_data.get('rate_per_sqft')
         if price_per_unit:
             return {
-                'display_text': f'Starting from ₹{price_per_unit:,.0f}/sqft',
+                'display_text': f'Starting from ₹{format_indian(price_per_unit)}/sqft',
                 'display_mode': 'starting_from',
                 'value': price_per_unit,
                 'unit': 'sqft',
@@ -75,11 +103,11 @@ def _format_property_pricing(property_data: dict) -> dict:
                     'quantity': qty,
                     'unit': unit_label,
                     'total_price': total_price,
-                    'display': f'{qty} {unit_label} = ₹{total_price:,.0f}'
+                    'display': f'{qty} {unit_label} = ₹{format_indian(total_price)}'
                 })
-            
+
             return {
-                'display_text': f'₹{price_per_unit:,.0f}/{unit_label}',
+                'display_text': f'₹{format_indian(price_per_unit)}/{unit_label}',
                 'display_mode': 'per_unit',
                 'value': price_per_unit,
                 'unit': unit_label,
@@ -97,10 +125,10 @@ def _format_property_pricing(property_data: dict) -> dict:
                     'quantity': qty,
                     'unit': 'sqyd',
                     'total_price': total_price,
-                    'display': f'{qty} sqyd = ₹{total_price:,.0f}'
+                    'display': f'{qty} sqyd = ₹{format_indian(total_price)}'
                 })
             return {
-                'display_text': f'₹{price_per_unit:,.0f}/sqyd',
+                'display_text': f'₹{format_indian(price_per_unit)}/sqyd',
                 'display_mode': 'per_unit',
                 'value': price_per_unit,
                 'unit': 'sqyd',
@@ -113,7 +141,7 @@ def _format_property_pricing(property_data: dict) -> dict:
     price = property_data.get('price')
     if price:
         return {
-            'display_text': f'₹{price:,.0f}',
+            'display_text': f'₹{format_indian(price)}',
             'display_mode': 'fixed',
             'value': price
         }
