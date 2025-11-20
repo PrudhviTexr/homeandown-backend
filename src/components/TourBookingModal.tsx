@@ -79,9 +79,10 @@ const TourBookingModal: React.FC<TourBookingModalProps> = ({ isOpen, onClose, pr
         notes: notes || 'Tour request via website'
       });
 
-      // Show success message (this will always show)
-      toast.success(`🎉 Tour booking request submitted successfully! Scheduled for ${selectedDate} at ${selectedTime}. You will receive a confirmation email shortly.`, {
-        duration: 5000, // Show for 5 seconds
+      // Show success message with booking details
+      const successMessage = result?.message || `Tour booking confirmed for ${result?.property_name || property.title} on ${result?.booking_date || selectedDate} at ${result?.booking_time || selectedTime}`;
+      toast.success(`🎉 ${successMessage}`, {
+        duration: 6000, // Show for 6 seconds
       });
       
       console.log('[TourBookingModal] Booking created successfully:', result);
@@ -91,15 +92,13 @@ const TourBookingModal: React.FC<TourBookingModalProps> = ({ isOpen, onClose, pr
       setSelectedTime('');
       setNotes('');
       
-      // Don't close modal immediately - let user see the success message
-      // Close modal after showing success message
+      // Close modal first
+      onClose();
+      
+      // Navigate to My Bookings page after a short delay to ensure modal closes
       setTimeout(() => {
-        onClose();
-        // Redirect to dashboard after modal closes
-        setTimeout(() => {
-          window.location.href = '/dashboard';
-        }, 500);
-      }, 2000);
+        window.location.href = '/my-bookings';
+      }, 1000);
     } catch (error: any) {
       console.error('Error booking tour:', error);
       

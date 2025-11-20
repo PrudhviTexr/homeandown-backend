@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { 
   BarChart3, 
@@ -90,14 +90,13 @@ const BuyerDashboard: React.FC = () => {
   const [inquiryFilter, setInquiryFilter] = useState<string>('all');
   const [bookingFilter, setBookingFilter] = useState<string>('all');
   const [savedPropertyFilter, setSavedPropertyFilter] = useState<string>('all');
+  const fetchingRef = useRef(false);
+  const hasFetchedRef = useRef(false);
 
-  useEffect(() => {
-    if (user) {
-      fetchDashboardData();
-    }
-  }, [user]);
-
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = useCallback(async () => {
+    // Prevent multiple simultaneous fetches
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
     try {
       setLoading(true);
       
@@ -162,8 +161,20 @@ const BuyerDashboard: React.FC = () => {
       toast.error('Failed to load dashboard data');
     } finally {
       setLoading(false);
+      fetchingRef.current = false;
     }
-  };
+  }, [user?.id]);
+
+  useEffect(() => {
+    // Only fetch if user exists and we haven't fetched yet
+    if (user?.id && !hasFetchedRef.current) {
+      hasFetchedRef.current = true;
+      fetchDashboardData();
+    } else if (!user?.id) {
+      // Reset fetch flag when user logs out
+      hasFetchedRef.current = false;
+    }
+  }, [user?.id, fetchDashboardData]);
 
   const handleSaveProperty = async (propertyId: string) => {
     try {

@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { 
   BarChart3, 
@@ -28,6 +29,7 @@ import {
 import { toast } from '@/components/ui/toast';
 import { pyFetch } from '@/utils/backend';
 import RoleBasedPropertyForm from '@/components/RoleBasedPropertyForm';
+import SellerHeader from '@/components/seller/SellerHeader';
 
 interface DashboardStats {
   total_properties: number;
@@ -95,27 +97,67 @@ interface Booking {
 
 const SellerDashboard: React.FC = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [properties, setProperties] = useState<Property[]>([]);
   const [inquiries, setInquiries] = useState<Inquiry[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
-  // Check URL params for tab
-  const urlParams = new URLSearchParams(window.location.search);
-  const initialTab = (urlParams.get('tab') as 'overview' | 'properties' | 'inquiries' | 'bookings') || 'overview';
-  const [activeTab, setActiveTab] = useState<'overview' | 'properties' | 'inquiries' | 'bookings'>(initialTab);
+  
+  // Get initial tab from URL params - check both pathname and search params
+  const getTabFromURL = useCallback(() => {
+    // Check if we're on a specific route
+    if (location.pathname === '/seller/inquiries') {
+      return 'inquiries';
+    }
+    if (location.pathname === '/seller/bookings') {
+      return 'bookings';
+    }
+    // Otherwise check query params
+    const urlParams = new URLSearchParams(location.search);
+    const tab = urlParams.get('tab');
+    return (tab as 'overview' | 'properties' | 'inquiries' | 'bookings') || 'overview';
+  }, [location.pathname, location.search]);
+  
+  const [activeTab, setActiveTabState] = useState<'overview' | 'properties' | 'inquiries' | 'bookings'>(() => {
+    // Initialize from URL on mount
+    if (location.pathname === '/seller/inquiries') return 'inquiries';
+    if (location.pathname === '/seller/bookings') return 'bookings';
+    const urlParams = new URLSearchParams(location.search);
+    return (urlParams.get('tab') as 'overview' | 'properties' | 'inquiries' | 'bookings') || 'overview';
+  });
   const [propertyFilter, setPropertyFilter] = useState<string>('all');
   const [inquiryFilter, setInquiryFilter] = useState<string>('all');
   const [bookingFilter, setBookingFilter] = useState<string>('all');
   const [showAddPropertyModal, setShowAddPropertyModal] = useState(false);
+  const fetchingRef = useRef(false);
+  const hasFetchedRef = useRef(false);
 
+  // Sync tab with URL changes (for navigation from /seller/inquiries or /seller/bookings)
   useEffect(() => {
-    if (user) {
-      fetchDashboardData();
+    const tabFromURL = getTabFromURL();
+    if (tabFromURL !== activeTab) {
+      setActiveTabState(tabFromURL);
+      // Update URL to match if we're on a direct route
+      if (location.pathname === '/seller/inquiries' || location.pathname === '/seller/bookings') {
+        window.history.replaceState({}, '', `/seller/dashboard?tab=${tabFromURL}`);
+      }
     }
-  }, [user]);
+  }, [location.pathname, location.search, getTabFromURL, activeTab]);
 
-  const fetchDashboardData = async () => {
+  // Optimized tab handler - updates URL without causing re-renders
+  const handleTabChange = useCallback((tab: 'overview' | 'properties' | 'inquiries' | 'bookings') => {
+    setActiveTabState(tab);
+    // Update URL - ensure we're on /seller/dashboard with the tab parameter
+    const newUrl = `/seller/dashboard?tab=${tab}`;
+    window.history.replaceState({}, '', newUrl);
+  }, []);
+
+  const fetchDashboardData = useCallback(async () => {
+    // Prevent multiple simultaneous fetches
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
     try {
       setLoading(true);
       
@@ -156,8 +198,20 @@ const SellerDashboard: React.FC = () => {
       toast.error('Failed to load dashboard data');
     } finally {
       setLoading(false);
+      fetchingRef.current = false;
     }
-  };
+  }, [user?.id]);
+
+  useEffect(() => {
+    // Only fetch if user exists and we haven't fetched yet
+    if (user?.id && !hasFetchedRef.current) {
+      hasFetchedRef.current = true;
+      fetchDashboardData();
+    } else if (!user?.id) {
+      // Reset fetch flag when user logs out
+      hasFetchedRef.current = false;
+    }
+  }, [user?.id, fetchDashboardData]);
 
   const handleBookingStatusUpdate = async (bookingId: string, newStatus: string, newDate?: string) => {
     try {
@@ -232,39 +286,62 @@ const SellerDashboard: React.FC = () => {
     });
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading dashboard...</p>
-        </div>
-      </div>
-    );
-  }
+  // Memoize the header right action to prevent re-renders
+  const headerRightAction = useMemo(() => (
+    <button
+      onClick={() => setShowAddPropertyModal(true)}
+      className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2 transition-colors"
+    >
+      <Plus className="w-4 h-4" />
+      Add Property
+    </button>
+  ), []);
+
+  // Get header title and subtitle based on active tab
+  const getHeaderInfo = useMemo(() => {
+    switch (activeTab) {
+      case 'inquiries':
+        return {
+          title: 'Property Inquiries',
+          subtitle: 'View and respond to buyer inquiries'
+        };
+      case 'bookings':
+        return {
+          title: 'Property Bookings',
+          subtitle: 'Manage property tour bookings'
+        };
+      case 'properties':
+        return {
+          title: 'My Properties',
+          subtitle: 'Manage your property listings'
+        };
+      default:
+        return {
+          title: 'Seller Dashboard',
+          subtitle: 'Manage your properties and track performance'
+        };
+    }
+  }, [activeTab]);
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Seller Dashboard</h1>
-              <p className="text-gray-600">Manage your properties and track performance</p>
-            </div>
-            <button
-              onClick={() => setShowAddPropertyModal(true)}
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              Add Property
-            </button>
+      {/* Header - Always visible, memoized to prevent re-renders */}
+      <SellerHeader
+        title={getHeaderInfo.title}
+        subtitle={getHeaderInfo.subtitle}
+        showAddProperty={false}
+        rightAction={headerRightAction}
+      />
+
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+            <p className="mt-4 text-gray-600">Loading dashboard...</p>
           </div>
         </div>
-      </div>
-
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      ) : (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pt-8">
         {/* Stats Cards */}
         {stats && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -332,8 +409,8 @@ const SellerDashboard: React.FC = () => {
                 return (
                   <button
                     key={tab.id}
-                    onClick={() => setActiveTab(tab.id as any)}
-                    className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 ${
+                    onClick={() => handleTabChange(tab.id as any)}
+                    className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 transition-colors ${
                       activeTab === tab.id
                         ? 'border-blue-500 text-blue-600'
                         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -393,9 +470,9 @@ const SellerDashboard: React.FC = () => {
                       <button
                         onClick={() => {
                           if (inquiries.length > 3) {
-                            setActiveTab('inquiries');
+                            handleTabChange('inquiries');
                           } else if (bookings.length > 3) {
-                            setActiveTab('bookings');
+                            handleTabChange('bookings');
                           }
                         }}
                         className="text-sm text-blue-600 hover:text-blue-700 font-medium"
@@ -522,11 +599,11 @@ const SellerDashboard: React.FC = () => {
                             Edit
                           </button>
                           <button
-                            onClick={() => window.location.href = `/property/${property.id}`}
+                            onClick={() => navigate(`/seller/property/${property.id}`)}
                             className="flex-1 bg-green-600 text-white px-3 py-2 rounded-lg hover:bg-green-700 text-sm flex items-center justify-center gap-1"
                           >
                             <Eye className="w-4 h-4" />
-                            View
+                            View Details
                           </button>
                         </div>
                       </div>
@@ -544,7 +621,7 @@ const SellerDashboard: React.FC = () => {
                   <select
                     value={inquiryFilter}
                     onChange={(e) => setInquiryFilter(e.target.value)}
-                    className="border border-gray-300 rounded-lg px-3 py-2"
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="all">All Inquiries</option>
                     <option value="pending">Pending</option>
@@ -555,51 +632,77 @@ const SellerDashboard: React.FC = () => {
                 <div className="space-y-4">
                   {inquiries
                     .filter(inquiry => inquiryFilter === 'all' || inquiry.status === inquiryFilter)
-                    .map((inquiry) => (
-                    <div key={inquiry.id} className="bg-white rounded-lg shadow-md p-6">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <h4 className="font-semibold text-gray-900">{inquiry.property.title}</h4>
-                          <p className="text-sm text-gray-600">{inquiry.property.city}, {inquiry.property.state}</p>
-                        </div>
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(inquiry.status)}`}>
-                          {inquiry.status}
-                        </span>
-                      </div>
-                      
-                      <div className="mb-4">
-                        <p className="text-gray-700 mb-2">{inquiry.message}</p>
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Users className="w-4 h-4" />
-                          {inquiry.user.first_name} {inquiry.user.last_name}
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Mail className="w-4 h-4" />
-                          {inquiry.user.email}
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Clock className="w-4 h-4" />
-                          {formatDate(inquiry.created_at)}
-                        </div>
-                      </div>
-
-                      {inquiry.status === 'pending' && (
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => {
-                              const response = prompt('Enter your response:');
-                              if (response) {
-                                handleInquiryResponse(inquiry.id, response);
-                              }
-                            }}
-                            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm"
-                          >
-                            Respond
-                          </button>
-                        </div>
-                      )}
+                    .length === 0 ? (
+                    <div className="bg-white rounded-lg shadow-md p-12 text-center">
+                      <MessageSquare className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                      <h4 className="text-lg font-semibold text-gray-900 mb-2">No Inquiries Found</h4>
+                      <p className="text-gray-600">
+                        {inquiryFilter === 'all' 
+                          ? "You don't have any inquiries yet. When buyers inquire about your properties, they'll appear here."
+                          : `No ${inquiryFilter} inquiries found.`
+                        }
+                      </p>
                     </div>
-                  ))}
+                  ) : (
+                    inquiries
+                      .filter(inquiry => inquiryFilter === 'all' || inquiry.status === inquiryFilter)
+                      .map((inquiry) => (
+                        <div key={inquiry.id} className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                          <div className="flex justify-between items-start mb-4">
+                            <div className="flex-1">
+                              <h4 className="font-semibold text-gray-900 mb-1">{inquiry.property.title}</h4>
+                              <p className="text-sm text-gray-600 flex items-center gap-1">
+                                <MapPin className="w-3 h-3" />
+                                {inquiry.property.city}, {inquiry.property.state}
+                              </p>
+                            </div>
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium ml-4 ${getStatusColor(inquiry.status)}`}>
+                              {inquiry.status}
+                            </span>
+                          </div>
+                          
+                          <div className="mb-4 space-y-2">
+                            <div className="bg-gray-50 rounded-lg p-3 mb-3">
+                              <p className="text-gray-700 text-sm">{inquiry.message}</p>
+                            </div>
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <Users className="w-4 h-4" />
+                              <span className="font-medium">{inquiry.user.first_name} {inquiry.user.last_name}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <Mail className="w-4 h-4" />
+                              {inquiry.user.email}
+                            </div>
+                            {inquiry.user.phone_number && (
+                              <div className="flex items-center gap-2 text-sm text-gray-600">
+                                <Phone className="w-4 h-4" />
+                                {inquiry.user.phone_number}
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <Clock className="w-4 h-4" />
+                              Inquired: {formatDate(inquiry.created_at)}
+                            </div>
+                          </div>
+
+                          {inquiry.status === 'pending' && (
+                            <div className="flex gap-2 pt-2 border-t border-gray-100">
+                              <button
+                                onClick={() => {
+                                  const response = prompt('Enter your response:');
+                                  if (response) {
+                                    handleInquiryResponse(inquiry.id, response);
+                                  }
+                                }}
+                                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
+                              >
+                                Respond
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))
+                  )}
                 </div>
               </div>
             )}
@@ -612,7 +715,7 @@ const SellerDashboard: React.FC = () => {
                   <select
                     value={bookingFilter}
                     onChange={(e) => setBookingFilter(e.target.value)}
-                    className="border border-gray-300 rounded-lg px-3 py-2"
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="all">All Bookings</option>
                     <option value="pending">Pending</option>
@@ -625,74 +728,99 @@ const SellerDashboard: React.FC = () => {
                 <div className="space-y-4">
                   {bookings
                     .filter(booking => bookingFilter === 'all' || booking.status === bookingFilter)
-                    .map((booking) => (
-                    <div key={booking.id} className="bg-white rounded-lg shadow-md p-6">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <h4 className="font-semibold text-gray-900">{booking.property.title}</h4>
-                          <p className="text-sm text-gray-600">{booking.property.city}, {booking.property.state}</p>
-                        </div>
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(booking.status)}`}>
-                          {booking.status}
-                        </span>
-                      </div>
-                      
-                      <div className="mb-4">
-                        <div className="flex items-center gap-2 text-sm text-gray-600 mb-2">
-                          <Users className="w-4 h-4" />
-                          {booking.user.first_name} {booking.user.last_name}
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-gray-600 mb-2">
-                          <Mail className="w-4 h-4" />
-                          {booking.user.email}
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-gray-600 mb-2">
-                          <Calendar className="w-4 h-4" />
-                          Tour Date: {formatDate(booking.tour_date)}
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <Clock className="w-4 h-4" />
-                          Booked: {formatDate(booking.created_at)}
-                        </div>
-                      </div>
-
-                      <div className="flex gap-2">
-                        {booking.status === 'pending' && (
-                          <>
-                            <button
-                              onClick={() => handleBookingStatusUpdate(booking.id, 'confirmed')}
-                              className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 text-sm flex items-center gap-1"
-                            >
-                              <CheckCircle className="w-4 h-4" />
-                              Confirm
-                            </button>
-                            <button
-                              onClick={() => handleBookingStatusUpdate(booking.id, 'cancelled')}
-                              className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 text-sm flex items-center gap-1"
-                            >
-                              <XCircle className="w-4 h-4" />
-                              Cancel
-                            </button>
-                          </>
-                        )}
-                        {booking.status === 'confirmed' && (
-                          <button
-                            onClick={() => handleBookingStatusUpdate(booking.id, 'completed')}
-                            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm flex items-center gap-1"
-                          >
-                            <CheckCircle className="w-4 h-4" />
-                            Mark Complete
-                          </button>
-                        )}
-                      </div>
+                    .length === 0 ? (
+                    <div className="bg-white rounded-lg shadow-md p-12 text-center">
+                      <Calendar className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                      <h4 className="text-lg font-semibold text-gray-900 mb-2">No Bookings Found</h4>
+                      <p className="text-gray-600">
+                        {bookingFilter === 'all' 
+                          ? "You don't have any bookings yet. When buyers book tours for your properties, they'll appear here."
+                          : `No ${bookingFilter} bookings found.`
+                        }
+                      </p>
                     </div>
-                  ))}
+                  ) : (
+                    bookings
+                      .filter(booking => bookingFilter === 'all' || booking.status === bookingFilter)
+                      .map((booking) => (
+                        <div key={booking.id} className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+                          <div className="flex justify-between items-start mb-4">
+                            <div className="flex-1">
+                              <h4 className="font-semibold text-gray-900 mb-1">{booking.property.title}</h4>
+                              <p className="text-sm text-gray-600 flex items-center gap-1">
+                                <MapPin className="w-3 h-3" />
+                                {booking.property.city}, {booking.property.state}
+                              </p>
+                            </div>
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium ml-4 ${getStatusColor(booking.status)}`}>
+                              {booking.status}
+                            </span>
+                          </div>
+                          
+                          <div className="mb-4 space-y-2">
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <Users className="w-4 h-4" />
+                              <span className="font-medium">{booking.user.first_name} {booking.user.last_name}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <Mail className="w-4 h-4" />
+                              {booking.user.email}
+                            </div>
+                            {booking.user.phone_number && (
+                              <div className="flex items-center gap-2 text-sm text-gray-600">
+                                <Phone className="w-4 h-4" />
+                                {booking.user.phone_number}
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <Calendar className="w-4 h-4" />
+                              Tour Date: {formatDate(booking.tour_date)}
+                            </div>
+                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                              <Clock className="w-4 h-4" />
+                              Booked: {formatDate(booking.created_at)}
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 pt-2 border-t border-gray-100">
+                            {booking.status === 'pending' && (
+                              <>
+                                <button
+                                  onClick={() => handleBookingStatusUpdate(booking.id, 'confirmed')}
+                                  className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 text-sm flex items-center gap-1 font-medium transition-colors"
+                                >
+                                  <CheckCircle className="w-4 h-4" />
+                                  Confirm
+                                </button>
+                                <button
+                                  onClick={() => handleBookingStatusUpdate(booking.id, 'cancelled')}
+                                  className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 text-sm flex items-center gap-1 font-medium transition-colors"
+                                >
+                                  <XCircle className="w-4 h-4" />
+                                  Cancel
+                                </button>
+                              </>
+                            )}
+                            {booking.status === 'confirmed' && (
+                              <button
+                                onClick={() => handleBookingStatusUpdate(booking.id, 'completed')}
+                                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm flex items-center gap-1 font-medium transition-colors"
+                              >
+                                <CheckCircle className="w-4 h-4" />
+                                Mark Complete
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                  )}
                 </div>
               </div>
             )}
           </div>
         </div>
       </div>
+      )}
 
       {/* Add Property Modal */}
       <RoleBasedPropertyForm

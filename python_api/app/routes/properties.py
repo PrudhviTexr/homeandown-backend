@@ -2,9 +2,12 @@ from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from typing import Optional, Any
 from ..db.supabase_client import db
 from ..core.security import require_api_key
+from ..core.cache import cache
 import traceback
 import uuid
 import datetime as dt
+import hashlib
+import json
 
 router = APIRouter()
 
@@ -175,7 +178,9 @@ async def get_properties(
     furnishing_status: Optional[str] = Query(None),
     facing: Optional[str] = Query(None),
     owner_id: Optional[str] = Query(None),
-    added_by: Optional[str] = Query(None)
+    added_by: Optional[str] = Query(None),
+    limit: Optional[int] = Query(50, ge=1, le=100),
+    offset: Optional[int] = Query(0, ge=0)
 ):
     try:
         print(f"\n[PROPERTIES] GET /properties request received")
@@ -237,31 +242,78 @@ async def get_properties(
         if facing:
             base_filters['facing'] = facing
 
-        print(f"[PROPERTIES] Querying database with filters: {base_filters}")
+        # Add simple filters to base_filters for database-level filtering
+        if bedrooms is not None:
+            base_filters['bedrooms'] = bedrooms
+        if bathrooms is not None:
+            base_filters['bathrooms'] = bathrooms
+        if furnishing_status:
+            base_filters['furnishing_status'] = furnishing_status
+        if city:
+            base_filters['city'] = city
+        if state:
+            base_filters['state'] = state
+        # Note: Price/rent/area range filters will be applied client-side after fetching
+        # This is more efficient than complex DB queries for ranges
 
-        # Fetch properties from database
-        properties = await db.select("properties", filters=base_filters)
+        print(f"[PROPERTIES] Querying database with filters: {base_filters}, limit={limit}, offset={offset}")
+
+        # Create cache key from filters and pagination (safe serialization)
+        cache_key = None
+        try:
+            # Create a safe string representation of filters for cache key
+            filter_str = str(sorted(base_filters.items())) if base_filters else ""
+            cache_key = f"properties:{hashlib.md5((filter_str + str(limit) + str(offset) + str(min_price) + str(max_price) + str(min_rent) + str(max_rent) + str(min_area) + str(max_area) + str(property_type)).encode()).hexdigest()}"
+            
+            # Check cache (only for first page to avoid stale pagination)
+            if offset == 0:
+                cached_result = cache.get(cache_key)
+                if cached_result is not None:
+                    print(f"[PROPERTIES] Returning cached result for key: {cache_key[:20]}...")
+                    return cached_result
+        except Exception as cache_error:
+            print(f"[PROPERTIES] ⚠️ Cache key creation failed (continuing without cache): {cache_error}")
+            cache_key = None
+
+        # Fetch properties from database with pagination - filter at DB level for performance
+        properties = await db.select(
+            "properties", 
+            filters=base_filters,
+            limit=limit,
+            offset=offset,
+            order_by="created_at",
+            ascending=False
+        )
         if not properties:
             print("[PROPERTIES] No properties found in database with filters:", base_filters)
             return []
-        
-        # Additional client-side filtering: ensure only verified and active properties are shown
-        # This is a safety check in case database filters didn't work
-        # Handle verified as boolean True, string 'true', or integer 1
-        # IMPORTANT: This filtering does NOT delete properties from database - it only filters the response
-        # Properties with verified=false or status!='active' still exist in the database, just not shown in public listings
-        initial_count = len(properties)
-        properties = [p for p in properties if 
-                     p.get('status') == 'active' and 
-                     (p.get('verified') is True or 
-                      (isinstance(p.get('verified'), str) and p.get('verified').lower() == 'true') or
-                      p.get('verified') == 1)]
-        filtered_out = initial_count - len(properties)
-        if filtered_out > 0:
-            print(f"[PROPERTIES] ⚠️ Filtered out {filtered_out} properties (not verified or not active) - THESE ARE NOT DELETED, just hidden from public view")
-        print(f"[PROPERTIES] After client-side verification filter: {len(properties)} properties shown ({filtered_out} filtered out)")
 
-        print(f"[PROPERTIES] Found {len(properties)} properties in database")
+        print(f"[PROPERTIES] Found {len(properties)} properties in database (paginated)")
+
+        # Apply price/rent/area range filters client-side (efficient for paginated results)
+        if min_price is not None or max_price is not None:
+            initial_count = len(properties)
+            properties = [p for p in properties if 
+                (min_price is None or (p.get('price') and p.get('price') >= min_price)) and
+                (max_price is None or (p.get('price') and p.get('price') <= max_price))]
+            if len(properties) < initial_count:
+                print(f"[PROPERTIES] Price filter: {initial_count} -> {len(properties)} properties")
+        
+        if min_rent is not None or max_rent is not None:
+            initial_count = len(properties)
+            properties = [p for p in properties if 
+                (min_rent is None or (p.get('monthly_rent') and p.get('monthly_rent') >= min_rent)) and
+                (max_rent is None or (p.get('monthly_rent') and p.get('monthly_rent') <= max_rent))]
+            if len(properties) < initial_count:
+                print(f"[PROPERTIES] Rent filter: {initial_count} -> {len(properties)} properties")
+        
+        if min_area is not None or max_area is not None:
+            initial_count = len(properties)
+            properties = [p for p in properties if 
+                (min_area is None or (p.get('area_sqft') and p.get('area_sqft') >= min_area)) and
+                (max_area is None or (p.get('area_sqft') and p.get('area_sqft') <= max_area))]
+            if len(properties) < initial_count:
+                print(f"[PROPERTIES] Area filter: {initial_count} -> {len(properties)} properties")
 
         # Filter by multiple property types if requested
         if property_type and ',' in property_type:
@@ -398,22 +450,22 @@ async def get_properties(
                 except Exception as img_err:
                     print(f"[PROPERTIES] Failed to fetch images for property {prop.get('id')}: {img_err}")
             
-            # Ensure coordinates are never null to prevent map crashes
-            if prop.get('latitude') is None or prop.get('longitude') is None:
-                # Default coordinates for Hyderabad, India
-                default_lat = 17.3850
-                default_lon = 78.4867
-                
-                if prop.get('latitude') is None:
-                    prop['latitude'] = default_lat
-                if prop.get('longitude') is None:
-                    prop['longitude'] = default_lon
+            # DO NOT set default coordinates - coordinates come from map picker only
+            # If coordinates are None, map will handle gracefully (show default center)
 
         # Add formatted pricing display to each property
         for prop in filtered_properties:
             prop['formatted_pricing'] = _format_property_pricing(prop)
 
         print(f"[PROPERTIES] Returning {len(filtered_properties)} filtered properties")
+        
+        # Cache the result (only for first page to avoid stale pagination)
+        try:
+            if offset == 0 and cache_key:
+                cache.set(cache_key, filtered_properties, ttl=300)  # Cache for 5 minutes
+        except Exception as cache_error:
+            print(f"[PROPERTIES] ⚠️ Cache set failed (continuing): {cache_error}")
+        
         return filtered_properties
 
     except Exception as e:
@@ -583,6 +635,7 @@ async def create_property(property_data: dict, request: Request = None):
                     suggested_fields = location_data.get('suggested_fields', {})
 
                     # Auto-populate empty fields with suggested values (but allow editing)
+                    # DO NOT set coordinates from pincode - coordinates come ONLY from map picker
                     if not property_data.get('state'):
                         property_data['state'] = suggested_fields.get('state')
                     if not property_data.get('district'):
@@ -594,12 +647,8 @@ async def create_property(property_data: dict, request: Request = None):
                     if not property_data.get('address'):
                         property_data['address'] = suggested_fields.get('address')
 
-                    # Auto-set coordinates if not provided
-                    if suggested_fields.get('latitude') and suggested_fields.get('longitude'):
-                        if property_data.get('latitude') is None:
-                            property_data['latitude'] = suggested_fields['latitude']
-                        if property_data.get('longitude') is None:
-                            property_data['longitude'] = suggested_fields['longitude']
+                    # DO NOT auto-set coordinates from pincode
+                    # Coordinates must be set by user via map picker interaction
 
                     print(f"[PROPERTIES] Auto-populated suggested location fields from zipcode {property_data['zip_code']}")
                     print(f"[PROPERTIES] Suggested Location: {suggested_fields.get('city')}, {suggested_fields.get('district')}, {suggested_fields.get('state')}")
@@ -609,18 +658,10 @@ async def create_property(property_data: dict, request: Request = None):
                 # Don't fail property creation if zipcode lookup fails
                 # Just log the error and continue
         
-        # Set default coordinates for Hyderabad if still missing (to prevent map crashes)
+        # DO NOT set default coordinates - coordinates must come from map picker
+        # If coordinates are missing, they will be None (user must set via map)
         if property_data.get('latitude') is None or property_data.get('longitude') is None:
-            # Default coordinates for Hyderabad, India
-            default_lat = 17.3850
-            default_lon = 78.4867
-            
-            if property_data.get('latitude') is None:
-                property_data['latitude'] = default_lat
-            if property_data.get('longitude') is None:
-                property_data['longitude'] = default_lon
-            
-            print(f"[PROPERTIES] Set default coordinates for Hyderabad: {default_lat}, {default_lon}")
+            print(f"[PROPERTIES] Coordinates not set - user must set via map picker")
         
         # Remove sections from property_data as it's handled separately
         sections_data = property_data.pop('sections', None)
@@ -992,9 +1033,38 @@ async def create_property(property_data: dict, request: Request = None):
         raise HTTPException(status_code=500, detail=f"Error creating property: {str(e)}")
 
 @router.get("/{property_id_or_slug}")
-async def get_property(property_id_or_slug: str):
+async def get_property(property_id_or_slug: str, request: Request = None):
     try:
         print(f"[PROPERTIES] Fetching single property by ID or slug: {property_id_or_slug}")
+        
+        # Check if user is authenticated and is a buyer
+        show_agent_info = False
+        if request:
+            try:
+                from ..core.security import try_get_current_user_claims
+                claims = try_get_current_user_claims(request)
+                if claims:
+                    user_id = claims.get("sub")
+                    if user_id:
+                        # Check if user is a buyer
+                        users = await db.select("users", filters={"id": user_id})
+                        if users:
+                            user = users[0]
+                            user_type = user.get("user_type", "").lower()
+                            # Check active roles if available
+                            try:
+                                from ..services.user_role_service import UserRoleService
+                                active_roles = await UserRoleService.get_active_user_roles(user_id)
+                                is_buyer = "buyer" in active_roles or user_type == "buyer"
+                            except Exception:
+                                is_buyer = user_type == "buyer"
+                            
+                            if is_buyer:
+                                show_agent_info = True
+                                print(f"[PROPERTIES] Buyer authenticated - will show agent info if available")
+            except Exception as auth_error:
+                print(f"[PROPERTIES] Auth check failed (non-buyer or not logged in): {auth_error}")
+                show_agent_info = False
         
         # First, try to fetch by ID (assuming it's a UUID)
         try:
@@ -1003,20 +1073,27 @@ async def get_property(property_id_or_slug: str):
             properties = await db.select("properties", filters={"id": property_id_or_slug})
             if properties:
                 property_data = dict(properties[0])
-                # ... (rest of the processing logic from the original function)
-                return await _process_single_property(property_data)
+                return await _process_single_property(property_data, show_agent_info=show_agent_info)
         except ValueError:
             # It's not a UUID, so treat it as a slug
             pass
 
-        # If not found by ID, search by slug
+        # If not found by ID, search by slug using database query
         print(f"[PROPERTIES] Not a valid UUID. Searching by slug: {property_id_or_slug}")
-        # Fetch ALL properties to search by slug, not just active ones
-        all_properties = await db.select("properties")
-        
         import re
         
-        for prop in all_properties:
+        # Try to find by searching titles that might match the slug
+        # First, try a direct search with the slug as a substring in title
+        # This is much more efficient than fetching all properties
+        search_term = property_id_or_slug.replace('-', ' ')
+        properties_by_title = await db.select(
+            "properties",
+            filters={"status": "active"},
+            limit=100  # Limit search to first 100 active properties
+        )
+        
+        # Search through limited results for slug match
+        for prop in properties_by_title:
             title = prop.get('title', '')
             if title:
                 # Generate slug from title
@@ -1028,7 +1105,7 @@ async def get_property(property_id_or_slug: str):
                 
                 if slug == property_id_or_slug:
                     print(f"[PROPERTIES] Property found by slug: {prop.get('id')}")
-                    return await _process_single_property(dict(prop))
+                    return await _process_single_property(dict(prop), show_agent_info=show_agent_info)
 
         # If we reach here, no property was found by ID or slug
         raise HTTPException(status_code=404, detail="Property not found")
@@ -1040,7 +1117,7 @@ async def get_property(property_id_or_slug: str):
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error fetching property: {str(e)}")
 
-async def _process_single_property(property_data: dict):
+async def _process_single_property(property_data: dict, show_agent_info: bool = False):
     """Helper function to process and enrich a single property object."""
     # (The processing logic from the original get_property function will be moved here)
     # Handle array fields, JSONB fields, fetch owner, fetch sections, fetch images, etc.
@@ -1058,36 +1135,42 @@ async def _process_single_property(property_data: dict):
             except (json.JSONDecodeError, TypeError):
                 property_data[field] = []
 
-    # Fetch owner details if available
-    if property_data.get('owner_id'):
-        try:
-            owners = await db.select("users", filters={"id": property_data['owner_id']})
-            if owners:
-                owner = dict(owners[0])
-                property_data['owner'] = {
-                    'id': owner.get('id'),
-                    'first_name': owner.get('first_name'),
-                    'last_name': owner.get('last_name'),
-                }
-        except Exception:
-            pass # Ignore owner fetch errors
+    # Owner information removed - only showing agent information on details page
+    # Owner details are still available in the database but not exposed in the public API response
 
-    # Fetch assigned agent details if available
+    # Fetch assigned agent details if available - ONLY for logged-in buyers
     agent_id = property_data.get("agent_id") or property_data.get("assigned_agent_id")
-    if agent_id:
+    if show_agent_info and agent_id:
         try:
             agents = await db.select("users", filters={"id": agent_id})
             if agents:
                 agent = dict(agents[0])
+                # Add agent name and phone number (for logged-in buyers only)
+                property_data['agent'] = {
+                    'id': agent.get('id'),
+                    'name': f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
+                    'phone_number': agent.get('phone_number') or agent.get('phone'),
+                }
+                # Also keep full agent details for backward compatibility
                 property_data['assigned_agent'] = {
                     'id': agent.get('id'),
                     'first_name': agent.get('first_name'),
                     'last_name': agent.get('last_name'),
+                    'name': f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
                     'email': agent.get('email'),
-                    'phone_number': agent.get('phone_number'),
+                    'phone_number': agent.get('phone_number') or agent.get('phone'),
                 }
-        except Exception:
+                print(f"[PROPERTIES] Agent info added for buyer: {property_data['agent']['name']}")
+            else:
+                print(f"[PROPERTIES] Agent ID {agent_id} not found in database")
+        except Exception as e:
+            print(f"[PROPERTIES] Error fetching agent info: {e}")
             pass # Ignore agent fetch errors
+    else:
+        if not show_agent_info:
+            print(f"[PROPERTIES] Agent info not shown - user not authenticated as buyer")
+        elif not agent_id:
+            print(f"[PROPERTIES] Agent info not shown - property has no assigned agent")
 
     # Fetch images if empty
     if not property_data.get('images'):
@@ -1424,7 +1507,7 @@ async def delete_property(property_id: str, _=Depends(require_api_key)):
         property_custom_id = property_data.get('custom_id', 'N/A')
         
         # LOG DELETION DETAILS FOR AUDIT
-        print(f"[PROPERTIES] ⚠️ DELETING PROPERTY:")
+        print(f"[PROPERTIES] ⚠️ DELETING PROPERTY COMPLETELY:")
         print(f"  - ID: {property_id}")
         print(f"  - Custom ID: {property_custom_id}")
         print(f"  - Title: {property_title}")
@@ -1432,18 +1515,108 @@ async def delete_property(property_id: str, _=Depends(require_api_key)):
         print(f"  - Status: {property_data.get('status')}")
         print(f"  - Created: {property_data.get('created_at')}")
         
-        # Delete property sections first
+        # Delete all related data to completely remove property from website
+        
+        # 1. Delete property sections
         try:
             await db.delete("property_sections", {"property_id": property_id})
-            print(f"[PROPERTIES] Deleted property sections for: {property_id}")
-        except Exception as sec_error:
-            print(f"[PROPERTIES] Error deleting sections (may not exist): {sec_error}")
+            print(f"[PROPERTIES] ✓ Deleted property sections")
+        except Exception as e:
+            print(f"[PROPERTIES] ⚠️ Error deleting sections (may not exist): {e}")
         
-        # Delete property
+        # 2. Delete documents/images related to property
+        try:
+            await db.delete("documents", {"entity_type": "property", "entity_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted property documents/images")
+        except Exception as e:
+            print(f"[PROPERTIES] ⚠️ Error deleting documents: {e}")
+        
+        # 3. Delete saved properties (favorites)
+        try:
+            await db.delete("saved_properties", {"property_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted saved properties (favorites)")
+        except Exception as e:
+            print(f"[PROPERTIES] ⚠️ Error deleting saved properties: {e}")
+        
+        # 4. Delete inquiries
+        try:
+            await db.delete("inquiries", {"property_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted inquiries")
+        except Exception as e:
+            print(f"[PROPERTIES] ⚠️ Error deleting inquiries: {e}")
+        
+        # 5. Delete bookings
+        try:
+            await db.delete("bookings", {"property_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted bookings")
+        except Exception as e:
+            print(f"[PROPERTIES] ⚠️ Error deleting bookings: {e}")
+        
+        # 6. Delete property views
+        try:
+            await db.delete("property_views", {"property_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted property views")
+        except Exception as e:
+            print(f"[PROPERTIES] ⚠️ Error deleting property views: {e}")
+        
+        # 7. Delete property viewings
+        try:
+            await db.delete("property_viewings", {"property_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted property viewings")
+        except Exception as e:
+            print(f"[PROPERTIES] ⚠️ Error deleting property viewings: {e}")
+        
+        # 9. Delete agent property notifications
+        try:
+            await db.delete("agent_property_notifications", {"property_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted agent property notifications")
+        except Exception as e:
+            print(f"[PROPERTIES] ⚠️ Error deleting agent notifications: {e}")
+        
+        # 10. Delete property assignment queue
+        try:
+            await db.delete("property_assignment_queue", {"property_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted property assignment queue")
+        except Exception as e:
+            print(f"[PROPERTIES] ⚠️ Error deleting assignment queue: {e}")
+        
+        # 11. Delete maintenance requests
+        try:
+            await db.delete("maintenance_requests", {"property_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted maintenance requests")
+        except Exception as e:
+            print(f"[PROPERTIES] ⚠️ Error deleting maintenance requests: {e}")
+        
+        # 12. Clear cache for this property
+        try:
+            # Clear all property-related cache entries
+            cache.clear()  # Clear entire cache to ensure property is removed
+            print(f"[PROPERTIES] ✓ Cleared cache")
+        except Exception as e:
+            print(f"[PROPERTIES] ⚠️ Error clearing cache: {e}")
+        
+        # 13. Finally, delete the property itself
         await db.delete("properties", {"id": property_id})
+        print(f"[PROPERTIES] ✓ Deleted property record")
         
-        print(f"[PROPERTIES] ⚠️ PROPERTY DELETED SUCCESSFULLY: {property_id} ({property_title})")
-        return {"success": True, "message": f"Property '{property_title}' deleted successfully"}
+        print(f"[PROPERTIES] ⚠️ PROPERTY COMPLETELY DELETED FROM WEBSITE: {property_id} ({property_title})")
+        return {
+            "success": True, 
+            "message": f"Property '{property_title}' and all related data completely removed from website",
+            "deleted_items": [
+                "property_sections",
+                "documents/images",
+                "saved_properties",
+                "inquiries",
+                "bookings",
+                "property_views",
+                "property_viewings",
+                "agent_notifications",
+                "assignment_queue",
+                "maintenance_requests",
+                "property_record"
+            ]
+        }
         
     except HTTPException:
         raise
@@ -1494,10 +1667,35 @@ async def get_property_images(property_id: str):
         raise HTTPException(status_code=500, detail=f"Error fetching images: {str(e)}")
 
 @router.get("/{property_id}/contact")
-async def get_property_contact(property_id: str, user_role: str = Query(None)):
-    """Get contact information for a property"""
+async def get_property_contact(property_id: str, request: Request = None, user_role: str = Query(None)):
+    """Get contact information for a property - returns agent information only for logged-in buyers"""
     try:
         print(f"[PROPERTIES] Getting contact info for property: {property_id}, role: {user_role}")
+        
+        # Check if user is authenticated and is a buyer
+        is_authenticated_buyer = False
+        if request:
+            try:
+                from ..core.security import try_get_current_user_claims
+                claims = try_get_current_user_claims(request)
+                if claims:
+                    user_id = claims.get("sub")
+                    if user_id:
+                        users = await db.select("users", filters={"id": user_id})
+                        if users:
+                            user = users[0]
+                            user_type = user.get("user_type", "").lower()
+                            try:
+                                from ..services.user_role_service import UserRoleService
+                                active_roles = await UserRoleService.get_active_user_roles(user_id)
+                                is_authenticated_buyer = "buyer" in active_roles or user_type == "buyer"
+                            except Exception:
+                                is_authenticated_buyer = user_type == "buyer"
+            except Exception as auth_error:
+                print(f"[PROPERTIES] Auth check failed: {auth_error}")
+        
+        if not is_authenticated_buyer:
+            raise HTTPException(status_code=401, detail="Authentication required. Only logged-in buyers can view agent contact information.")
         
         # Check if property exists
         property = await db.select("properties", filters={"id": property_id})
@@ -1506,162 +1704,30 @@ async def get_property_contact(property_id: str, user_role: str = Query(None)):
         
         property = property[0]
         
-        # Get owner/agent information
-        owner_id = property.get("owner_id") or property.get("added_by")
-        if owner_id:
-            owner = await db.select("users", filters={"id": owner_id})
-            if owner:
-                owner = owner[0]
-                return {
-                    "name": f"{owner.get('first_name', '')} {owner.get('last_name', '')}".strip(),
-                    "email": owner.get("email"),
-                    "phone": owner.get("phone"),
-                    "user_type": owner.get("user_type")
-                }
+        # Get agent information only (owner information removed from public API)
+        agent_id = property.get("agent_id") or property.get("assigned_agent_id")
+        if not agent_id:
+            return {"message": "No agent assigned to this property"}
         
-        return {"message": "Contact information not available"}
+        agent = await db.select("users", filters={"id": agent_id})
+        if agent:
+            agent = agent[0]
+            return {
+                "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
+                "email": agent.get("email"),
+                "phone": agent.get("phone_number") or agent.get("phone"),
+                "user_type": agent.get("user_type")
+            }
+        
+        return {"message": "Agent information not available"}
         
     except HTTPException:
         raise
     except Exception as e:
         print(f"[PROPERTIES] Get contact error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get contact: {str(e)}")
 
 
-@router.get("/{property_id}/reviews")
-async def get_property_reviews(property_id: str):
-    """Get all reviews for a property"""
-    try:
-        print(f"[PROPERTIES] Getting reviews for property: {property_id}")
-        
-        # Get reviews from database
-        reviews = await db.select("property_reviews", filters={"property_id": property_id})
-        
-        # Get user details for each review
-        for review in reviews:
-            try:
-                user_data = await db.select("users", filters={"id": review.get("user_id")})
-                if user_data:
-                    review["user"] = {
-                        "first_name": user_data[0].get("first_name"),
-                        "last_name": user_data[0].get("last_name")
-                    }
-            except Exception as user_error:
-                print(f"[PROPERTIES] Error fetching user for review: {user_error}")
-        
-        # Sort by created_at descending
-        reviews.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-        
-        print(f"[PROPERTIES] Found {len(reviews)} reviews")
-        return reviews
-        
-    except Exception as e:
-        print(f"[PROPERTIES] Get reviews error: {e}")
-        raise HTTPException(status_code=500, detail=f"Error fetching reviews: {str(e)}")
-
-
-@router.post("/{property_id}/reviews")
-async def create_property_review(property_id: str, data: dict):
-    """Create a review for a property"""
-    try:
-        print(f"[PROPERTIES] Creating review for property: {property_id}")
-        
-        user_id = data.get("user_id")
-        rating = data.get("rating")
-        title = data.get("title", "")
-        comment = data.get("comment", "")
-        
-        if not user_id or not rating or not comment:
-            raise HTTPException(status_code=400, detail="user_id, rating, and comment are required")
-        
-        if rating < 1 or rating > 5:
-            raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
-        
-        # Check if user has already reviewed this property
-        existing_reviews = await db.select("property_reviews", filters={
-            "property_id": property_id,
-            "user_id": user_id
-        })
-        
-        if existing_reviews:
-            raise HTTPException(status_code=400, detail="You have already reviewed this property")
-        
-        # Create review
-        review_data = {
-            "id": str(uuid.uuid4()),
-            "property_id": property_id,
-            "user_id": user_id,
-            "rating": rating,
-            "title": title,
-            "comment": comment,
-            "helpful_count": 0,
-            "created_at": dt.datetime.utcnow().isoformat()
-        }
-        
-        created = await db.insert("property_reviews", review_data)
-        print(f"[PROPERTIES] Review created successfully")
-        
-        # Send notification to property owner
-        try:
-            property_data = await db.select("properties", filters={"id": property_id})
-            if property_data:
-                property_info = property_data[0]
-                owner_id = property_info.get("owner_id")
-                
-                if owner_id:
-                    owner_data = await db.select("users", filters={"id": owner_id})
-                    if owner_data:
-                        owner_email = owner_data[0].get("email")
-                        owner_name = f"{owner_data[0].get('first_name', '')} {owner_data[0].get('last_name', '')}".strip()
-                        property_title = property_info.get("title", "Property")
-                        
-                        # Get reviewer name
-                        reviewer_data = await db.select("users", filters={"id": user_id})
-                        reviewer_name = "A user"
-                        if reviewer_data:
-                            reviewer_name = f"{reviewer_data[0].get('first_name', '')} {reviewer_data[0].get('last_name', '')}".strip()
-                        
-                        email_html = f"""
-                        <html>
-                        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                                <h2 style="color: #2563eb;">New Review for Your Property</h2>
-                                <p>Hello {owner_name},</p>
-                                <p>{reviewer_name} has left a review for your property: <strong>{property_title}</strong></p>
-                                <div style="background-color: #f9fafb; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                                    <div style="margin-bottom: 10px;">
-                                        <strong>Rating:</strong> {"⭐" * rating} ({rating}/5)
-                                    </div>
-                                    {f'<div style="margin-bottom: 10px;"><strong>Title:</strong> {title}</div>' if title else ''}
-                                    <div><strong>Review:</strong></div>
-                                    <p style="margin-top: 5px;">{comment}</p>
-                                </div>
-                                <p>Log in to your dashboard to view and respond to this review.</p>
-                                <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
-                                <p style="color: #999; font-size: 12px;">© 2025 Home & Own. All rights reserved.</p>
-                            </div>
-                        </body>
-                        </html>
-                        """
-                        
-                        from ..services.email import send_email
-                        await send_email(
-                            to=owner_email,
-                            subject=f"New Review for {property_title} - Home & Own",
-                            html=email_html
-                        )
-                        print(f"[PROPERTIES] Review notification sent to property owner")
-        except Exception as email_error:
-            print(f"[PROPERTIES] Failed to send review notification: {email_error}")
-        
-        return created[0] if created else review_data
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[PROPERTIES] Create review error: {e}")
-        raise HTTPException(status_code=500, detail=f"Error creating review: {str(e)}")
-
-        raise HTTPException(status_code=500, detail=f"Error fetching contact: {str(e)}")
 
 @router.get("/zipcode/{zipcode}", tags=["properties"])
 @router.get("/pincode/{zipcode}", tags=["properties"])  # Keep pincode for backward compatibility
@@ -1723,6 +1789,99 @@ async def get_zipcode_suggestions(zipcode: str):
     except Exception as e:
         print(f"[PROPERTIES] Error fetching zipcode suggestions: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch zipcode suggestions: {str(e)}")
+
+@router.post("/geocode/address", tags=["properties"])
+async def geocode_address(address_data: dict):
+    """Geocode an address string to get coordinates and location details using Google Maps"""
+    try:
+        address = address_data.get("address")
+        if not address:
+            raise HTTPException(status_code=400, detail="Address is required")
+        
+        from ..services.google_maps_service import GoogleMapsService
+        
+        location_data = GoogleMapsService.geocode_address(address)
+        
+        if not location_data:
+            raise HTTPException(status_code=404, detail="Could not geocode the address")
+        
+        return {
+            "success": True,
+            "location": location_data
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[PROPERTIES] Error geocoding address: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to geocode address: {str(e)}")
+
+@router.post("/geocode/reverse", tags=["properties"])
+async def reverse_geocode(coordinate_data: dict):
+    """Reverse geocode coordinates to get address information using OpenStreetMap (free)"""
+    try:
+        lat = coordinate_data.get("latitude")
+        lng = coordinate_data.get("longitude")
+        
+        if lat is None or lng is None:
+            raise HTTPException(status_code=400, detail="Latitude and longitude are required")
+        
+        # Use OpenStreetMap for reverse geocoding (free)
+        from ..services.location_service import LocationService
+        
+        location_data = await LocationService._reverse_geocode_coordinates(float(lat), float(lng))
+        
+        if not location_data:
+            raise HTTPException(status_code=404, detail="Could not reverse geocode the coordinates")
+        
+        return {
+            "success": True,
+            "location": location_data
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[PROPERTIES] Error reverse geocoding: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reverse geocode: {str(e)}")
+
+@router.get("/places/autocomplete", tags=["properties"])
+async def get_place_autocomplete(
+    input_text: str = Query(..., description="Text input for autocomplete"),
+    country: str = Query("in", description="Country code (default: in for India)")
+):
+    """Get place autocomplete suggestions using Google Places API"""
+    try:
+        from ..services.google_maps_service import GoogleMapsService
+        
+        suggestions = GoogleMapsService.get_place_autocomplete(input_text, country)
+        
+        return {
+            "success": True,
+            "suggestions": suggestions
+        }
+    except Exception as e:
+        print(f"[PROPERTIES] Error getting autocomplete: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get autocomplete: {str(e)}")
+
+@router.get("/places/{place_id}", tags=["properties"])
+async def get_place_details(place_id: str):
+    """Get detailed information about a place using Google Places API"""
+    try:
+        from ..services.google_maps_service import GoogleMapsService
+        
+        place_data = GoogleMapsService.get_place_details(place_id)
+        
+        if not place_data:
+            raise HTTPException(status_code=404, detail="Place not found")
+        
+        return {
+            "success": True,
+            "place": place_data
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[PROPERTIES] Error getting place details: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get place details: {str(e)}")
 
 @router.get("/filters/options", tags=["properties"])
 async def get_filter_options():

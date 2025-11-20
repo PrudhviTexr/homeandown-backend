@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, startTransition } from 'react';
 import { MapPin, ChevronDown } from 'lucide-react';
 import { useLocationData } from '@/hooks/useLocationData';
 import { pyFetch } from '@/utils/backend';
@@ -22,12 +22,209 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
   const [zipcodeLoading, setZipcodeLoading] = useState(false);
   const zipcodeInputRef = useRef<HTMLInputElement>(null);
   const previousZipcodeLengthRef = useRef<number>(0);
+  // Local state for zipcode input to prevent re-renders on every keystroke
+  const [localZipcode, setLocalZipcode] = useState(() => formData?.zip_code || '');
+  // Ref to track last processed zipcode to prevent duplicate API calls
+  const lastProcessedZipcodeRef = useRef<string>('');
+  // Ref to prevent multiple simultaneous API calls
+  const isProcessingZipcodeRef = useRef<boolean>(false);
+  // Simple cache for pincode data to speed up repeated lookups
+  const pincodeCacheRef = useRef<Map<string, any>>(new Map());
+  // Refs to prevent multiple calls to location data loaders
+  const lastLoadedStateRef = useRef<string>('');
+  const lastLoadedDistrictRef = useRef<string>('');
+  const lastLoadedMandalRef = useRef<string>('');
 
-  // Zipcode auto-population function
+  // Zipcode auto-population function - only called when zipcode is complete (6 digits)
   const handleZipcodeAutoPopulation = async (zipcode: string) => {
-    if (!zipcode || zipcode.length !== 6 || !/^\d{6}$/.test(zipcode)) return;
+    // Validate zipcode format
+    if (!zipcode || zipcode.length !== 6 || !/^\d{6}$/.test(zipcode)) {
+      console.log('[LocationSelector] Invalid zipcode format, skipping:', zipcode);
+      return;
+    }
+    
+    // Prevent duplicate API calls for the same zipcode
+    if (isProcessingZipcodeRef.current) {
+      console.log('[LocationSelector] Already processing zipcode, skipping:', zipcode);
+      return;
+    }
+    
+    // Skip if we just processed this exact zipcode (prevents re-fetching on blur after Enter)
+    if (lastProcessedZipcodeRef.current === zipcode && zipcode.length === 6) {
+      console.log('[LocationSelector] Zipcode already processed, skipping:', zipcode);
+      return;
+    }
+    
+    // Reset all location loader refs to force fresh data loading
+    lastLoadedStateRef.current = '';
+    lastLoadedDistrictRef.current = '';
+    lastLoadedMandalRef.current = '';
+    stateChangeRef.current = '';
+    districtChangeRef.current = '';
+    mandalChangeRef.current = '';
+    
+    // Prevent multiple simultaneous API calls
+    if (isProcessingZipcodeRef.current) {
+      console.log('[LocationSelector] Already processing zipcode, skipping:', zipcode);
+      return;
+    }
+    
+    // Check cache first for faster response
+    const cachedData = pincodeCacheRef.current.get(zipcode);
+    if (cachedData) {
+      console.log('[LocationSelector] Using cached data for zipcode:', zipcode);
+      // Use cached data immediately
+      const suggestions = cachedData.suggestions;
+      const mapData = cachedData.map_data;
+      
+      // Update form data with cached location fields
+      if (setFormData) {
+        const prevZipcode = formData?.zip_code || '';
+        const isNewZipcode = prevZipcode !== zipcode;
+        
+        // Extract coordinates from map_data (can be tuple [lat, lng] or object {lat, lng})
+        let lat = '';
+        let lng = '';
+        
+        if (mapData?.coordinates) {
+          if (Array.isArray(mapData.coordinates)) {
+            lat = mapData.coordinates[0] || '';
+            lng = mapData.coordinates[1] || '';
+          } else if (typeof mapData.coordinates === 'object') {
+            lat = mapData.coordinates.lat || mapData.coordinates.latitude || '';
+            lng = mapData.coordinates.lng || mapData.coordinates.longitude || '';
+          }
+        }
+        
+        // Fallback to suggestions or map_data direct fields
+        if (!lat) {
+          lat = mapData?.latitude || suggestions.latitude || '';
+        }
+        if (!lng) {
+          lng = mapData?.longitude || suggestions.longitude || '';
+        }
+        
+        setFormData((prev: any) => ({
+          ...prev,
+          state: suggestions.state || '',
+          district: suggestions.district || '',
+          mandal: suggestions.mandal || '',
+          city: suggestions.city || '',
+          zip_code: zipcode,
+          // DO NOT auto-populate address - it's a user entry field
+          // address field should remain unchanged (user will type it)
+          // Set coordinates from map_data (for map centering on pincode)
+          latitude: lat || (isNewZipcode ? '' : (prev.latitude || '')),
+          longitude: lng || (isNewZipcode ? '' : (prev.longitude || ''))
+        }));
+        
+        // Update local zipcode state immediately
+        setLocalZipcode(zipcode);
+      }
+      
+      // Update ALL fields in a SINGLE batch to prevent blinking/flickering (cached data path)
+      startTransition(() => {
+        // Update all dropdown states simultaneously
+        if (suggestions.state) {
+          lastLoadedStateRef.current = suggestions.state;
+          stateChangeRef.current = suggestions.state;
+          setSelectedState(suggestions.state);
+        } else {
+          setSelectedState('');
+        }
+        
+        if (suggestions.district) {
+          lastLoadedDistrictRef.current = suggestions.district;
+          districtChangeRef.current = suggestions.district;
+          setSelectedDistrict(suggestions.district);
+        } else {
+          setSelectedDistrict('');
+        }
+        
+        if (suggestions.mandal) {
+          lastLoadedMandalRef.current = suggestions.mandal;
+          mandalChangeRef.current = suggestions.mandal;
+          setSelectedMandal(suggestions.mandal);
+        } else {
+          setSelectedMandal('');
+        }
+        
+        if (suggestions.city) {
+          setSelectedCity(suggestions.city);
+        } else {
+          setSelectedCity('');
+        }
+        
+        // Extract coordinates first
+        let lat = '';
+        let lng = '';
+        
+        if (mapData?.coordinates) {
+          if (Array.isArray(mapData.coordinates)) {
+            lat = mapData.coordinates[0] || '';
+            lng = mapData.coordinates[1] || '';
+          } else if (typeof mapData.coordinates === 'object') {
+            lat = mapData.coordinates.lat || mapData.coordinates.latitude || '';
+            lng = mapData.coordinates.lng || mapData.coordinates.longitude || '';
+          }
+        }
+        
+        // Fallback to suggestions or map_data direct fields
+        if (!lat) {
+          lat = mapData?.latitude || suggestions.latitude || '';
+        }
+        if (!lng) {
+          lng = mapData?.longitude || suggestions.longitude || '';
+        }
+        
+        // Update formData with ALL location fields at once (no sequential updates)
+        // DO NOT update address - it's a user entry field
+        if (setFormData) {
+          setFormData((prev: any) => ({
+            ...prev,
+            state: suggestions.state || '',
+            district: suggestions.district || '',
+            mandal: suggestions.mandal || '',
+            city: suggestions.city || '', // Ensure city is set
+            zip_code: zipcode,
+            // DO NOT auto-populate address - preserve existing or leave empty
+            // address: prev.address, // Keep existing address or empty
+            // Set coordinates from map_data (for map centering on pincode)
+            latitude: lat || prev.latitude || '',
+            longitude: lng || prev.longitude || ''
+          }));
+        }
+        
+        // Note: City is already set in formData above, no need to call handleCityChange again
+        // This prevents duplicate updates and flickering
+      });
+      
+      // Load dependent dropdown data in background (for dropdown options only)
+      // Use a longer delay to ensure all field updates are complete and rendered
+      // This prevents flickering by ensuring dropdown loading happens after UI settles
+      setTimeout(() => {
+        if (suggestions.state) {
+          // Load districts for dropdown options (async, doesn't block UI)
+          // Note: Field values are already set from API, this is just for dropdown options
+          loadDistricts(suggestions.state).then(() => {
+            if (suggestions.district) {
+              loadMandals(suggestions.state, suggestions.district).then(() => {
+                if (suggestions.mandal) {
+                  loadCities(suggestions.mandal);
+                }
+              });
+            }
+          });
+        }
+      }, 500); // Longer delay to ensure UI has fully settled and no flickering occurs
+      
+      lastProcessedZipcodeRef.current = zipcode;
+      return; // Exit early with cached data
+    }
     
     try {
+      isProcessingZipcodeRef.current = true;
+      lastProcessedZipcodeRef.current = zipcode;
       setZipcodeLoading(true);
       console.log('[LocationSelector] Fetching location data for zipcode:', zipcode);
       
@@ -43,204 +240,220 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
         console.log('[LocationSelector] Zipcode data received:', suggestions);
         console.log('[LocationSelector] Map data:', mapData);
         
-        // Extract coordinates from map_data if available, otherwise use suggestions
-        const latitude = mapData?.coordinates?.lat || suggestions.latitude || mapData?.coordinates?.[0] || suggestions.latitude;
-        const longitude = mapData?.coordinates?.lng || suggestions.longitude || mapData?.coordinates?.[1] || suggestions.longitude;
+        // DO NOT extract coordinates from pincode - coordinates come ONLY from map
+        // The map will be updated by MapPicker when it detects the pincode change
         
-        // Update form data with all suggested values including GPS coordinates
-        if (setFormData) {
-          setFormData((prev: any) => ({
-            ...prev,
-            state: suggestions.state || prev.state,
-            district: suggestions.district || prev.district,
-            mandal: suggestions.mandal || prev.mandal,
-            city: suggestions.city || prev.city,
-            // Do NOT auto-populate address, let the user enter it.
-            // address: suggestions.address || prev.address, 
-            latitude: latitude ? latitude.toString() : prev.latitude,
-            longitude: longitude ? longitude.toString() : prev.longitude,
-            zip_code: zipcode // CRITICAL: Ensure zipcode is preserved as the full 6 digits
-          }));
+        // Extract coordinates first (before any state updates)
+        let lat = '';
+        let lng = '';
+        
+        if (mapData?.coordinates) {
+          if (Array.isArray(mapData.coordinates)) {
+            lat = mapData.coordinates[0] || '';
+            lng = mapData.coordinates[1] || '';
+          } else if (typeof mapData.coordinates === 'object') {
+            lat = mapData.coordinates.lat || mapData.coordinates.latitude || '';
+            lng = mapData.coordinates.lng || mapData.coordinates.longitude || '';
+          }
         }
         
-        // Set dropdown selections directly and load dependent data
-        if (suggestions.state) {
-          setSelectedState(suggestions.state);
-          handleStateChange(suggestions.state);
+        // Fallback to suggestions or map_data direct fields
+        if (!lat) {
+          lat = mapData?.latitude || suggestions.latitude || '';
+        }
+        if (!lng) {
+          lng = mapData?.longitude || suggestions.longitude || '';
+        }
+        
+        // SINGLE batched update - ALL fields and dropdown states in ONE startTransition
+        // This prevents flickering by ensuring everything updates simultaneously
+        startTransition(() => {
+          const prevZipcode = formData?.zip_code || '';
+          const isNewZipcode = prevZipcode !== zipcode;
           
-          // Load districts for this state
-          if (loadDistricts) {
-            loadDistricts(suggestions.state);
+          // Update all dropdown states simultaneously (no sequential updates)
+          if (suggestions.state) {
+            lastLoadedStateRef.current = suggestions.state;
+            stateChangeRef.current = suggestions.state;
+            setSelectedState(suggestions.state);
+          } else {
+            setSelectedState('');
           }
           
-          // After districts load, set district and load mandals
           if (suggestions.district) {
-            setTimeout(() => {
-              setSelectedDistrict(suggestions.district);
-              handleDistrictChange(suggestions.district);
-              
-              // Load mandals for this district
-              if (loadMandals && suggestions.state) {
-                loadMandals(suggestions.state, suggestions.district);
-                
-                // After mandals load, set mandal and load cities
-                if (suggestions.mandal) {
-                  setTimeout(() => {
-                    setSelectedMandal(suggestions.mandal);
-                    handleMandalChange(suggestions.mandal);
-                    
-                    // Load cities for this mandal
-                    if (loadCities) {
-                      loadCities(suggestions.mandal);
-                    }
-                    
-                    // Set city
-                    if (suggestions.city) {
-                      setTimeout(() => {
-                        setSelectedCity(suggestions.city);
-                        handleCityChange(suggestions.city);
-                      }, 200);
-                    }
-                  }, 300);
-                }
-              }
-            }, 300);
-          }
-        } else {
-          // Even if no state, set the other fields
-          if (suggestions.district) {
+            lastLoadedDistrictRef.current = suggestions.district;
+            districtChangeRef.current = suggestions.district;
             setSelectedDistrict(suggestions.district);
+          } else {
+            setSelectedDistrict('');
           }
+          
           if (suggestions.mandal) {
+            lastLoadedMandalRef.current = suggestions.mandal;
+            mandalChangeRef.current = suggestions.mandal;
             setSelectedMandal(suggestions.mandal);
+          } else {
+            setSelectedMandal('');
           }
+          
           if (suggestions.city) {
             setSelectedCity(suggestions.city);
-            handleCityChange(suggestions.city);
+          } else {
+            setSelectedCity('');
           }
-        }
+          
+          // Update formData with ALL location fields at once (no sequential updates)
+          if (setFormData) {
+            setFormData((prev: any) => {
+              const newState = suggestions.state || '';
+              const newDistrict = suggestions.district || '';
+              const newMandal = suggestions.mandal || '';
+              const newCity = suggestions.city || '';
+              
+              // Check if update is needed (prevent unnecessary re-renders)
+              if (prev.state === newState && 
+                  prev.district === newDistrict && 
+                  prev.mandal === newMandal && 
+                  prev.city === newCity && 
+                  prev.zip_code === zipcode &&
+                  !isNewZipcode) {
+                return prev; // No change, return same object
+              }
+              
+              return {
+                ...prev,
+                // ALWAYS replace location data when pincode changes (don't merge with old values)
+                state: newState,
+                district: newDistrict,
+                mandal: newMandal,
+                city: newCity, // Ensure city is set
+                zip_code: zipcode,
+                // DO NOT auto-populate address - it's a user entry field
+                // address field should remain unchanged (user will type it)
+                // Set coordinates from map_data (for map centering on pincode)
+                latitude: lat || (isNewZipcode ? '' : (prev.latitude || '')),
+                longitude: lng || (isNewZipcode ? '' : (prev.longitude || '')),
+              };
+            });
+          }
+          
+          // Update local zipcode state immediately to ensure display
+          setLocalZipcode(zipcode);
+        });
+        
+        // MapPicker will detect zipcode change and coordinates to update map center
+        // Coordinates are now set from API response for automatic map centering
+        
+        // Load dependent dropdown data in background (for dropdown options only)
+        // Use a longer delay to ensure all field updates are complete and rendered
+        // This prevents flickering by ensuring dropdown loading happens after UI settles
+        setTimeout(() => {
+          if (suggestions.state) {
+            // Load districts for dropdown options (async, doesn't block UI)
+            // Note: Field values are already set from API, this is just for dropdown options
+            loadDistricts(suggestions.state).then(() => {
+              if (suggestions.district) {
+                loadMandals(suggestions.state, suggestions.district).then(() => {
+                  if (suggestions.mandal) {
+                    loadCities(suggestions.mandal);
+                  }
+                });
+              }
+            });
+          }
+        }, 500); // Longer delay to ensure UI has fully settled and no flickering occurs
         
         console.log('[LocationSelector] Location fields auto-populated successfully');
+        
+        // Cache the response for faster future lookups
+        pincodeCacheRef.current.set(zipcode, {
+          suggestions: suggestions,
+          map_data: mapData,
+          timestamp: Date.now()
+        });
+        
+        // Zipcode is already set in the startTransition block above - no need to set again
+      } else {
+        console.warn('[LocationSelector] No suggestions received from API');
       }
     } catch (error) {
       console.error('[LocationSelector] Error fetching zipcode data:', error);
       
-      // Fallback: Use hardcoded data for common zipcodes
-      console.log('[LocationSelector] Attempting fallback zipcode lookup...');
-      await handleFallbackZipcodeLookup(zipcode);
+      // Reset refs on error so user can retry
+      lastProcessedZipcodeRef.current = '';
+      
+      // No fallback data - all data must come from API
+      console.log('[LocationSelector] API failed - user must manually enter location fields');
     } finally {
       setZipcodeLoading(false);
+      isProcessingZipcodeRef.current = false;
+      
+      // Zipcode is already set in the startTransition block above - no need to set again
+      // This prevents duplicate updates and flickering
     }
   };
 
-  // Fallback zipcode lookup for when external API fails
+  // Fallback zipcode lookup removed - all data comes from API only
   const handleFallbackZipcodeLookup = async (zipcode: string) => {
-    // Common zipcode mappings for testing
-    const fallbackData: { [key: string]: any } = {
-      '500090': {
-        state: 'Telangana',
-        district: 'Hyderabad',
-        mandal: 'Serilingampally',
-        city: 'Hyderabad',
-        address: 'Serilingampally, Hyderabad, Telangana',
-        latitude: 17.3850,
-        longitude: 78.4867
-      },
-      '500001': {
-        state: 'Telangana',
-        district: 'Hyderabad',
-        mandal: 'Secunderabad',
-        city: 'Hyderabad',
-        address: 'Secunderabad, Hyderabad, Telangana',
-        latitude: 17.4399,
-        longitude: 78.4983
-      },
-      '500002': {
-        state: 'Telangana',
-        district: 'Hyderabad',
-        mandal: 'Khairatabad',
-        city: 'Hyderabad',
-        address: 'Khairatabad, Hyderabad, Telangana',
-        latitude: 17.4065,
-        longitude: 78.4772
-      },
-      '500003': {
-        state: 'Telangana',
-        district: 'Hyderabad',
-        mandal: 'Himayathnagar',
-        city: 'Hyderabad',
-        address: 'Himayathnagar, Hyderabad, Telangana',
-        latitude: 17.4065,
-        longitude: 78.4772
-      },
-      '500004': {
-        state: 'Telangana',
-        district: 'Hyderabad',
-        mandal: 'Abids',
-        city: 'Hyderabad',
-        address: 'Abids, Hyderabad, Telangana',
-        latitude: 17.4065,
-        longitude: 78.4772
-      }
-    };
-
-    const data = fallbackData[zipcode];
-    if (data) {
-      console.log('[LocationSelector] Using fallback data for zipcode:', zipcode);
-      
-      // Update form data with fallback data first
-      if (setFormData) {
-        setFormData((prev: any) => ({
-          ...prev,
-          state: data.state || prev.state,
-          district: data.district || prev.district,
-          mandal: data.mandal || prev.mandal,
-          city: data.city || prev.city,
-          address: data.address || prev.address,
-          latitude: data.latitude ? data.latitude.toString() : prev.latitude,
-          longitude: data.longitude ? data.longitude.toString() : prev.longitude,
-            zip_code: zipcode // CRITICAL: Ensure zipcode is preserved as the full 6 digits
-        }));
-      }
-      
-      // Set dropdown selections directly
-      if (data.state) {
-        setSelectedState(data.state);
-        handleStateChange(data.state);
-      }
-      
-      if (data.district) {
-        setSelectedDistrict(data.district);
-        handleDistrictChange(data.district);
-      }
-      
-      if (data.mandal) {
-        setSelectedMandal(data.mandal);
-        handleMandalChange(data.mandal);
-      }
-      
-      if (data.city) {
-        setSelectedCity(data.city);
-        handleCityChange(data.city);
-      }
-      
-      console.log('[LocationSelector] Fallback data applied successfully');
-    }
+    // No hardcoded fallback data - all pincode data must come from API
+    console.log('[LocationSelector] No fallback data available - API must provide all data');
+    // If API fails, user will need to manually enter location fields
   };
   const [selectedState, setSelectedState] = useState('');
   const [selectedDistrict, setSelectedDistrict] = useState('');
   const [selectedMandal, setSelectedMandal] = useState('');
   const [selectedCity, setSelectedCity] = useState('');
 
-  // Initialize from formData
+  // Sync local zipcode with formData when it changes externally (but preserve during typing)
+  useEffect(() => {
+    // Always sync if formData has a zipcode value (preserves after auto-population)
+    // This ensures zipcode is displayed correctly
+    if (formData?.zip_code) {
+      // Sync if formData has zipcode (preserves value after auto-population)
+      // Always update to ensure display, even if values appear the same
+      if (formData.zip_code !== localZipcode) {
+        console.log('[LocationSelector] Syncing zipcode from formData:', formData.zip_code);
+        setLocalZipcode(formData.zip_code);
+      }
+    } else if (!formData?.zip_code && localZipcode && localZipcode.length > 0) {
+      // Only clear if formData is explicitly empty AND localZipcode has a value
+      // This allows clearing when formData is reset
+      setLocalZipcode('');
+    }
+    // Don't clear localZipcode if formData is empty but user is typing
+  }, [formData?.zip_code]);
+  
+  // Initialize local zipcode from formData on mount
+  useEffect(() => {
+    if (formData?.zip_code && !localZipcode) {
+      setLocalZipcode(formData.zip_code);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on mount
+  
+  // Initialize from formData - only update when location fields change, NOT on zipcode changes
   useEffect(() => {
     if (formData) {
       // Use state/district/mandal/city fields directly (no _id fields)
-      setSelectedState(formData.state || '');
-      setSelectedDistrict(formData.district || '');
-      setSelectedMandal(formData.mandal || '');
-      setSelectedCity(formData.city || '');
+      // Only update if values actually changed to prevent unnecessary re-renders
+      const newState = formData.state || '';
+      const newDistrict = formData.district || '';
+      const newMandal = formData.mandal || '';
+      const newCity = formData.city || '';
       
+      // Only update state if value changed
+      if (selectedState !== newState) {
+        setSelectedState(newState);
+      }
+      if (selectedDistrict !== newDistrict) {
+        setSelectedDistrict(newDistrict);
+      }
+      if (selectedMandal !== newMandal) {
+        setSelectedMandal(newMandal);
+      }
+      if (selectedCity !== newCity) {
+        setSelectedCity(newCity);
+      }
     } else {
       // Reset all selections when formData is empty/null
       setSelectedState('');
@@ -248,7 +461,9 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
       setSelectedMandal('');
       setSelectedCity('');
     }
-  }, [formData]);
+    // Only depend on location fields, NOT on zip_code or entire formData
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData?.state, formData?.district, formData?.mandal, formData?.city]);
 
   // Reset component state when component unmounts or when formData is cleared
   useEffect(() => {
@@ -261,7 +476,16 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     };
   }, []);
 
+  // Ref to prevent multiple state change calls
+  const stateChangeRef = useRef<string>('');
+  
   const handleStateChange = (value: string) => {
+    // Prevent duplicate calls
+    if (stateChangeRef.current === value) {
+      return;
+    }
+    stateChangeRef.current = value;
+    
     setSelectedState(value);
     setSelectedDistrict('');
     setSelectedMandal('');
@@ -281,7 +505,15 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     }
   };
 
+  // Ref to prevent multiple district change calls
+  const districtChangeRef = useRef<string>('');
+  
   const handleDistrictChange = (value: string) => {
+    // Prevent duplicate calls
+    if (districtChangeRef.current === value) {
+      return;
+    }
+    districtChangeRef.current = value;
     setSelectedDistrict(value);
     setSelectedMandal('');
     setSelectedCity('');
@@ -299,7 +531,15 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
     }
   };
 
+  // Ref to prevent multiple mandal change calls
+  const mandalChangeRef = useRef<string>('');
+  
   const handleMandalChange = (value: string) => {
+    // Prevent duplicate calls
+    if (mandalChangeRef.current === value) {
+      return;
+    }
+    mandalChangeRef.current = value;
     setSelectedMandal(value);
     setSelectedCity('');
     
@@ -316,13 +556,15 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
   };
 
   const handleCityChange = (value: string) => {
-    setSelectedCity(value);
-    
-    setFormData((prev: any) => ({
-      ...prev,
-      city: value
-      // Note: state_id, district_id, mandal_id, city_id are not used - removed to prevent backend errors
-    }));
+    if (value) {
+      setSelectedCity(value);
+      
+      setFormData((prev: any) => ({
+        ...prev,
+        city: value
+        // Note: state_id, district_id, mandal_id, city_id are not used - removed to prevent backend errors
+      }));
+    }
   };
 
   return (
@@ -337,39 +579,55 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
             ref={zipcodeInputRef}
             type="text"
             name="zip_code"
-            value={formData.zip_code || ''}
+            value={localZipcode}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
               const value = e.target.value;
-              const numericValue = value.replace(/\D/g, '').slice(0, 6); // Explicitly limit to 6 digits
+              // Only allow numeric input, max 6 digits
+              const numericValue = value.replace(/\D/g, '').slice(0, 6);
               
-              // Update the form data immediately without triggering auto-population
-              setFormData((prev: any) => ({
-                ...prev,
-                zip_code: numericValue
-              }));
-
-              // Only clear dependent fields if zipcode becomes less than 6 digits
-              if (numericValue.length < 6 && previousZipcodeLengthRef.current === 6) {
-                // Clear dependent fields only when going from 6 to less
-                setFormData((prev: any) => ({
-                  ...prev,
-                  state: '', district: '', mandal: '', city: ''
-                }));
-              }
+              // Update local state only - NO formData update, NO API calls during typing
+              setLocalZipcode(numericValue);
               
               previousZipcodeLengthRef.current = numericValue.length;
-            }}
-            onKeyUp={(e: React.KeyboardEvent<HTMLInputElement>) => {
-              // Only trigger auto-population on Enter or after 6 digits are entered
-              const input = e.currentTarget;
-              const zipcode = input.value.replace(/\D/g, '').slice(0, 6);
               
-              if (zipcode.length === 6 && previousZipcodeLengthRef.current !== 6) {
-                previousZipcodeLengthRef.current = 6;
-                // Use setTimeout to allow the input value to update first
-                setTimeout(() => {
-                  handleZipcodeAutoPopulation(zipcode);
-                }, 300);
+              // DO NOT update formData here - wait for blur or 6 digits + Enter
+            }}
+            onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+              // If Enter is pressed and we have 6 digits, trigger fetch immediately
+              if (e.key === 'Enter' && localZipcode.length === 6 && /^\d{6}$/.test(localZipcode)) {
+                e.preventDefault();
+                // Update formData first
+                setFormData((prev: any) => ({
+                  ...prev,
+                  zip_code: localZipcode
+                }));
+                // Then trigger auto-population
+                handleZipcodeAutoPopulation(localZipcode);
+              }
+            }}
+            onBlur={(e: React.FocusEvent<HTMLInputElement>) => {
+              // Update formData with zipcode value
+              const zipcode = e.target.value.replace(/\D/g, '').slice(0, 6);
+              
+              // Update formData with zipcode value (ensures it's displayed)
+              setFormData((prev: any) => ({
+                ...prev,
+                zip_code: zipcode
+              }));
+              
+              // Clear dependent fields if zipcode becomes less than 6 digits
+              if (zipcode.length < 6 && previousZipcodeLengthRef.current === 6) {
+                setFormData((prev: any) => ({
+                  ...prev,
+                  state: '', district: '', mandal: '', city: '',
+                  latitude: '', longitude: ''
+                }));
+                // Reset last processed zipcode when cleared
+                lastProcessedZipcodeRef.current = '';
+              } else if (zipcode.length === 6 && /^\d{6}$/.test(zipcode)) {
+                // Only trigger auto-population on blur if we have exactly 6 digits
+                // This prevents multiple calls during typing
+                handleZipcodeAutoPopulation(zipcode);
               }
             }}
             onPaste={(e) => {
@@ -377,22 +635,22 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
               const pastedText = e.clipboardData.getData('text');
               const numericZipcode = pastedText.replace(/\D/g, '').slice(0, 6);
               
+              // Update local state only
+              setLocalZipcode(numericZipcode);
+              previousZipcodeLengthRef.current = numericZipcode.length;
+              
+              // Update formData
               setFormData((prev: any) => ({
                 ...prev,
                 zip_code: numericZipcode
               }));
 
-              if (numericZipcode.length === 6) {
-                handleZipcodeAutoPopulation(numericZipcode);
-              }
-              previousZipcodeLengthRef.current = numericZipcode.length;
-            }}
-            onBlur={async (e) => {
-              const zipcode = e.target.value;
-              
-              // Auto-populate on blur if we have 6 digits
-              if (zipcode.length === 6 && /^\d{6}$/.test(zipcode)) {
-                await handleZipcodeAutoPopulation(zipcode);
+              // Only trigger fetch if we have exactly 6 digits after paste
+              if (numericZipcode.length === 6 && /^\d{6}$/.test(numericZipcode)) {
+                // Use setTimeout to ensure state is updated first
+                setTimeout(() => {
+                  handleZipcodeAutoPopulation(numericZipcode);
+                }, 100);
               }
             }}
             placeholder="Enter 6-digit zipcode"
@@ -411,7 +669,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
           )}
         </div>
         <p className="text-xs text-gray-500 mt-1">
-          ⚡ Enter zipcode first to automatically populate state, district, mandal, city, and address
+          ⚡ Enter zipcode first to automatically populate state, district, mandal, and city
         </p>
       </div>
 
@@ -502,37 +760,7 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
         </div>
       </div>
 
-      {/* Coordinates */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Latitude
-          </label>
-          <input
-            type="number"
-            step="any"
-            name="latitude"
-            value={formData.latitude || ''}
-            onChange={handleInputChange}
-            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-            placeholder="Enter latitude"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Longitude
-          </label>
-          <input
-            type="number"
-            step="any"
-            name="longitude"
-            value={formData.longitude || ''}
-            onChange={handleInputChange}
-            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-            placeholder="Enter longitude"
-          />
-        </div>
-      </div>
+      {/* Coordinates removed - coordinates come ONLY from map picker component */}
     </div>
   );
 };

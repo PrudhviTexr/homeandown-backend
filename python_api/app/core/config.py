@@ -49,6 +49,9 @@ class Settings:
     RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
     RESEND_TEMPLATE_ID: str = os.getenv("RESEND_TEMPLATE_ID", "")
     RESEND_SENDER: str = os.getenv("RESEND_SENDER", "")
+    
+    # Google Maps API Configuration
+    GOOGLE_MAPS_API_KEY: str = os.getenv("GOOGLE_MAPS_API_KEY", "")
 
 # Global settings instance
 settings = Settings()
@@ -60,3 +63,4 @@ print(f"[CONFIG]   SERVICE_ROLE_KEY: {'SET' if settings.SUPABASE_SERVICE_ROLE_KE
 print(f"[CONFIG]   GMAIL_USERNAME: {'SET' if settings.GMAIL_USERNAME else 'MISSING'}")
 print(f"[CONFIG]   GMAIL_APP_PASSWORD: {'SET' if settings.GMAIL_APP_PASSWORD else 'MISSING'}")
 print(f"[CONFIG]   PYTHON_API_KEY: {'SET' if settings.PYTHON_API_KEY else 'MISSING'}")
+print(f"[CONFIG]   GOOGLE_MAPS_API_KEY: {'SET' if settings.GOOGLE_MAPS_API_KEY else 'MISSING'}")

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
+from starlette.requests import Request
 from ..models.schemas import InquiryRequest, BookingRequest, PropertyRequest, BookingUpdateRequest, InquiryUpdateRequest
 from ..core.security import require_api_key
 from ..services.email import send_email
@@ -166,10 +167,21 @@ async def get_bookings(user_id: str | None = None, property_id: str | None = Non
         raise HTTPException(status_code=500, detail=f"Failed to fetch bookings: {str(e)}")
 
 @router.post("/inquiries")
-async def create_inquiry(inquiry: InquiryRequest):
+async def create_inquiry(inquiry: InquiryRequest, request: Request):
     try:
         print(f"[RECORDS] Creating inquiry for property: {inquiry.property_id}")
         print(f"[RECORDS] Inquiry data: {inquiry.model_dump()}")
+        
+        # Try to get user_id from authentication if available
+        user_id = None
+        try:
+            from ..core.security import try_get_current_user_claims
+            claims = try_get_current_user_claims(request)
+            if claims:
+                user_id = claims.get("sub")
+                print(f"[RECORDS] Found authenticated user: {user_id}")
+        except Exception as auth_error:
+            print(f"[RECORDS] No authentication found, creating anonymous inquiry: {auth_error}")
         
         inquiry_data = {
             "id": str(uuid.uuid4()),
@@ -184,26 +196,34 @@ async def create_inquiry(inquiry: InquiryRequest):
             "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()
         }
         
-        print(f"[RECORDS] Prepared inquiry data: {inquiry_data}")
-        created = await db.insert("inquiries", inquiry_data)
-        print(f"[RECORDS] Inquiry created successfully: {created}")
+        # Link inquiry to user if authenticated
+        if user_id:
+            inquiry_data["user_id"] = user_id
+            print(f"[RECORDS] Linking inquiry to user: {user_id}")
         
-        # Get property details to find the owner/agent
+        # Get property details to find the owner/agent BEFORE inserting
         property_details = None
         try:
             properties = await db.select("properties", filters={"id": inquiry.property_id})
             if properties:
                 property_details = properties[0]
-                # Assign agent to inquiry if property has an agent
-                if property_details.get("agent_id"):
-                    inquiry_data["agent_id"] = property_details["agent_id"]
+                # Assign agent to inquiry if property has an agent (include in initial insert)
+                # Use assigned_agent_id or agent_id from property
+                agent_id = property_details.get("assigned_agent_id") or property_details.get("agent_id")
+                if agent_id:
+                    inquiry_data["assigned_agent_id"] = agent_id
+                    print(f"[RECORDS] Property has agent {agent_id}, including in inquiry")
         except Exception as prop_error:
             print(f"[RECORDS] Error fetching property details: {prop_error}")
+        
+        print(f"[RECORDS] Prepared inquiry data: {inquiry_data}")
+        created = await db.insert("inquiries", inquiry_data)
+        print(f"[RECORDS] Inquiry created successfully: {created}")
         
         # Auto-assign agent based on property
         try:
             from ..services.agent_assignment import AgentAssignmentService
-            inquiry_id = created["id"] if created else inquiry_data["id"]
+            inquiry_id = created[0]["id"] if isinstance(created, list) and created else inquiry_data["id"]
             assignment_result = await AgentAssignmentService.assign_agent_to_inquiry(inquiry_id, inquiry.property_id)
             if assignment_result.get('success'):
                 print(f"[RECORDS] Agent assigned to inquiry: {assignment_result.get('message')}")
@@ -254,16 +274,18 @@ async def create_inquiry(inquiry: InquiryRequest):
         # Get additional details for response
         response_data = {
             "success": True,
-            "id": created["id"] if created else inquiry_data["id"],
+            "message": f"Inquiry sent successfully for {property_details.get('title', 'property') if property_details else 'property'}. The agent will contact you soon.",
+            "id": created[0]["id"] if isinstance(created, list) and created else inquiry_data["id"],
             "property_name": property_details.get("title", f"Property #{inquiry.property_id}") if property_details else f"Property #{inquiry.property_id}",
+            "property_id": inquiry.property_id,
             "agent_name": None,
             "agent_email": None
         }
         
         # Get agent details if assigned
-        if inquiry_data.get("agent_id"):
+        if inquiry_data.get("assigned_agent_id"):
             try:
-                agent_users = await db.select("users", filters={"id": inquiry_data["agent_id"]})
+                agent_users = await db.select("users", filters={"id": inquiry_data["assigned_agent_id"]})
                 if agent_users:
                     agent = agent_users[0]
                     response_data["agent_name"] = f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip()
@@ -389,12 +411,16 @@ async def create_booking(booking_data: dict, request: Request):
                 booker_name = booking_data['name'] or "Guest User"
                 booker_email = booking_data['email'] or "guest@example.com"
                 
+                # Get booker phone number
+                booker_phone = booking_data.get('phone') or booking_record.get('phone', '')
+                
                 # Send confirmation email to booker
                 confirmation_html = booking_confirmation_email(
                     booker_name,
                     property_title,
                     booking_data['booking_date'],
-                    booking_data['booking_time']
+                    booking_data['booking_time'],
+                    booker_phone
                 )
                 await send_email(
                     to=booker_email,
@@ -419,7 +445,8 @@ async def create_booking(booking_data: dict, request: Request):
                                     booker_email,
                                     property_title,
                                     booking_data['booking_date'],
-                                    booking_data['booking_time']
+                                    booking_data['booking_time'],
+                                    booker_phone
                                 )
                                 await send_email(
                                     to=agent_email,
@@ -448,7 +475,8 @@ async def create_booking(booking_data: dict, request: Request):
                                     booker_email,
                                     property_title,
                                     booking_data['booking_date'],
-                                    booking_data['booking_time']
+                                    booking_data['booking_time'],
+                                    booker_phone
                                 )
                                 await send_email(
                                     to=owner_email,
@@ -484,8 +512,11 @@ async def create_booking(booking_data: dict, request: Request):
         # Get additional details for response
         response_data = {
             "success": True,
+            "message": f"Tour booking confirmed for {property_details.get('title', 'property') if property_details else 'property'} on {booking_data['booking_date']} at {booking_data['booking_time']}",
             "id": created["id"] if created else booking_record["id"],
             "property_name": property_details.get("title", f"Property #{booking_data['property_id']}") if property_details else f"Property #{booking_data['property_id']}",
+            "booking_date": booking_data['booking_date'],
+            "booking_time": booking_data['booking_time'],
             "agent_name": None,
             "agent_email": None
         }
@@ -765,13 +796,15 @@ async def update_booking(booking_id: str, update: BookingUpdateRequest):
                         
                         # Send assignment notification to agent
                         from ..services.templates import booking_notification_email
+                        customer_phone = booking.get("phone") or customer.get("phone_number") if customer else None
                         assignment_html = booking_notification_email(
                             new_agent_name,
                             customer_name or "Customer",
                             customer_email or booking.get("email", "N/A"),
                             property_details.get("title", "Property") if property_details else "Property",
                             booking.get("booking_date", "TBD"),
-                            booking.get("booking_time", "TBD")
+                            booking.get("booking_time", "TBD"),
+                            customer_phone
                         )
                         await send_email(
                             to=new_agent_email,
@@ -903,8 +936,8 @@ async def update_inquiry(inquiry_id: str, update: InquiryUpdateRequest):
             await send_email(inquiry.get("email"), subject, html)
 
             # Send notification to agent if status changed
-            if inquiry.get("agent_id"):
-                agent_users = await db.select("users", filters={"id": inquiry.get("agent_id")})
+            if inquiry.get("assigned_agent_id"):
+                agent_users = await db.select("users", filters={"id": inquiry.get("assigned_agent_id")})
                 if agent_users and agent_users[0].get("email"):
                     agent_email = agent_users[0]["email"]
                     agent_subject, agent_html = inquiry_status_email(

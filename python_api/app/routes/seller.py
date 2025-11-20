@@ -106,9 +106,13 @@ async def get_seller_properties(
         if status:
             filters["status"] = status
         
-        # Get properties
-        properties = await db.select("properties", filters=filters, limit=limit, offset=offset)
+        # Get properties (offset not supported by current db.select, so we'll get all and slice if needed)
+        properties = await db.select("properties", filters=filters, limit=limit)
         properties_list = properties or []
+        
+        # Apply offset manually if needed (for pagination)
+        if offset and offset > 0:
+            properties_list = properties_list[offset:]
         
         # Enhance properties with additional data
         enhanced_properties = []
@@ -212,20 +216,60 @@ async def get_seller_inquiries(
         if status:
             filters["status"] = status
         
-        # Get inquiries
-        inquiries = await db.select("inquiries", filters=filters, limit=limit, offset=offset)
+        # Get inquiries (offset not supported by current db.select, so we'll get all and slice if needed)
+        inquiries = await db.select("inquiries", filters=filters, limit=limit)
         inquiries_list = inquiries or []
         
-        # Enhance inquiries with property details
+        # Apply offset manually if needed (for pagination)
+        if offset and offset > 0:
+            inquiries_list = inquiries_list[offset:]
+        
+        # Enhance inquiries with property and user details
         enhanced_inquiries = []
         for inquiry in inquiries_list:
             prop_id = inquiry.get("property_id")
+            user_id_inquiry = inquiry.get("user_id")
+            
+            # Get property details
             property_data = await db.select("properties", filters={"id": prop_id})
             property_info = property_data[0] if property_data else {}
             
+            # Get user details from users table if user_id exists
+            user_info = {}
+            if user_id_inquiry:
+                try:
+                    user_data = await db.select("users", filters={"id": user_id_inquiry})
+                    if user_data:
+                        user_info = user_data[0]
+                except Exception as user_error:
+                    print(f"[SELLER] Error fetching user details: {user_error}")
+            
+            # Always include customer details from inquiry fields (name, email, phone)
+            # These are the primary customer contact details
+            customer_details = {
+                "name": inquiry.get("name", ""),
+                "email": inquiry.get("email", ""),
+                "phone": inquiry.get("phone", ""),
+                "first_name": user_info.get("first_name", inquiry.get("name", "").split()[0] if inquiry.get("name") else ""),
+                "last_name": user_info.get("last_name", " ".join(inquiry.get("name", "").split()[1:]) if inquiry.get("name") and len(inquiry.get("name", "").split()) > 1 else ""),
+                "phone_number": user_info.get("phone_number", inquiry.get("phone", "")),
+                "user_id": user_id_inquiry
+            }
+            
+            # Merge user info with customer details (user info takes precedence for additional fields)
+            if user_info:
+                customer_details.update({
+                    "id": user_info.get("id"),
+                    "user_type": user_info.get("user_type"),
+                    "city": user_info.get("city"),
+                    "state": user_info.get("state"),
+                    "email_verified": user_info.get("email_verified"),
+                })
+            
             enhanced_inquiry = {
                 **inquiry,
-                "property": property_info
+                "property": property_info,
+                "user": customer_details  # Always include customer details
             }
             enhanced_inquiries.append(enhanced_inquiry)
         
@@ -274,9 +318,13 @@ async def get_seller_bookings(
         if status:
             filters["status"] = status
         
-        # Get bookings
-        bookings = await db.select("bookings", filters=filters, limit=limit, offset=offset)
+        # Get bookings (offset not supported by current db.select, so we'll get all and slice if needed)
+        bookings = await db.select("bookings", filters=filters, limit=limit)
         bookings_list = bookings or []
+        
+        # Apply offset manually if needed (for pagination)
+        if offset and offset > 0:
+            bookings_list = bookings_list[offset:]
         
         # Enhance bookings with property and user details, filter out sold properties
         enhanced_bookings = []
@@ -431,3 +479,155 @@ async def respond_to_inquiry(
     except Exception as e:
         print(f"[SELLER] Respond to inquiry error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to respond to inquiry: {str(e)}")
+
+@router.get("/properties/{property_id}")
+async def get_seller_property_details(property_id: str, request: Request):
+    """Get detailed information about a specific property for seller"""
+    try:
+        claims = get_current_user_claims(request)
+        if not claims:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        print(f"[SELLER] Fetching property details for property {property_id}")
+        
+        # Get property
+        properties = await db.select("properties", filters={"id": property_id})
+        if not properties:
+            raise HTTPException(status_code=404, detail="Property not found")
+        
+        property_data = properties[0]
+        
+        # Verify seller owns this property
+        if property_data.get("added_by") != user_id and property_data.get("owner_id") != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to view this property")
+        
+        property_id_val = property_data.get("id")
+        
+        # Get inquiries count
+        inquiries = await db.select("inquiries", filters={"property_id": property_id_val})
+        inquiries_count = len(inquiries or [])
+        
+        # Get bookings count
+        bookings = await db.select("bookings", filters={"property_id": property_id_val})
+        bookings_count = len(bookings or [])
+        
+        # Get views count
+        views = await db.select("property_views", filters={"property_id": property_id_val})
+        views_count = len(views or [])
+        
+        # Get assigned agent details
+        assigned_agent = None
+        agent_id = property_data.get("agent_id") or property_data.get("assigned_agent_id")
+        if agent_id:
+            try:
+                agents = await db.select("users", filters={"id": agent_id})
+                if agents:
+                    agent = agents[0]
+                    assigned_agent = {
+                        "id": agent.get("id"),
+                        "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
+                        "email": agent.get("email"),
+                        "phone": agent.get("phone_number"),
+                        "assigned_at": property_data.get("assigned_at")
+                    }
+            except Exception as agent_error:
+                print(f"[SELLER] Error fetching agent details: {agent_error}")
+        
+        # Get property images
+        property_images = []
+        try:
+            image_docs = await db.select("documents", filters={
+                "entity_type": "property",
+                "entity_id": property_id_val
+            })
+            if image_docs:
+                property_images = [doc.get("file_path") for doc in image_docs if doc.get("file_path")]
+        except Exception as img_error:
+            print(f"[SELLER] Error fetching property images: {img_error}")
+        
+        enhanced_property = {
+            **property_data,
+            "inquiries_count": inquiries_count,
+            "bookings_count": bookings_count,
+            "views_count": views_count,
+            "assigned_agent": assigned_agent,
+            "images": property_images
+        }
+        
+        print(f"[SELLER] Property details fetched successfully")
+        return {"success": True, "property": enhanced_property}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[SELLER] Get property details error: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to fetch property details: {str(e)}")
+
+@router.get("/properties/{property_id}/views")
+async def get_seller_property_views(property_id: str, request: Request, limit: Optional[int] = Query(100)):
+    """Get property views for seller (name and date only, no contact info)"""
+    try:
+        claims = get_current_user_claims(request)
+        if not claims:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        print(f"[SELLER] Fetching views for property {property_id}")
+        
+        # Verify seller owns this property
+        properties = await db.select("properties", filters={"id": property_id})
+        if not properties:
+            raise HTTPException(status_code=404, detail="Property not found")
+        
+        property_data = properties[0]
+        if property_data.get("added_by") != user_id and property_data.get("owner_id") != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to view this property's views")
+        
+        # Get views
+        views = await db.select("property_views", filters={"property_id": property_id}, limit=limit)
+        views_list = views or []
+        
+        # Format views - only name and date (no email/phone)
+        formatted_views = []
+        for view in views_list:
+            viewer_name = "Anonymous"
+            viewer_id = view.get("user_id")
+            
+            # If user_id exists, get user name (but not email/phone)
+            if viewer_id:
+                try:
+                    users = await db.select("users", filters={"id": viewer_id})
+                    if users:
+                        user = users[0]
+                        first_name = user.get("first_name", "")
+                        last_name = user.get("last_name", "")
+                        viewer_name = f"{first_name} {last_name}".strip() or "User"
+                except Exception:
+                    viewer_name = "User"
+            
+            formatted_views.append({
+                "id": view.get("id"),
+                "viewer_name": viewer_name,
+                "viewed_at": view.get("viewed_at") or view.get("created_at")
+            })
+        
+        # Sort by viewed_at descending (most recent first)
+        formatted_views.sort(key=lambda x: x.get("viewed_at", ""), reverse=True)
+        
+        print(f"[SELLER] Found {len(formatted_views)} views for property {property_id}")
+        return {"success": True, "views": formatted_views}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[SELLER] Get property views error: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to fetch property views: {str(e)}")

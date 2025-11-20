@@ -431,7 +431,8 @@ def inquiry_notification_email(property_owner_name: str, inquirer_name: str, inq
     """
     return wrap_html(body, "New Property Inquiry - Home & Own")
 
-def booking_confirmation_email(booker_name: str, property_title: str, tour_date: str, tour_time: str) -> str:
+def booking_confirmation_email(booker_name: str, property_title: str, tour_date: str, tour_time: str, booker_phone: str = None) -> str:
+    phone_section = f"<p><strong>Your Contact:</strong> {booker_phone}</p>" if booker_phone else ""
     body = f"""
       <h2 style='margin-top:0; color: #1e293b;'>Tour Booking Confirmed! 📅</h2>
       <p style='font-size: 16px;'>Hi <strong>{booker_name}</strong>,</p>
@@ -442,6 +443,7 @@ def booking_confirmation_email(booker_name: str, property_title: str, tour_date:
         <p><strong>Property:</strong> {property_title}</p>
         <p><strong>Date:</strong> {tour_date}</p>
         <p><strong>Time:</strong> {tour_time}</p>
+        {phone_section}
         <p><strong>Status:</strong> <span style='color: #059669; font-weight: 600;'>Confirmed</span></p>
       </div>
       
@@ -461,7 +463,8 @@ def booking_confirmation_email(booker_name: str, property_title: str, tour_date:
     """
     return wrap_html(body, "Tour Booking Confirmed - Home & Own")
 
-def booking_notification_email(property_owner_name: str, booker_name: str, booker_email: str, property_title: str, tour_date: str, tour_time: str) -> str:
+def booking_notification_email(property_owner_name: str, booker_name: str, booker_email: str, property_title: str, tour_date: str, tour_time: str, booker_phone: str = None) -> str:
+    phone_section = f"<p><strong>Phone:</strong> {booker_phone}</p>" if booker_phone else ""
     body = f"""
       <h2 style='margin-top:0; color: #1e293b;'>New Tour Booking! 📅</h2>
       <p style='font-size: 16px;'>Hi <strong>{property_owner_name}</strong>,</p>
@@ -471,6 +474,7 @@ def booking_notification_email(property_owner_name: str, booker_name: str, booke
         <h3 style='margin-top:0; color: #1e293b;'>Booking Details:</h3>
         <p><strong>Booker:</strong> {booker_name}</p>
         <p><strong>Email:</strong> {booker_email}</p>
+        {phone_section}
         <p><strong>Property:</strong> {property_title}</p>
         <p><strong>Tour Date:</strong> {tour_date}</p>
         <p><strong>Tour Time:</strong> {tour_time}</p>

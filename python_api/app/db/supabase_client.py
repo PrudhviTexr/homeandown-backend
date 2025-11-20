@@ -19,7 +19,7 @@ class SupabaseDBClient:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
-    async def select(self, table: str, columns: str = "*", select: str = None, filters: Optional[Dict[str, Any]] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def select(self, table: str, columns: str = "*", select: str = None, filters: Optional[Dict[str, Any]] = None, limit: Optional[int] = None, offset: Optional[int] = None, order_by: Optional[str] = None, ascending: bool = True) -> List[Dict[str, Any]]:
         def _execute_sync():
             if select == "count":
                 query = self.supabase_client.table(table).select("*", count='exact', head=True)
@@ -30,10 +30,33 @@ class SupabaseDBClient:
                 for key, value in filters.items():
                     if isinstance(value, list):
                         query = query.filter(key, 'in', value)
+                    elif isinstance(value, dict):
+                        # Support operators like {"gt": 100}, {"gte": 100}, {"lt": 100}, {"lte": 100}
+                        for op, op_value in value.items():
+                            if op == "gt":
+                                query = query.filter(key, 'gt', op_value)
+                            elif op == "gte":
+                                query = query.filter(key, 'gte', op_value)
+                            elif op == "lt":
+                                query = query.filter(key, 'lt', op_value)
+                            elif op == "lte":
+                                query = query.filter(key, 'lte', op_value)
+                            elif op == "in":
+                                query = query.filter(key, 'in', op_value)
                     else:
                         query = query.filter(key, 'eq', value)
             
-            if limit and select != "count":
+            # Add ordering
+            if order_by and select != "count":
+                if ascending:
+                    query = query.order(order_by, desc=False)
+                else:
+                    query = query.order(order_by, desc=True)
+            
+            # Add pagination
+            if offset is not None and select != "count":
+                query = query.range(offset, offset + (limit or 1000) - 1)
+            elif limit and select != "count":
                 query = query.limit(limit)
 
             response = query.execute()

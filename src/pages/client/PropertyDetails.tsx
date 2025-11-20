@@ -33,7 +33,6 @@ import TourBookingModal from '@/components/TourBookingModal';
 import PropertyActionButtons from '@/components/PropertyActionButtons';
 import ImageGallery from '@/components/ImageGallery';
 import UserInfo from '@/components/UserInfo'; // Import the new component
-import PropertyReviews from '@/components/PropertyReviews'; // Import reviews component
 import { useAuth } from '@/contexts/AuthContext';
 import ApiService from '@/services/api';
 import { formatIndianCurrency } from '@/utils/currency';
@@ -182,7 +181,7 @@ const PropertyDetails: React.FC = () => {
     console.log('[PropertyDetails] Starting inquiry creation...');
     setInquiryLoading(true);
     try {
-      await ApiService.createInquiry({
+      const result = await ApiService.createInquiry({
         property_id: property.id,
         name: `${user.first_name} ${user.last_name}`,
         email: user.email,
@@ -191,16 +190,17 @@ const PropertyDetails: React.FC = () => {
         inquiry_type: 'general'
       });
 
-      // Always show success notification
-      toast.success('🎉 Your inquiry has been sent successfully! The agent will contact you soon. You will receive a confirmation email shortly.', {
-        duration: 5000, // Show for 5 seconds
+      // Show success notification with details from response
+      const successMessage = result?.message || 'Your inquiry has been sent successfully! The agent will contact you soon.';
+      toast.success(`🎉 ${successMessage}`, {
+        duration: 6000, // Show for 6 seconds
       });
-      console.log('[PropertyDetails] Inquiry sent successfully');
+      console.log('[PropertyDetails] Inquiry sent successfully:', result);
       
-      // Redirect to dashboard after a short delay
+      // Navigate to My Inquiries page to see the inquiry details
       setTimeout(() => {
-        window.location.href = '/dashboard';
-      }, 2000);
+        window.location.href = '/my-inquiries';
+      }, 1500);
     } catch (error: any) {
       console.error('[PropertyDetails] Error sending inquiry:', error);
       
@@ -243,6 +243,21 @@ const PropertyDetails: React.FC = () => {
   const getAreaUnit = (): 'sqft' | 'sqyd' | 'acres' => {
     if (!property) return 'sqft';
     
+    // For apartments, default to sqft
+    const apartmentTypes = ['standalone_apartment', 'gated_apartment', 'new_apartment'];
+    if (apartmentTypes.includes(property.property_type)) {
+      return 'sqft';
+    }
+    
+    // For land/plot/farm_house, default to sqyd for plot area
+    const plotTypes = ['land', 'plot', 'farm_house'];
+    if (plotTypes.includes(property.property_type)) {
+      // Check if plot_area_sqyd exists, use sqyd
+      if (property.plot_area_sqyd && parseFloat(String(property.plot_area_sqyd)) > 0) {
+        return 'sqyd';
+      }
+    }
+    
     // First, check if area_unit is stored in the property
     if (property.area_unit && ['sqft', 'sqyd', 'acres'].includes(property.area_unit)) {
       return property.area_unit as 'sqft' | 'sqyd' | 'acres';
@@ -269,41 +284,38 @@ const PropertyDetails: React.FC = () => {
     let label = '';
     
     if (areaType === 'plot') {
-      // For plot area, use the selected unit and prioritize main area fields
-      if (unit === 'sqyd') {
-        // Prefer area_sqyd (main area) over plot_area_sqyd
-        if (property.area_sqyd) {
-          value = parseFloat(String(property.area_sqyd));
-          label = 'sq yd';
-        } else if (property.plot_area_sqyd) {
+      // For plot area: land/plot/farm_house use sqyd, others use sqft
+      const plotTypes = ['land', 'plot', 'farm_house'];
+      const isPlotType = plotTypes.includes(property.property_type);
+      
+      if (isPlotType) {
+        // For land/plot/farm_house: prioritize plot_area_sqyd
+        if (property.plot_area_sqyd && parseFloat(String(property.plot_area_sqyd)) > 0) {
           value = parseFloat(String(property.plot_area_sqyd));
           label = 'sq yd';
-        }
-      } else if (unit === 'acres' && property.area_acres) {
-        value = parseFloat(String(property.area_acres));
-        label = 'acres';
-      } else if (unit === 'sqft') {
-        // Prefer area_sqft (main area) over plot_area_sqft
-        if (property.area_sqft) {
-          value = parseFloat(String(property.area_sqft));
-          label = 'sq ft';
-        } else if (property.plot_area_sqft) {
-          value = parseFloat(String(property.plot_area_sqft));
-          label = 'sq ft';
+        } else if (property.area_sqyd && parseFloat(String(property.area_sqyd)) > 0) {
+          value = parseFloat(String(property.area_sqyd));
+          label = 'sq yd';
+        } else if (property.plot_area_sqft && parseFloat(String(property.plot_area_sqft)) > 0) {
+          // Convert sqft to sqyd for display
+          value = parseFloat(String(property.plot_area_sqft)) / 9;
+          label = 'sq yd';
+        } else if (property.area_sqft && parseFloat(String(property.area_sqft)) > 0) {
+          // Convert sqft to sqyd for display
+          value = parseFloat(String(property.area_sqft)) / 9;
+          label = 'sq yd';
         }
       } else {
-        // Fallback if unit not determined
-        if (property.plot_area_sqyd) {
-          value = parseFloat(String(property.plot_area_sqyd));
-          label = 'sq yd';
-        } else if (property.area_sqyd) {
-          value = parseFloat(String(property.area_sqyd));
-          label = 'sq yd';
-        } else if (property.plot_area_sqft) {
+        // For villa/independent_house: use sqft
+        if (property.plot_area_sqft && parseFloat(String(property.plot_area_sqft)) > 0) {
           value = parseFloat(String(property.plot_area_sqft));
           label = 'sq ft';
-        } else if (property.area_sqft) {
+        } else if (property.area_sqft && parseFloat(String(property.area_sqft)) > 0) {
           value = parseFloat(String(property.area_sqft));
+          label = 'sq ft';
+        } else if (property.plot_area_sqyd && parseFloat(String(property.plot_area_sqyd)) > 0) {
+          // Convert sqyd to sqft for display
+          value = parseFloat(String(property.plot_area_sqyd)) * 9;
           label = 'sq ft';
         }
       }
@@ -320,8 +332,15 @@ const PropertyDetails: React.FC = () => {
         label = 'sq ft';
       }
     } else {
-      // Main area
-      if (unit === 'sqyd' && property.area_sqyd) {
+      // Main area - for apartments default to sqft, for others use determined unit
+      const apartmentTypes = ['standalone_apartment', 'gated_apartment', 'new_apartment'];
+      if (apartmentTypes.includes(property.property_type)) {
+        // For apartments, always show in sqft
+        if (property.area_sqft && parseFloat(String(property.area_sqft)) > 0) {
+          value = parseFloat(String(property.area_sqft));
+          label = 'sq ft';
+        }
+      } else if (unit === 'sqyd' && property.area_sqyd) {
         value = parseFloat(String(property.area_sqyd));
         label = 'sq yd';
       } else if (unit === 'acres' && property.area_acres) {
@@ -377,14 +396,17 @@ const PropertyDetails: React.FC = () => {
     const typeMap: { [key: string]: string } = {
       'standalone_apartment': 'Standalone Apartment',
       'gated_apartment': 'Gated Community Apartment',
+      'new_apartment': 'New Apartment',
+      'new_property': 'New Property',
       'independent_house': 'Independent House',
       'villa': 'Villa',
       'commercial': 'Commercial Property',
       'land': 'Land/Plot',
       'farm_house': 'Farm House',
-      'plot': 'Plot/Land'
+      'plot': 'Plot/Land',
+      'lot': 'Lot'
     };
-    return typeMap[propertyType] || propertyType;
+    return typeMap[propertyType] || propertyType.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
   };
 
   // Helper function to render property-specific details
@@ -551,6 +573,53 @@ const PropertyDetails: React.FC = () => {
             <div className="flex justify-between text-sm md:text-base">
               <span className="text-gray-600">Water Source</span>
               <span className="font-medium text-[#162e5a]">{property.water_source || 'N/A'}</span>
+            </div>
+          </>
+        );
+
+      case 'new_apartment':
+      case 'new_property':
+        return (
+          <>
+            <div className="flex justify-between text-sm md:text-base">
+              <span className="text-gray-600">Total Floors</span>
+              <span className="font-medium text-[#162e5a]">{property.total_floors || 'N/A'}</span>
+            </div>
+            <div className="flex justify-between text-sm md:text-base">
+              <span className="text-gray-600">Parking</span>
+              <span className="font-medium text-[#162e5a]">{property.parking_available ? 'Available' : 'Not Available'}</span>
+            </div>
+            <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 mt-3">
+              <p className="text-sm text-blue-800">
+                <strong>ℹ️ Note:</strong> These properties are sold by sqft. Buyers can purchase any size (100, 200, 300+ sqft) at the rate shown.
+              </p>
+            </div>
+          </>
+        );
+
+      case 'lot':
+        return (
+          <>
+            <div className="flex justify-between text-sm md:text-base">
+              <span className="text-gray-600">Road Access</span>
+              <span className="font-medium text-[#162e5a]">{property.road_access ? 'Yes' : 'No'}</span>
+            </div>
+            <div className="flex justify-between text-sm md:text-base">
+              <span className="text-gray-600">Corner Plot</span>
+              <span className="font-medium text-[#162e5a]">{property.corner_plot ? 'Yes' : 'No'}</span>
+            </div>
+            <div className="flex justify-between text-sm md:text-base">
+              <span className="text-gray-600">Electricity</span>
+              <span className="font-medium text-[#162e5a]">{property.electricity_available ? 'Available' : 'Not Available'}</span>
+            </div>
+            <div className="flex justify-between text-sm md:text-base">
+              <span className="text-gray-600">Water Source</span>
+              <span className="font-medium text-[#162e5a]">{property.water_source || 'N/A'}</span>
+            </div>
+            <div className="p-3 bg-green-50 rounded-lg border border-green-200 mt-3">
+              <p className="text-sm text-green-800">
+                <strong>ℹ️ Note:</strong> Lots are sold by sq yard. Buyers can purchase any quantity (1, 2, 3... sq yards) at the rate shown.
+              </p>
             </div>
           </>
         );
@@ -1034,22 +1103,51 @@ const PropertyDetails: React.FC = () => {
                 {/* Price Display */}
                 <div className="mt-6 p-4 bg-[#f4f9ff] rounded-xl shadow-inner">
                   <div className="text-center">
-                    <p className="text-2xl font-bold text-[#0ca5e9]">
-                      {property.listing_type === 'SALE'
-                        ? formatIndianCurrency(property.price)
-                        : `${formatIndianCurrency(property.monthly_rent)}/month`}
-                    </p>
-                    {property.listing_type === 'SALE' && (property.property_type === 'land' || property.property_type === 'plot') && (
-                      <div className="mt-2 space-y-1">
-                        {(() => {
-                          const rateInfo = getRateDisplay();
-                          return rateInfo ? (
-                            <p className="text-sm text-gray-600">
-                              {rateInfo.display}
-                            </p>
-                          ) : null;
-                        })()}
-                      </div>
+                    {/* Use formatted_pricing if available (for new_apartment, new_property, lot) */}
+                    {property.formatted_pricing?.display_text ? (
+                      <>
+                        <p className="text-2xl font-bold text-[#0ca5e9]">
+                          {property.formatted_pricing.display_text}
+                        </p>
+                        {property.formatted_pricing.description && (
+                          <p className="text-sm text-gray-600 mt-2">
+                            {property.formatted_pricing.description}
+                          </p>
+                        )}
+                        {/* Show examples for lot type */}
+                        {property.formatted_pricing.examples && property.formatted_pricing.examples.length > 0 && (
+                          <div className="mt-3 p-3 bg-white rounded-lg border border-blue-200">
+                            <p className="text-xs font-semibold text-blue-800 mb-2">Examples:</p>
+                            <div className="space-y-1">
+                              {property.formatted_pricing.examples.map((example: any, idx: number) => (
+                                <p key={idx} className="text-xs text-gray-700">
+                                  {example.display}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-2xl font-bold text-[#0ca5e9]">
+                          {property.listing_type === 'SALE'
+                            ? formatIndianCurrency(property.price || 0)
+                            : `${formatIndianCurrency(property.monthly_rent || 0)}/month`}
+                        </p>
+                        {property.listing_type === 'SALE' && (property.property_type === 'land' || property.property_type === 'plot') && (
+                          <div className="mt-2 space-y-1">
+                            {(() => {
+                              const rateInfo = getRateDisplay();
+                              return rateInfo ? (
+                                <p className="text-sm text-gray-600">
+                                  {rateInfo.display}
+                                </p>
+                              ) : null;
+                            })()}
+                          </div>
+                        )}
+                      </>
                     )}
                     {property.listing_type === 'RENT' && property.security_deposit && (
                       <p className="text-sm text-gray-600 mt-1">
@@ -1088,20 +1186,31 @@ const PropertyDetails: React.FC = () => {
               <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
                 <h3 className="text-xl font-semibold text-[#162e5a] mb-4">Property Highlights</h3>
                 <div className="grid grid-cols-1 gap-3">
-                  {property.property_type === 'standalone_apartment' || property.property_type === 'gated_apartment' ? (
+                  {property.property_type === 'standalone_apartment' || property.property_type === 'gated_apartment' || property.property_type === 'new_apartment' ? (
                     <>
-                      <div className="flex items-center justify-between py-2 border-b border-gray-100">
-                        <span className="text-gray-600">Configuration</span>
-                        <span className="font-medium text-[#162e5a]">{property.bedrooms} BHK</span>
-                      </div>
+                      {property.property_type !== 'new_apartment' && property.bedrooms && (
+                        <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                          <span className="text-gray-600">Configuration</span>
+                          <span className="font-medium text-[#162e5a]">{property.bedrooms} BHK</span>
+                        </div>
+                      )}
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-gray-600">Floor</span>
                         <span className="font-medium text-[#162e5a]">{property.floor || 'Ground'} of {property.total_floors || 'N/A'}</span>
                       </div>
-                      <div className="flex items-center justify-between py-2 border-b border-gray-100">
-                        <span className="text-gray-600">Area</span>
-                        <span className="font-medium text-[#162e5a]">{getAreaDisplay('main').display}</span>
-                      </div>
+                      {property.property_type !== 'new_apartment' && property.property_type !== 'new_property' && (
+                        <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                          <span className="text-gray-600">Area</span>
+                          <span className="font-medium text-[#162e5a]">{getAreaDisplay('main').display}</span>
+                        </div>
+                      )}
+                      {(property.property_type === 'new_apartment' || property.property_type === 'new_property') && (
+                        <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 mt-2">
+                          <p className="text-xs text-blue-800">
+                            Properties are sold by sqft. Buyers can purchase any size at the rate shown.
+                          </p>
+                        </div>
+                      )}
                     </>
                   ) : property.property_type === 'independent_house' || property.property_type === 'villa' || property.property_type === 'farm_house' ? (
                     <>
@@ -1133,7 +1242,7 @@ const PropertyDetails: React.FC = () => {
                         <span className="font-medium text-[#162e5a]">{property.parking_spaces || 'N/A'} spaces</span>
                       </div>
                     </>
-                  ) : (property.property_type === 'land' || property.property_type === 'plot') ? (
+                  ) : (property.property_type === 'land' || property.property_type === 'plot' || property.property_type === 'farm_house') ? (
                     <>
                       <div className="flex items-center justify-between py-2 border-b border-gray-100">
                         <span className="text-gray-600">Plot Area</span>
@@ -1148,17 +1257,39 @@ const PropertyDetails: React.FC = () => {
                         <span className="font-medium text-[#162e5a]">{property.road_access ? 'Yes' : 'No'}</span>
                       </div>
                     </>
+                  ) : property.property_type === 'lot' ? (
+                    <>
+                      <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-600">Road Access</span>
+                        <span className="font-medium text-[#162e5a]">{property.road_access ? 'Yes' : 'No'}</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-600">Electricity</span>
+                        <span className="font-medium text-[#162e5a]">{property.electricity_available ? 'Available' : 'Not Available'}</span>
+                      </div>
+                      <div className="p-3 bg-green-50 rounded-lg border border-green-200 mt-2">
+                        <p className="text-xs text-green-800">
+                          Lots are sold by sq yard. Buyers can purchase any quantity (1, 2, 3... sq yards) at the rate shown.
+                        </p>
+                      </div>
+                    </>
+                  ) : property.property_type === 'new_property' ? (
+                    <>
+                      <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-600">Total Floors</span>
+                        <span className="font-medium text-[#162e5a]">{property.total_floors || 'N/A'}</span>
+                      </div>
+                      <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 mt-2">
+                        <p className="text-xs text-blue-800">
+                          Properties are sold by sqft. Buyers can purchase any size at the rate shown.
+                        </p>
+                      </div>
+                    </>
                   ) : null}
                 </div>
               </div>
             </div>
 
-            {/* Property Reviews Section - Full Width */}
-            {property?.id && (
-              <div className="mt-8">
-                <PropertyReviews propertyId={property.id} />
-              </div>
-            )}
           </div>
         </div>
       </main>

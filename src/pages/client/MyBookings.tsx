@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Calendar,
   Clock,
@@ -54,29 +54,13 @@ const MyBookings: React.FC = () => {
   const [filter, setFilter] = useState<'all' | 'pending' | 'confirmed' | 'cancelled' | 'completed'>('all');
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
   const [showViewModal, setShowViewModal] = useState(false);
+  const fetchingRef = useRef(false);
+  const hasFetchedRef = useRef(false);
 
-  useEffect(() => {
-    if (!user) {
-      setShowAuthModal(true);
-      return; 
-    }
-    if ((user as any).user_type !== 'buyer') {
-      navigate('/');
-      return;
-    }
-
-    fetchBookings();
-    
-    // Set up a simple refresh interval instead of real-time subscriptions
-    const refreshInterval = setInterval(() => {
-      fetchBookings();
-    }, 30000); // Refresh every 30 seconds
-    
-    return () => clearInterval(refreshInterval);
-  }, [user, navigate, filter]);
-
-  async function fetchBookings() {
-    if (!user) return;
+  const fetchBookings = useCallback(async () => {
+    // Prevent multiple simultaneous fetches
+    if (fetchingRef.current || !user) return;
+    fetchingRef.current = true;
     setLoading(true);
     try {
       console.log('[MyBookings] Fetching bookings for user:', user.id);
@@ -192,8 +176,33 @@ const MyBookings: React.FC = () => {
       setBookings([]);
     } finally {
       setLoading(false);
+      fetchingRef.current = false;
     }
-  }
+  }, [user?.id, filter]);
+
+  useEffect(() => {
+    if (!user) {
+      setShowAuthModal(true);
+      return; 
+    }
+    if ((user as any).user_type !== 'buyer') {
+      navigate('/');
+      return;
+    }
+
+    // Only fetch if we haven't fetched yet or filter changed
+    if (!hasFetchedRef.current || filter !== 'all') {
+      hasFetchedRef.current = true;
+      fetchBookings();
+    }
+    
+    // Set up a simple refresh interval instead of real-time subscriptions
+    const refreshInterval = setInterval(() => {
+      fetchBookings();
+    }, 30000); // Refresh every 30 seconds
+    
+    return () => clearInterval(refreshInterval);
+  }, [user?.id, navigate, filter, fetchBookings]);
 
   function getStatusBadge(status: Booking['status']) {
     const map: Record<Booking['status'], { color: string; icon: any }> = {

@@ -65,11 +65,7 @@ async def create_location_tables():
         # Insert default mandals for Hyderabad district
         print("📝 Inserting default mandals data...")
         mandals_data = [
-            {'id': 'TG001001', 'name': 'Secunderabad', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001002', 'name': 'Charminar', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001003', 'name': 'Malakpet', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001004', 'name': 'Khairatabad', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001005', 'name': 'Serilingampally', 'district_id': 'TG001', 'state_id': '2'}
+            {'id': 'TG001001', 'name': 'Secunderabad', 'district_id': 'TG001', 'state_id': '2'}
         ]
         
         for mandal in mandals_data:
@@ -84,15 +80,6 @@ async def create_location_tables():
         # Insert default cities for Hyderabad mandals
         print("📝 Inserting default cities data...")
         cities_data = [
-            {'id': 'TG001001001', 'name': 'Secunderabad', 'mandal_id': 'TG001001', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001001002', 'name': 'Begumpet', 'mandal_id': 'TG001001', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001002001', 'name': 'Charminar', 'mandal_id': 'TG001002', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001002002', 'name': 'Mehdipatnam', 'mandal_id': 'TG001002', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001003001', 'name': 'Malakpet', 'mandal_id': 'TG001003', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001003002', 'name': 'Santosh Nagar', 'mandal_id': 'TG001003', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001004001', 'name': 'Khairatabad', 'mandal_id': 'TG001004', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001004002', 'name': 'Somajiguda', 'mandal_id': 'TG001004', 'district_id': 'TG001', 'state_id': '2'},
-            {'id': 'TG001005001', 'name': 'Serilingampally', 'mandal_id': 'TG001005', 'district_id': 'TG001', 'state_id': '2'},
             {'id': 'TG001005002', 'name': 'Kondapur', 'mandal_id': 'TG001005', 'district_id': 'TG001', 'state_id': '2'}
         ]
         

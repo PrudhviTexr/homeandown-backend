@@ -6,8 +6,10 @@ Handles property location by pincode with radius search
 import asyncio
 import requests
 import datetime as dt
+import time
 from typing import Dict, List, Optional, Any, Tuple
 from ..db.supabase_client import db
+import httpx
 
 class LocationService:
     """Service for handling property locations and pincode-based searches"""
@@ -72,24 +74,41 @@ class LocationService:
     
     @staticmethod
     async def _fetch_and_store_coordinates(pincode: str) -> Optional[Tuple[float, float]]:
-        """Fetch coordinates from web APIs and store in database"""
-        # Try multiple APIs in order of preference
-        apis = [
-            LocationService._get_from_nominatim,
-            LocationService._get_from_postalpincode,
-            LocationService._get_from_geocoding_api
-        ]
+        """Fetch coordinates from web APIs and store in database (async for speed)"""
+        # Use OpenStreetMap Nominatim as primary (free, reliable)
+        # Priority: OpenStreetMap > Postal API > Other fallbacks
         
-        for api_func in apis:
-            try:
-                coordinates = api_func(pincode)
-                if coordinates:
-                    # Store in database
-                    await LocationService._store_coordinates_in_db(pincode, coordinates)
-                    return coordinates
-            except Exception as e:
-                print(f"[LOCATION] API failed for pincode {pincode}: {e}")
-                continue
+        # Try OpenStreetMap Nominatim first (async, faster)
+        try:
+            coordinates = await LocationService._get_from_nominatim_async(pincode)
+            if coordinates:
+                # Store in database (non-blocking)
+                asyncio.create_task(LocationService._store_coordinates_in_db(pincode, coordinates))
+                print(f"[LOCATION] Successfully fetched coordinates from OpenStreetMap for pincode {pincode}")
+                return coordinates
+        except Exception as e:
+            print(f"[LOCATION] OpenStreetMap API failed for pincode {pincode}: {e}")
+            # Continue to fallback APIs
+        
+        # Fallback: Try postal API (sync, but cached)
+        try:
+            coordinates = LocationService._get_from_postalpincode(pincode)
+            if coordinates:
+                # Store in database (non-blocking)
+                asyncio.create_task(LocationService._store_coordinates_in_db(pincode, coordinates))
+                return coordinates
+        except Exception as e:
+            print(f"[LOCATION] Postal API failed for pincode {pincode}: {e}")
+        
+        # Last resort: Try other geocoding services
+        try:
+            coordinates = LocationService._get_from_geocoding_api(pincode)
+            if coordinates:
+                # Store in database (non-blocking)
+                asyncio.create_task(LocationService._store_coordinates_in_db(pincode, coordinates))
+                return coordinates
+        except Exception as e:
+            print(f"[LOCATION] Geocoding API failed for pincode {pincode}: {e}")
         
         return None
     
@@ -130,39 +149,77 @@ class LocationService:
             return False
     
     @staticmethod
-    def _get_from_nominatim(pincode: str) -> Optional[Tuple[float, float]]:
-        """Get coordinates from OpenStreetMap Nominatim API (free)"""
+    async def _get_from_nominatim_async(pincode: str) -> Optional[Tuple[float, float]]:
+        """Get coordinates from OpenStreetMap Nominatim API (async, faster)"""
         try:
-            print(f"[LOCATION] Trying Nominatim API for pincode {pincode}")
+            print(f"[LOCATION] 🌍 Using OpenStreetMap Nominatim for pincode {pincode}")
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    f"https://nominatim.openstreetmap.org/search",
+                    params={
+                        'postalcode': pincode,
+                        'countrycodes': 'in',
+                        'format': 'json',
+                        'limit': 1,
+                        'addressdetails': 1
+                    },
+                    headers={
+                        'User-Agent': 'HomeAndOwn-PropertyPlatform/1.0 (contact@homeandown.com)'
+                    }
+                )
+                
+                print(f"[LOCATION] OpenStreetMap response status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data and len(data) > 0:
+                        lat = float(data[0]['lat'])
+                        lon = float(data[0]['lon'])
+                        if lat != 0 and lon != 0:
+                            print(f"[LOCATION] ✅ OpenStreetMap found coordinates for {pincode}: {lat}, {lon}")
+                            return (lat, lon)
+                    else:
+                        print(f"[LOCATION] ⚠️ OpenStreetMap returned empty results for {pincode}")
+                elif response.status_code == 429:
+                    print(f"[LOCATION] ⚠️ OpenStreetMap rate limit reached")
+                    await asyncio.sleep(1)  # Respect rate limits
+                else:
+                    print(f"[LOCATION] ⚠️ OpenStreetMap returned status {response.status_code}")
+        except httpx.TimeoutException:
+            print(f"[LOCATION] ⚠️ OpenStreetMap request timeout for pincode {pincode}")
+        except Exception as e:
+            print(f"[LOCATION] ❌ OpenStreetMap API error for {pincode}: {e}")
+        return None
+    
+    @staticmethod
+    def _get_from_nominatim(pincode: str) -> Optional[Tuple[float, float]]:
+        """Get coordinates from OpenStreetMap Nominatim API (sync fallback)"""
+        try:
+            print(f"[LOCATION] 🌍 Using OpenStreetMap Nominatim for pincode {pincode}")
             response = requests.get(
                 f"https://nominatim.openstreetmap.org/search",
                 params={
                     'postalcode': pincode,
                     'countrycodes': 'in',
                     'format': 'json',
-                    'limit': 1
+                    'limit': 1,
+                    'addressdetails': 1
                 },
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
-                timeout=15
+                headers={
+                    'User-Agent': 'HomeAndOwn-PropertyPlatform/1.0 (contact@homeandown.com)'
+                },
+                timeout=5
             )
-            
-            print(f"[LOCATION] Nominatim response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
-                print(f"[LOCATION] Nominatim response data: {data}")
                 if data and len(data) > 0:
                     lat = float(data[0]['lat'])
                     lon = float(data[0]['lon'])
                     if lat != 0 and lon != 0:
-                        print(f"[LOCATION] Nominatim found coordinates for {pincode}: {lat}, {lon}")
                         return (lat, lon)
-                else:
-                    print(f"[LOCATION] Nominatim returned empty results for {pincode}")
-            else:
-                print(f"[LOCATION] Nominatim returned status {response.status_code}: {response.text}")
         except Exception as e:
-            print(f"[LOCATION] Nominatim API error for {pincode}: {e}")
+            print(f"[LOCATION] ❌ OpenStreetMap API error: {e}")
         return None
     
     @staticmethod
@@ -224,38 +281,45 @@ class LocationService:
     
     @staticmethod
     def _get_coordinates_from_city_state(city: str, state: str) -> Optional[Tuple[float, float]]:
-        """Get coordinates from city and state using Nominatim"""
+        """Get coordinates from city and state using OpenStreetMap Nominatim"""
         try:
             query = f"{city}, {state}, India"
-            print(f"[LOCATION] Geocoding city/state: {query}")
+            print(f"[LOCATION] 🌍 Geocoding city/state with OpenStreetMap: {query}")
             response = requests.get(
                 f"https://nominatim.openstreetmap.org/search",
                 params={
                     'q': query,
                     'format': 'json',
-                    'limit': 1
+                    'limit': 1,
+                    'addressdetails': 1
                 },
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
+                headers={
+                    'User-Agent': 'HomeAndOwn-PropertyPlatform/1.0 (contact@homeandown.com)'  # Required by OSM
+                },
                 timeout=15
             )
             
-            print(f"[LOCATION] City/State geocoding response status: {response.status_code}")
+            print(f"[LOCATION] OpenStreetMap city/state response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
-                print(f"[LOCATION] City/State geocoding response data: {data}")
                 if data and len(data) > 0:
                     lat = float(data[0]['lat'])
                     lon = float(data[0]['lon'])
                     if lat != 0 and lon != 0:
-                        print(f"[LOCATION] City/State geocoding found coordinates: {lat}, {lon}")
+                        print(f"[LOCATION] ✅ OpenStreetMap found coordinates for {query}: {lat}, {lon}")
                         return (lat, lon)
                 else:
-                    print(f"[LOCATION] City/State geocoding returned empty results")
+                    print(f"[LOCATION] ⚠️ OpenStreetMap returned empty results for {query}")
+            elif response.status_code == 429:
+                print(f"[LOCATION] ⚠️ OpenStreetMap rate limit, waiting 1 second...")
+                time.sleep(1)  # Respect rate limits
             else:
-                print(f"[LOCATION] City/State geocoding returned status {response.status_code}: {response.text}")
+                print(f"[LOCATION] ⚠️ OpenStreetMap returned status {response.status_code}")
+        except requests.exceptions.Timeout:
+            print(f"[LOCATION] ⚠️ OpenStreetMap request timeout for {query}")
         except Exception as e:
-            print(f"[LOCATION] City/State geocoding error: {e}")
+            print(f"[LOCATION] ❌ OpenStreetMap city/state geocoding error: {e}")
         return None
     
     @staticmethod
@@ -283,18 +347,22 @@ class LocationService:
     @staticmethod
     async def get_properties_by_pincode(pincode: str, radius_km: float = 10.0) -> List[Dict[str, Any]]:
         """
-        Get properties within a radius of the given pincode
+        Get properties within a radius of the given pincode (optimized with pagination)
         """
         try:
-            # Get coordinates for the pincode
-            coordinates = LocationService.get_coordinates_from_pincode(pincode)
+            # Get coordinates for the pincode (async)
+            coordinates = await LocationService.get_coordinates_from_pincode(pincode)
             if not coordinates:
                 return []
             
             target_lat, target_lon = coordinates
             
-            # Get all properties with coordinates
-            properties = await db.select("properties", filters={"status": "active"})
+            # Get properties with coordinates (limit to 200 for performance)
+            properties = await db.select(
+                "properties", 
+                filters={"status": "active"},
+                limit=200  # Limit for performance
+            )
             
             nearby_properties = []
             for property in properties:
@@ -357,11 +425,15 @@ class LocationService:
     @staticmethod
     async def get_nearby_properties(latitude: float, longitude: float, radius_km: float = 10.0) -> List[Dict[str, Any]]:
         """
-        Get properties within a radius of given coordinates
+        Get properties within a radius of given coordinates (optimized with pagination)
         """
         try:
-            # Get all active properties
-            properties = await db.select("properties", filters={"status": "active"})
+            # Get active properties with pagination (limit to 200 for performance)
+            properties = await db.select(
+                "properties", 
+                filters={"status": "active"},
+                limit=200  # Limit for performance
+            )
             
             nearby_properties = []
             for property in properties:
@@ -456,8 +528,10 @@ class LocationService:
     @staticmethod
     async def get_pincode_location_data(pincode: str) -> Dict[str, Any]:
         """Get complete location data for property form auto-population"""
+        # Use OpenStreetMap + Postal API (free solution)
+        # Priority: Postal API for location data, OpenStreetMap for coordinates
         
-        # First, try the hardcoded fallback for common pincodes
+        # Fallback to hardcoded data for common pincodes
         fallback_data = LocationService._get_fallback_pincode_data(pincode)
         if fallback_data:
             print(f"[LOCATION] Using fallback data for pincode {pincode}")
@@ -466,7 +540,7 @@ class LocationService:
         try:
             print(f"[LOCATION] Fetching complete location data for pincode: {pincode}")
             
-            # Try the postal pincode API first
+            # Try the postal pincode API as fallback
             response = requests.get(
                 f"https://api.postalpincode.in/pincode/{pincode}",
                 timeout=15,
@@ -598,19 +672,30 @@ class LocationService:
     
     @staticmethod
     async def _reverse_geocode_coordinates(lat: float, lon: float) -> Optional[Dict[str, Any]]:
-        """Reverse geocode coordinates to get location details"""
+        """Reverse geocode coordinates to get location details using OpenStreetMap"""
         try:
-            # Use Nominatim for reverse geocoding
+            # Use OpenStreetMap Nominatim for reverse geocoding
+            print(f"[LOCATION] 🌍 Reverse geocoding with OpenStreetMap: {lat}, {lon}")
             response = requests.get(
-                f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&addressdetails=1",
+                f"https://nominatim.openstreetmap.org/reverse",
+                params={
+                    'format': 'json',
+                    'lat': lat,
+                    'lon': lon,
+                    'addressdetails': 1,
+                    'zoom': 18  # Get detailed address
+                },
                 timeout=10,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                headers={
+                    'User-Agent': 'HomeAndOwn-PropertyPlatform/1.0 (contact@homeandown.com)'  # Required by OSM
+                }
             )
             
             if response.status_code == 200:
                 data = response.json()
                 address = data.get('address', {})
                 
+                print(f"[LOCATION] ✅ OpenStreetMap reverse geocoding successful")
                 return {
                     'country': address.get('country', 'India'),
                     'state': address.get('state', ''),
@@ -619,8 +704,13 @@ class LocationService:
                     'city': address.get('city', '') or address.get('town', '') or address.get('village', ''),
                     'address': data.get('display_name', '')
                 }
+            elif response.status_code == 429:
+                print(f"[LOCATION] ⚠️ OpenStreetMap rate limit, waiting 1 second...")
+                time.sleep(1)  # Respect rate limits
+        except requests.exceptions.Timeout:
+            print(f"[LOCATION] ⚠️ OpenStreetMap reverse geocoding timeout")
         except Exception as e:
-            print(f"[LOCATION] Reverse geocoding error: {e}")
+            print(f"[LOCATION] ❌ OpenStreetMap reverse geocoding error: {e}")
         
         return None
     

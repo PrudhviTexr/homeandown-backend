@@ -310,16 +310,42 @@ async def get_agent_inquiries(
             property_data = await db.select("properties", filters={"id": prop_id})
             property_info = property_data[0] if property_data else {}
             
-            # Get user details
+            # Get user details from users table if user_id exists
             user_info = {}
             if user_id_inquiry:
-                user_data = await db.select("users", filters={"id": user_id_inquiry})
-                user_info = user_data[0] if user_data else {}
+                try:
+                    user_data = await db.select("users", filters={"id": user_id_inquiry})
+                    if user_data:
+                        user_info = user_data[0]
+                except Exception as user_error:
+                    print(f"[AGENT] Error fetching user details: {user_error}")
+            
+            # Always include customer details from inquiry fields (name, email, phone)
+            # These are the primary customer contact details
+            customer_details = {
+                "name": inquiry.get("name", ""),
+                "email": inquiry.get("email", ""),
+                "phone": inquiry.get("phone", ""),
+                "first_name": user_info.get("first_name", inquiry.get("name", "").split()[0] if inquiry.get("name") else ""),
+                "last_name": user_info.get("last_name", " ".join(inquiry.get("name", "").split()[1:]) if inquiry.get("name") and len(inquiry.get("name", "").split()) > 1 else ""),
+                "phone_number": user_info.get("phone_number", inquiry.get("phone", "")),
+                "user_id": user_id_inquiry
+            }
+            
+            # Merge user info with customer details (user info takes precedence for additional fields)
+            if user_info:
+                customer_details.update({
+                    "id": user_info.get("id"),
+                    "user_type": user_info.get("user_type"),
+                    "city": user_info.get("city"),
+                    "state": user_info.get("state"),
+                    "email_verified": user_info.get("email_verified"),
+                })
             
             enhanced_inquiry = {
                 **inquiry,
                 "property": property_info,
-                "user": user_info
+                "user": customer_details  # Always include customer details
             }
             enhanced_inquiries.append(enhanced_inquiry)
         
