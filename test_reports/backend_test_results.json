@@ -1,0 +1,172 @@
+{
+  "timestamp": "2025-10-16T12:02:34.360342",
+  "backend_url": "http://localhost:8001",
+  "total_tests": 20,
+  "passed_tests": 16,
+  "failed_tests": 4,
+  "success_rate": 80.0,
+  "test_details": [
+    {
+      "name": "Auth Test Endpoint",
+      "success": true,
+      "details": "Response: {'message': 'Auth router is working', 'status': 'success'}",
+      "endpoint": "/api/auth/test",
+      "timestamp": "2025-10-16T12:02:14.933940"
+    },
+    {
+      "name": "Admin Login",
+      "success": true,
+      "details": "Admin authenticated successfully",
+      "endpoint": "/api/auth/login",
+      "timestamp": "2025-10-16T12:02:16.418303"
+    },
+    {
+      "name": "Buyer Login",
+      "success": true,
+      "details": "Buyer authenticated successfully",
+      "endpoint": "/api/auth/login",
+      "timestamp": "2025-10-16T12:02:17.728279"
+    },
+    {
+      "name": "Seller Login",
+      "success": true,
+      "details": "Seller authenticated successfully",
+      "endpoint": "/api/auth/login",
+      "timestamp": "2025-10-16T12:02:19.042318"
+    },
+    {
+      "name": "Agent Login",
+      "success": true,
+      "details": "Agent authenticated successfully",
+      "endpoint": "/api/auth/login",
+      "timestamp": "2025-10-16T12:02:20.408247"
+    },
+    {
+      "name": "Admin Profile Access",
+      "success": true,
+      "details": "Admin profile: admin@homeandown.com",
+      "endpoint": "/api/auth/me",
+      "timestamp": "2025-10-16T12:02:20.757301"
+    },
+    {
+      "name": "Buyer Profile Access",
+      "success": true,
+      "details": "Buyer profile: buyer@homeandown.com",
+      "endpoint": "/api/auth/me",
+      "timestamp": "2025-10-16T12:02:21.084295"
+    },
+    {
+      "name": "Get All Properties",
+      "success": true,
+      "details": "Found 4 properties",
+      "endpoint": "/api/properties",
+      "timestamp": "2025-10-16T12:02:21.423392"
+    },
+    {
+      "name": "Create Property (Partial Data)",
+      "success": true,
+      "details": "Property created with ID: 3a664d18-9f5f-4053-b347-5f4aaac27a56",
+      "endpoint": "/api/properties",
+      "timestamp": "2025-10-16T12:02:24.786309"
+    },
+    {
+      "name": "Get Single Property",
+      "success": true,
+      "details": "Property title: Test Property - Partial Data",
+      "endpoint": "/api/properties/3a664d18-9f5f-4053-b347-5f4aaac27a56",
+      "timestamp": "2025-10-16T12:02:25.383328"
+    },
+    {
+      "name": "Submit Property Inquiry",
+      "success": false,
+      "details": "Failed: {'detail': \"Failed to create inquiry: {'message': 'function supabase_functions.edge_functions_invoke(unknown, jsonb) does not exist', 'code': '42883', 'hint': 'No function matches the given name and argument types. You might need to add explicit type casts.', 'details': None}\"}",
+      "endpoint": "/api/records/inquiries",
+      "timestamp": "2025-10-16T12:02:25.706288"
+    },
+    {
+      "name": "Get All Inquiries (Admin)",
+      "success": true,
+      "details": "Found 0 inquiries",
+      "endpoint": "/api/records/inquiries",
+      "timestamp": "2025-10-16T12:02:26.023309"
+    },
+    {
+      "name": "Submit Property Tour Booking",
+      "success": false,
+      "details": "Failed: {'detail': 'Failed to create booking'}",
+      "endpoint": "/api/records/bookings",
+      "timestamp": "2025-10-16T12:02:26.628279"
+    },
+    {
+      "name": "Get All Bookings (Admin)",
+      "success": true,
+      "details": "Found 0 bookings",
+      "endpoint": "/api/records/bookings",
+      "timestamp": "2025-10-16T12:02:26.963280"
+    },
+    {
+      "name": "Admin Dashboard Stats",
+      "success": true,
+      "details": "Stats: 19 users, 5 properties",
+      "endpoint": "/api/admin/stats",
+      "timestamp": "2025-10-16T12:02:28.372308"
+    },
+    {
+      "name": "Admin Users List",
+      "success": true,
+      "details": "Found 20 users",
+      "endpoint": "/api/admin/users",
+      "timestamp": "2025-10-16T12:02:29.808422"
+    },
+    {
+      "name": "Admin Properties List",
+      "success": true,
+      "details": "Found 5 properties",
+      "endpoint": "/api/admin/properties",
+      "timestamp": "2025-10-16T12:02:30.144375"
+    },
+    {
+      "name": "Buyer Access to Admin Endpoint (Should Fail)",
+      "success": false,
+      "details": "ERROR: Buyer gained admin access!",
+      "endpoint": "/api/admin/users",
+      "timestamp": "2025-10-16T12:02:31.610397"
+    },
+    {
+      "name": "Seller Access to Admin Endpoint (Should Fail)",
+      "success": false,
+      "details": "ERROR: Seller gained admin access!",
+      "endpoint": "/api/admin/stats",
+      "timestamp": "2025-10-16T12:02:32.773270"
+    },
+    {
+      "name": "Contact Form Submission",
+      "success": true,
+      "details": "Contact form submitted successfully",
+      "endpoint": "/api/contact",
+      "timestamp": "2025-10-16T12:02:34.360279"
+    }
+  ],
+  "failed_test_details": [
+    {
+      "name": "Submit Property Inquiry",
+      "endpoint": "/api/records/inquiries",
+      "details": "Failed: {'detail': \"Failed to create inquiry: {'message': 'function supabase_functions.edge_functions_invoke(unknown, jsonb) does not exist', 'code': '42883', 'hint': 'No function matches the given name and argument types. You might need to add explicit type casts.', 'details': None}\"}"
+    },
+    {
+      "name": "Submit Property Tour Booking",
+      "endpoint": "/api/records/bookings",
+      "details": "Failed: {'detail': 'Failed to create booking'}"
+    },
+    {
+      "name": "Buyer Access to Admin Endpoint (Should Fail)",
+      "endpoint": "/api/admin/users",
+      "details": "ERROR: Buyer gained admin access!"
+    },
+    {
+      "name": "Seller Access to Admin Endpoint (Should Fail)",
+      "endpoint": "/api/admin/stats",
+      "details": "ERROR: Seller gained admin access!"
+    }
+  ]
+}

@@ -424,6 +424,66 @@ async def get_profile(request: Request) -> Dict[str, Any]:
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to get profile: {str(e)}")
 
+
+@router.patch("/profile")
+async def update_profile(request: Request, updates: UpdateProfileRequest) -> Dict[str, Any]:
+    """Update user profile fields including profile_image_url."""
+    try:
+        print("[AUTH] Update profile request received")
+        
+        # Get user claims from JWT token
+        user_claims = get_current_user_claims(request)
+        user_id = user_claims.get("sub")
+        
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        print(f"[AUTH] Updating profile for user: {user_id}")
+        
+        # Build update dict from provided fields
+        update_data = {}
+        if updates.first_name is not None:
+            update_data["first_name"] = updates.first_name
+        if updates.last_name is not None:
+            update_data["last_name"] = updates.last_name
+        if updates.phone_number is not None:
+            update_data["phone_number"] = updates.phone_number
+        if updates.city is not None:
+            update_data["city"] = updates.city
+        if updates.state is not None:
+            update_data["state"] = updates.state
+        if updates.address is not None:
+            update_data["address"] = updates.address
+        if updates.bio is not None:
+            update_data["bio"] = updates.bio
+        if updates.date_of_birth is not None:
+            update_data["date_of_birth"] = updates.date_of_birth
+        if updates.profile_image_url is not None:
+            update_data["profile_image_url"] = updates.profile_image_url
+        
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No fields to update")
+        
+        # Update user in database
+        result = await db.update("users", {"id": user_id}, update_data)
+        
+        print(f"[AUTH] Profile updated successfully for user: {user_id}")
+        
+        # Return updated user
+        user_data = await db.select("users", filters={"id": user_id})
+        if user_data:
+            return user_data[0]
+        
+        return {"success": True, "message": "Profile updated", "id": user_id}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AUTH] Update profile error: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to update profile: {str(e)}")
+
+
 @router.post("/send-otp")
 async def send_otp(payload: SendOTPRequest) -> Dict[str, Any]:
     """Send OTP via email for email verification."""

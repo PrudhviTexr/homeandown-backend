@@ -1,0 +1,887 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Ensure smooth scrolling */
+html {
+  scroll-behavior: smooth;
+  min-height: 100%;
+}
+
+body {
+  overflow-x: hidden;
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  min-height: 100%;
+  background-color: #ffffff;
+}
+
+/* Prevent horizontal scroll */
+* {
+  box-sizing: border-box;
+}
+
+.container {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* Fix for leaflet map in React */
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  z-index: 1;
+}
+
+/* Professional styling */
+.professional-card {
+  @apply bg-white rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 border border-gray-100 hover:border-gray-200;
+}
+
+/* Prevent cards from visually overflowing their container */
+.professional-card {
+  overflow: hidden;
+  contain: content; /* limit layout/paint to the card */
+}
+
+.professional-button {
+  @apply px-6 py-3 rounded-lg font-semibold transition-all duration-200 transform hover:scale-105 active:scale-95;
+}
+
+.professional-input {
+  @apply w-full border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#90C641] focus:border-transparent transition-all duration-200 hover:border-gray-300;
+}
+
+/* Custom scrolling animation */
+@keyframes scroll {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+.scrolling-banner-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  height: auto;
+}
+
+.scrolling-banner {
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.scrolling-content {
+  display: inline-flex;
+  animation: scroll 80s linear infinite;
+  will-change: transform;
+}
+
+.scrolling-message {
+  display: inline-block;
+  padding: 0 4rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Responsive banner sizing */
+@media (max-width: 768px) {
+  .scrolling-message {
+    font-size: 0.75rem;
+    padding: 0 2rem;
+  }
+  
+  .scrolling-content {
+    animation: scroll 70s linear infinite;
+  }
+}
+
+@media (max-width: 480px) {
+  .scrolling-message {
+    font-size: 0.7rem;
+    padding: 0 1.5rem;
+  }
+  
+  .scrolling-content {
+    animation: scroll 60s linear infinite;
+  }
+}
+
+/* Enhanced animations */
+.fade-in {
+  animation: fadeIn 1.2s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 1.2s ease-in-out;
+}
+
+.animate-fade-in-delayed {
+  animation: fadeIn 1.2s ease-in-out 0.3s both;
+}
+
+.slide-up {
+  animation: slideUp 1.4s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slideUp 1.4s ease-out;
+}
+
+.animate-slide-up-delayed {
+  animation: slideUp 1.4s ease-out 0.5s both;
+}
+
+/* Staggered animations for grid items */
+.grid > *:nth-child(1) { animation-delay: 0.1s; }
+.grid > *:nth-child(2) { animation-delay: 0.2s; }
+.grid > *:nth-child(3) { animation-delay: 0.3s; }
+.grid > *:nth-child(4) { animation-delay: 0.4s; }
+.grid > *:nth-child(5) { animation-delay: 0.5s; }
+.grid > *:nth-child(6) { animation-delay: 0.6s; }
+
+/* Smooth transitions for all interactive elements */
+button, a, input, select {
+  transition: color 0.3s ease, background-color 0.3s ease, border-color 0.3s ease, transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Smooth scrolling for the entire page */
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 150px; /* Account for fixed header + banner */
+}
+
+/* Custom smooth scroll for specific elements */
+.smooth-scroll {
+  scroll-behavior: smooth;
+  transition: scroll-behavior 0.5s ease;
+}
+
+/* Page transitions */
+.page-transition {
+  transition: opacity 0.3s ease-in-out, transform 0.3s ease-in-out;
+}
+
+.page-enter {
+  opacity: 0;
+  transform: translateY(20px);
+}
+
+.page-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #0ca5e9;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #0ca5e9;
+}
+
+/* Fix for mobile scrolling */
+@media (max-width: 768px) {
+  body {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Ensure proper spacing for fixed header and scrolling banner */
+.header-shadow {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+/* Navigation hover effects */
+.nav-link {
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.nav-link::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background-color: #0ca5e9;
+  transition: width 0.3s ease;
+}
+
+.nav-link:hover::after {
+  width: 100%;
+}
+
+/* Button animations */
+.btn-primary {
+  @apply bg-[#90C641] text-white font-semibold py-2.5 px-6 rounded-full transition-all duration-200 shadow-md hover:shadow-lg hover:bg-[#7DAF35] transform hover:scale-105 active:scale-95;
+}
+
+/* Card hover effects */
+.card-hover {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card-hover:hover {
+  transform: translateY(-8px) scale(1.02);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+}
+
+/* Grid layout improvements */
+.property-grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .property-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1280px) {
+  .property-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* Property card specific styles */
+.property-card {
+  @apply professional-card overflow-hidden cursor-pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.property-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
+}
+
+.property-card img {
+  transition: transform 0.3s ease;
+}
+
+.property-card:hover img {
+  transform: scale(1.05);
+}
+
+/* Scrollbar improvements */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f8f9fa;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #0ca5e9;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #162e5a;
+}
+
+/* Mobile menu animations */
+.mobile-menu {
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Loading states */
+.loading-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Focus states for accessibility */
+button:focus,
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 2px solid #0ca5e9;
+  outline-offset: 2px;
+}
+
+/* Responsive text */
+@media (max-width: 640px) {
+  .responsive-text {
+    font-size: 0.875rem;
+  }
+}
+
+/* Scrolling banner positioning */
+/* Role-based color schemes */
+.buyer-theme {
+  --primary-color: #3B82F6;
+  --primary-hover: #2563EB;
+}
+
+.seller-theme {
+  --primary-color: #10B981;
+  --primary-hover: #059669;
+}
+
+.agent-theme {
+  --primary-color: #8B5CF6;
+  --primary-hover: #7C3AED;
+}
+
+.admin-theme {
+  --primary-color: #EF4444;
+  --primary-hover: #DC2626;
+}
+
+/* User type badges */
+.user-badge {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+}
+
+.user-badge.buyer {
+  @apply bg-blue-100 text-blue-800;
+}
+
+.user-badge.seller {
+  @apply bg-green-100 text-green-800;
+}
+
+.user-badge.agent {
+  @apply bg-purple-100 text-purple-800;
+}
+
+.user-badge.admin {
+  @apply bg-red-100 text-red-800;
+}
+
+/* Agent dashboard specific styles */
+.agent-stat-card {
+  @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow duration-200;
+}
+
+.agent-stat-value {
+  @apply text-3xl font-bold mb-2;
+}
+
+.agent-stat-label {
+  @apply text-sm text-gray-600;
+}
+
+/* Contact card styles */
+.contact-card {
+  @apply bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow duration-200;
+}
+
+.contact-card-today {
+  @apply bg-green-50 border-green-200;
+}
+
+/* Activity timeline */
+.activity-item {
+  @apply flex items-center py-3 border-b border-gray-100 last:border-b-0;
+}
+
+.activity-icon {
+  @apply w-10 h-10 rounded-full flex items-center justify-center mr-3;
+}
+
+.activity-icon-inquiry {
+  @apply bg-green-100 text-green-600;
+}
+
+.activity-icon-booking {
+  @apply bg-blue-100 text-blue-600;
+}
+
+/* Quick action buttons */
+.quick-action-btn {
+  @apply w-full p-3 rounded-lg transition-colors flex items-center justify-center font-medium;
+}
+
+.quick-action-primary {
+  @apply bg-[#90C641] text-white hover:bg-[#7DAF35];
+}
+
+.quick-action-secondary {
+  @apply bg-[#3B5998] text-white hover:bg-[#2d4373];
+}
+
+.quick-action-danger {
+  @apply bg-[#FF6B6B] text-white hover:bg-[#ff5252];
+}
+
+.quick-action-success {
+  @apply bg-[#10B981] text-white hover:bg-[#059669];
+}
+
+/* Stats grid responsive */
+@media (max-width: 640px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+  }
+}
+
+@media (min-width: 768px) {
+  .stats-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.5rem;
+  }
+}
+
+/* Agent card hover effects */
+.agent-card {
+  @apply bg-white rounded-lg shadow-lg overflow-hidden transition-all duration-300;
+}
+
+.agent-card:hover {
+  @apply shadow-xl transform -translate-y-1;
+}
+
+/* Contact modal improvements */
+.contact-modal {
+  @apply fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4;
+  z-index: 99999;
+}
+
+.contact-modal-content {
+  @apply bg-white rounded-lg shadow-xl w-full max-w-md;
+}
+
+/* Responsive improvements for agent dashboard */
+@media (max-width: 768px) {
+  .agent-dashboard-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  
+  .agent-stat-value {
+    @apply text-2xl;
+  }
+}
+
+@media (min-width: 1024px) {
+  .agent-dashboard-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+  }
+}
+
+/* Loading states for agent dashboard */
+.agent-loading {
+  @apply flex justify-center py-12;
+}
+
+.agent-loading-spinner {
+  @apply animate-spin h-12 w-12 border-b-2 border-[#90C641] rounded-full;
+}
+
+/* Empty states */
+.empty-state {
+  @apply text-center py-8 text-gray-500;
+}
+
+.empty-state-icon {
+  @apply h-12 w-12 mx-auto mb-2 text-gray-300;
+}
+
+/* Notification improvements */
+.notification-badge-agent {
+  @apply absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-medium animate-pulse;
+}
+
+/* Agent profile improvements */
+.agent-avatar {
+  @apply w-16 h-16 bg-[#90C641] rounded-full flex items-center justify-center text-white text-xl font-bold;
+}
+
+.agent-rating {
+  @apply flex items-center text-yellow-400;
+}
+
+.agent-specialization {
+  @apply inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full;
+}
+
+/* Contact information styling */
+.contact-info {
+  @apply flex items-center text-sm text-gray-600 mb-2;
+}
+
+.contact-info-icon {
+  @apply mr-2 text-[#90C641];
+}
+
+/* Action buttons for agents */
+.agent-action-btn {
+  @apply flex-1 py-2 px-4 rounded-full font-semibold text-sm shadow-md hover:shadow-lg transition-all duration-200 flex items-center justify-center;
+}
+
+.agent-action-primary {
+  @apply bg-[#90C641] text-white hover:bg-[#7DAF35];
+}
+
+.agent-action-secondary {
+  @apply bg-[#3B5998] text-white hover:bg-[#2d4373];
+}
+
+/* Navbar container overflow fix */
+.navbar-container {
+  overflow: visible !important;
+  position: relative !important; 
+  z-index: 50 !important;
+}
+
+.navbar-container * {
+  overflow: visible !important;
+  z-index: auto !important; 
+}
+
+/* Header container overflow fix */
+header {
+  overflow: visible !important;
+  position: relative !important; 
+}
+
+header * {
+  overflow: visible !important;
+  z-index: auto !important; 
+}
+
+/* User menu container */
+.user-menu-container {
+  position: relative !important;
+  z-index: 9999 !important; 
+}
+
+/* Dashboard specific styles */
+.dashboard-card {
+  @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow duration-200;
+}
+
+.dashboard-stat {
+  @apply text-center p-4 bg-gradient-to-br from-white to-gray-50 rounded-lg border border-gray-100;
+}
+
+.dashboard-stat-value {
+  @apply text-2xl font-bold text-gray-900 mb-1;
+}
+
+.dashboard-stat-label {
+  @apply text-sm text-gray-600;
+}
+
+/* Notification styles */
+.notification-badge {
+  @apply absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center font-medium;
+}
+
+/* Enhanced form styles */
+.form-group {
+  @apply mb-4;
+}
+
+.form-label {
+  @apply block text-sm font-medium text-gray-700 mb-2;
+}
+
+.form-input {
+  @apply w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#90C641] focus:border-transparent;
+}
+
+.form-select {
+  @apply w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#90C641] focus:border-transparent bg-white;
+}
+
+.form-textarea {
+  @apply w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#90C641] focus:border-transparent resize-y;
+}
+
+/* Status indicators */
+.status-active {
+  @apply bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium;
+}
+
+.status-pending {
+  @apply bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full text-xs font-medium;
+}
+
+.status-inactive {
+  @apply bg-red-100 text-red-800 px-2 py-1 rounded-full text-xs font-medium;
+}
+
+/* Property listing enhancements */
+.property-price {
+  @apply text-2xl font-bold text-[#90C641] mb-2;
+}
+
+.property-features {
+  @apply flex items-center space-x-4 text-sm text-gray-600 mb-3;
+}
+
+.property-location {
+  @apply flex items-center text-sm text-gray-600 mb-4;
+}
+
+/* Responsive utilities */
+@media (max-width: 640px) {
+  .mobile-hidden {
+    display: none;
+  }
+  
+  .mobile-full {
+    width: 100%;
+  }
+  
+  .mobile-text-sm {
+    font-size: 0.875rem;
+  }
+}
+
+/* Print styles */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  
+  .page-content {
+    padding-top: 0 !important;
+  }
+}
+
+/* Smooth scroll behavior for all links */
+html {
+  scroll-behavior: smooth;
+  overflow-x: hidden;
+}
+
+/* Ensure scrolling always goes to top */
+.scroll-to-top {
+  scroll-behavior: smooth;
+}
+
+/* Auth modal styles */
+.auth-modal {
+  @apply fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4;
+}
+
+.auth-modal-content {
+  @apply bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto;
+}
+
+.auth-modal-header {
+  @apply p-6 text-white text-center relative rounded-t-xl;
+}
+
+.auth-modal-body {
+  @apply p-6;
+}
+
+.auth-input {
+  @apply w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2;
+}
+
+.auth-button {
+  @apply w-full py-3 text-white rounded-lg font-semibold flex items-center justify-center;
+}
+
+.auth-divider {
+  @apply mt-10 pt-8 border-t border-gray-200 text-center;
+}
+
+/* Auth toggle button */
+.auth-toggle-button {
+  @apply px-6 py-2 rounded-lg font-medium transition-all duration-200;
+}
+
+.auth-toggle-button-signup {
+  @apply bg-white text-purple-600 border border-purple-600 hover:bg-purple-50;
+}
+
+.auth-toggle-button-signin {
+  @apply bg-white text-blue-600 border border-blue-600 hover:bg-blue-50;
+}
+
+/* Fix for leaflet map */
+.leaflet-container {
+  height: 100% !important;
+  width: 100% !important;
+  z-index: 10 !important;
+}
+
+.leaflet-control-container {
+  z-index: 1000 !important;
+}
+
+.leaflet-pane {
+  z-index: 400;
+}
+
+.leaflet-tile-pane {
+  z-index: 200;
+}
+
+.leaflet-overlay-pane {
+  z-index: 400;
+}
+
+.leaflet-shadow-pane {
+  z-index: 500;
+}
+
+.leaflet-marker-pane {
+  z-index: 600;
+}
+
+.leaflet-tooltip-pane {
+  z-index: 650;
+}
+
+.leaflet-popup-pane {
+  z-index: 700;
+}
+
+.map-container {
+  height: 100%;
+  width: 100%;
+  position: relative;
+  z-index: 10;
+  overflow: hidden;
+}
+
+/* ===== Map + List two-column layout (used on search pages) ===== */
+.map-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) 420px; /* map | list */
+  gap: 1rem;
+  align-items: start;
+}
+
+.map-column {
+  position: relative;
+  width: 100%;
+}
+
+.list-column {
+  position: relative;
+  width: 100%;
+  max-height: calc(100vh - 180px); /* keep list scrollable and not overflow the page */
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+/* Ensure the map takes a fixed visual height and does not allow cards to overflow into it */
+.map-column .map-container {
+  height: 600px; /* adjust as needed for your layout */
+  min-height: 360px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* Make sure property cards stay inside the list column and hover transform doesn't push them over the map */
+.list-column .professional-card {
+  position: relative;
+  z-index: 30; /* keep them above background but inside list column */
+  margin-bottom: 1rem;
+}
+
+/* Prevent hover transform from overflowing the list column */
+.list-column .card-hover {
+  transform-origin: center top;
+}
+
+/* If for some reason a card is rendered inside the map overlay, lower its z-index so it won't sit above the map controls */
+.map-column .professional-card {
+  z-index: 5;
+}
+
+/* Small responsiveness tweak */
+@media (max-width: 1024px) {
+  .map-layout {
+    grid-template-columns: 1fr; /* stack on small screens */
+  }
+  .map-column .map-container {
+    height: 420px;
+  }
+  .list-column {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+/* Fix for scrolling banner and navbar */
+.scrolling-banner-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  height: auto;
+}
+
+/* Fix for navbar positioning */
+header.fixed {
+  top: 44px !important; /* Height of the scrolling banner */
+}
