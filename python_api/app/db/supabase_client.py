@@ -27,24 +27,92 @@ class SupabaseDBClient:
                 query = self.supabase_client.table(table).select(columns)
 
             if filters:
-                for key, value in filters.items():
-                    if isinstance(value, list):
-                        query = query.filter(key, 'in', value)
-                    elif isinstance(value, dict):
-                        # Support operators like {"gt": 100}, {"gte": 100}, {"lt": 100}, {"lte": 100}
-                        for op, op_value in value.items():
-                            if op == "gt":
-                                query = query.filter(key, 'gt', op_value)
-                            elif op == "gte":
-                                query = query.filter(key, 'gte', op_value)
-                            elif op == "lt":
-                                query = query.filter(key, 'lt', op_value)
-                            elif op == "lte":
-                                query = query.filter(key, 'lte', op_value)
-                            elif op == "in":
-                                query = query.filter(key, 'in', op_value)
-                    else:
-                        query = query.filter(key, 'eq', value)
+                # Check if this is an OR query
+                if isinstance(filters, dict) and "or" in filters:
+                    # Handle OR queries: {"or": [{"agent_id": "xxx"}, {"assigned_agent_id": "xxx"}]}
+                    or_conditions = filters["or"]
+                    if isinstance(or_conditions, list) and len(or_conditions) > 0:
+                        # Supabase Python client OR syntax: query.or_("field1.eq.value1,field2.eq.value2")
+                        or_parts = []
+                        for condition in or_conditions:
+                            if isinstance(condition, dict):
+                                for k, v in condition.items():
+                                    # Escape special characters in values if needed
+                                    v_str = str(v)
+                                    or_parts.append(f"{k}.eq.{v_str}")
+                        if or_parts:
+                            or_filter_str = ",".join(or_parts)
+                            try:
+                                query = query.or_(or_filter_str)
+                                print(f"[DB] Applied OR filter: {or_filter_str}")
+                            except Exception as or_error:
+                                print(f"[DB] OR filter failed, will use fallback: {or_error}")
+                                # If OR fails, we'll need to handle it in the calling code
+                                raise ValueError(f"OR query not supported: {or_error}")
+                    # Process other filters if any (after OR)
+                    for key, value in filters.items():
+                        if key != "or":
+                            if isinstance(value, list):
+                                # Supabase Python client's filter with 'in' expects a tuple
+                                # But we need to handle it properly for UUIDs
+                                if value:
+                                    # Pass list directly - Supabase client should handle conversion
+                                    query = query.filter(key, 'in', value)
+                                else:
+                                    # Empty list - return no results by filtering with impossible value
+                                    query = query.filter(key, 'eq', '00000000-0000-0000-0000-000000000000')
+                            elif isinstance(value, dict):
+                                for op, op_value in value.items():
+                                    if op == "gt":
+                                        query = query.filter(key, 'gt', op_value)
+                                    elif op == "gte":
+                                        query = query.filter(key, 'gte', op_value)
+                                    elif op == "lt":
+                                        query = query.filter(key, 'lt', op_value)
+                                    elif op == "lte":
+                                        query = query.filter(key, 'lte', op_value)
+                                    elif op == "in":
+                                        # Handle 'in' operator in nested dict
+                                        if isinstance(op_value, list):
+                                            if op_value:
+                                                query = query.filter(key, 'in', op_value)
+                                            else:
+                                                query = query.filter(key, 'eq', '00000000-0000-0000-0000-000000000000')
+                                        else:
+                                            query = query.filter(key, 'in', op_value)
+                            else:
+                                query = query.filter(key, 'eq', value)
+                else:
+                    # Normal AND filters
+                    for key, value in filters.items():
+                        if isinstance(value, list):
+                            # Supabase Python client's filter with 'in' expects a list
+                            if value:
+                                query = query.filter(key, 'in', value)
+                            else:
+                                # Empty list - return no results
+                                query = query.filter(key, 'eq', '00000000-0000-0000-0000-000000000000')
+                        elif isinstance(value, dict):
+                            # Support operators like {"gt": 100}, {"gte": 100}, {"lt": 100}, {"lte": 100}
+                            for op, op_value in value.items():
+                                if op == "gt":
+                                    query = query.filter(key, 'gt', op_value)
+                                elif op == "gte":
+                                    query = query.filter(key, 'gte', op_value)
+                                elif op == "lt":
+                                    query = query.filter(key, 'lt', op_value)
+                                elif op == "lte":
+                                    query = query.filter(key, 'lte', op_value)
+                                elif op == "in":
+                                    if isinstance(op_value, list):
+                                        if op_value:
+                                            query = query.filter(key, 'in', op_value)
+                                        else:
+                                            query = query.filter(key, 'eq', '00000000-0000-0000-0000-000000000000')
+                                    else:
+                                        query = query.filter(key, 'in', op_value)
+                        else:
+                            query = query.filter(key, 'eq', value)
             
             # Add ordering
             if order_by and select != "count":

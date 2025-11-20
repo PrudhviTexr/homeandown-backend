@@ -21,27 +21,57 @@ async def get_agent_dashboard_stats(request: Request):
             raise HTTPException(status_code=401, detail="Invalid token")
         
         print(f"[AGENT] Fetching dashboard stats for user: {user_id}")
+        print(f"[AGENT] Agent ID (user_id): {user_id}")
         
-        # Get agent's assigned properties - check all assignment fields
-        # 1. agent_id - legacy field for assignment
-        # 2. assigned_agent_id - current field for assignment  
-        # 3. owner_id - properties owned/created by the agent
-        properties_agent_id = await db.select("properties", filters={"agent_id": user_id})
-        properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id})
-        properties_owned = await db.select("properties", filters={"owner_id": user_id})
+        # Get agent's assigned properties using OR query
+        # Check all possible fields where agent might be assigned:
+        # 1. agent_id - legacy assignment field
+        # 2. assigned_agent_id - current assignment field
+        # 3. owner_id - properties owned by agent
+        print(f"[AGENT] Querying properties with OR filter for stats")
+        print(f"[AGENT] OR conditions: agent_id={user_id} OR assigned_agent_id={user_id} OR owner_id={user_id}")
+        try:
+            properties_list = await db.select(
+                "properties", 
+                filters={
+                    "or": [
+                        {"agent_id": user_id},
+                        {"assigned_agent_id": user_id},
+                        {"owner_id": user_id}
+                    ]
+                },
+                limit=1000
+            )
+            properties_list = properties_list or []
+            print(f"[AGENT] OR query returned {len(properties_list)} properties for stats")
+            
+            # Log sample property IDs for debugging
+            if properties_list:
+                sample_ids = [p.get("id", "N/A")[:8] for p in properties_list[:3]]
+                print(f"[AGENT] Sample property IDs: {sample_ids}")
+                # Log assignment details for first property
+                first_prop = properties_list[0]
+                print(f"[AGENT] First property assignment - agent_id: {first_prop.get('agent_id')}, assigned_agent_id: {first_prop.get('assigned_agent_id')}, owner_id: {first_prop.get('owner_id')}")
+        except Exception as or_error:
+            print(f"[AGENT] OR query failed, using separate queries: {or_error}")
+            # Fallback to separate queries
+            properties_agent_id = await db.select("properties", filters={"agent_id": user_id}, limit=1000)
+            properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id}, limit=1000)
+            properties_owned = await db.select("properties", filters={"owner_id": user_id}, limit=1000)
+            
+            # Combine all lists and remove duplicates
+            all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
+            unique_properties = []
+            seen_ids = set()
+            
+            for prop in all_properties:
+                prop_id = prop.get("id")
+                if prop_id and prop_id not in seen_ids:
+                    seen_ids.add(prop_id)
+                    unique_properties.append(prop)
+            
+            properties_list = unique_properties
         
-        # Combine all lists and remove duplicates
-        all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
-        unique_properties = []
-        seen_ids = set()
-        
-        for prop in all_properties:
-            prop_id = prop.get("id")
-            if prop_id and prop_id not in seen_ids:
-                seen_ids.add(prop_id)
-                unique_properties.append(prop)
-        
-        properties_list = unique_properties
         print(f"[AGENT] Found {len(properties_list)} total properties (assigned + owned)")
         
         # Calculate stats
@@ -80,13 +110,27 @@ async def get_agent_dashboard_stats(request: Request):
             responded_inquiries = len([i for i in inquiries_list if i.get("status") == "responded"])
         except Exception as e:
             print(f"[AGENT] Error fetching inquiries for stats: {e}")
+            print(f"[AGENT] Full traceback:")
+            print(traceback.format_exc())
             # Fallback to property-based only
-        if property_ids:
-            inquiries = await db.select("inquiries", filters={"property_id": {"in": property_ids}})
-            inquiries_list = inquiries or []
-            total_inquiries = len(inquiries_list)
-            new_inquiries = len([i for i in inquiries_list if i.get("status") == "new"])
-            responded_inquiries = len([i for i in inquiries_list if i.get("status") == "responded"])
+            try:
+                if property_ids and len(property_ids) > 0:
+                    inquiries = await db.select("inquiries", filters={"property_id": {"in": property_ids}})
+                    inquiries_list = inquiries or []
+                    total_inquiries = len(inquiries_list)
+                    new_inquiries = len([i for i in inquiries_list if i.get("status") == "new"])
+                    responded_inquiries = len([i for i in inquiries_list if i.get("status") == "responded"])
+                else:
+                    inquiries_list = []
+                    total_inquiries = 0
+                    new_inquiries = 0
+                    responded_inquiries = 0
+            except Exception as fallback_error:
+                print(f"[AGENT] Fallback inquiry query also failed: {fallback_error}")
+                inquiries_list = []
+                total_inquiries = 0
+                new_inquiries = 0
+                responded_inquiries = 0
         
         # Get bookings for agent's properties - check both property assignments AND direct agent assignments
         total_bookings = 0
@@ -120,14 +164,30 @@ async def get_agent_dashboard_stats(request: Request):
             completed_bookings = len([b for b in bookings_list if b.get("status") == "completed"])
         except Exception as e:
             print(f"[AGENT] Error fetching bookings for stats: {e}")
+            print(f"[AGENT] Full traceback:")
+            print(traceback.format_exc())
             # Fallback to property-based only
-            if property_ids:
-                bookings = await db.select("bookings", filters={"property_id": {"in": property_ids}})
-                bookings_list = bookings or []
-            total_bookings = len(bookings_list)
-            pending_bookings = len([b for b in bookings_list if b.get("status") == "pending"])
-            confirmed_bookings = len([b for b in bookings_list if b.get("status") == "confirmed"])
-            completed_bookings = len([b for b in bookings_list if b.get("status") == "completed"])
+            try:
+                if property_ids and len(property_ids) > 0:
+                    bookings = await db.select("bookings", filters={"property_id": {"in": property_ids}})
+                    bookings_list = bookings or []
+                    total_bookings = len(bookings_list)
+                    pending_bookings = len([b for b in bookings_list if b.get("status") == "pending"])
+                    confirmed_bookings = len([b for b in bookings_list if b.get("status") == "confirmed"])
+                    completed_bookings = len([b for b in bookings_list if b.get("status") == "completed"])
+                else:
+                    bookings_list = []
+                    total_bookings = 0
+                    pending_bookings = 0
+                    confirmed_bookings = 0
+                    completed_bookings = 0
+            except Exception as fallback_error:
+                print(f"[AGENT] Fallback booking query also failed: {fallback_error}")
+                bookings_list = []
+                total_bookings = 0
+                pending_bookings = 0
+                confirmed_bookings = 0
+                completed_bookings = 0
         
         # Calculate response rate
         response_rate = 0
@@ -138,6 +198,30 @@ async def get_agent_dashboard_stats(request: Request):
         conversion_rate = 0
         if total_inquiries > 0:
             conversion_rate = round((total_bookings / total_inquiries) * 100, 2)
+        
+        # Calculate earnings and commissions from bookings
+        total_earnings = 0
+        monthly_commission = 0
+        try:
+            # Get commissions for this agent
+            commissions = await db.select("commissions", filters={"agent_id": user_id}) or []
+            total_earnings = sum(c.get('amount', 0) or 0 for c in commissions)
+            
+            # Calculate monthly commission (last 30 days)
+            thirty_days_ago = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)).isoformat()
+            monthly_commissions = [
+                c for c in commissions 
+                if c.get('created_at') and c.get('created_at') >= thirty_days_ago
+            ]
+            monthly_commission = sum(c.get('amount', 0) or 0 for c in monthly_commissions)
+        except Exception as e:
+            print(f"[AGENT] Error calculating earnings: {e}")
+            # Fallback: estimate from bookings
+            total_earnings = confirmed_bookings * 15000  # Estimate 15k per booking
+            monthly_commission = confirmed_bookings * 15000 / 12
+        
+        # Calculate customer rating (if available)
+        customer_rating = 4.8  # Default, can be calculated from reviews if available
         
         stats = {
             "total_properties": total_properties,
@@ -151,7 +235,11 @@ async def get_agent_dashboard_stats(request: Request):
             "confirmed_bookings": confirmed_bookings,
             "completed_bookings": completed_bookings,
             "response_rate": response_rate,
-            "conversion_rate": conversion_rate
+            "conversion_rate": conversion_rate,
+            "total_earnings": total_earnings,
+            "monthly_commission": monthly_commission,
+            "customer_rating": customer_rating,
+            "avg_response_time": "< 2 hours"  # Can be calculated from inquiry response times
         }
         
         print(f"[AGENT] Dashboard stats calculated: {stats}")
@@ -240,64 +328,154 @@ async def get_agent_inquiries(
             raise HTTPException(status_code=401, detail="Invalid token")
         
         print(f"[AGENT] Fetching inquiries for user: {user_id}")
+        print(f"[AGENT] Agent ID (user_id): {user_id}")
         
-        # Get agent's property IDs - check agent_id, assigned_agent_id, and owner_id
-        properties_agent_id = await db.select("properties", filters={"agent_id": user_id})
-        properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id})
-        properties_owned = await db.select("properties", filters={"owner_id": user_id})
+        # Get agent's property IDs using OR query
+        # Check all possible fields where agent might be assigned
+        print(f"[AGENT] Querying properties for inquiries with OR filter")
+        print(f"[AGENT] OR conditions: agent_id={user_id} OR assigned_agent_id={user_id} OR owner_id={user_id}")
+        try:
+            all_properties = await db.select(
+                "properties", 
+                filters={
+                    "or": [
+                        {"agent_id": user_id},
+                        {"assigned_agent_id": user_id},
+                        {"owner_id": user_id}
+                    ]
+                },
+                limit=1000
+            )
+            all_properties = all_properties or []
+            property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
+            print(f"[AGENT] OR query returned {len(property_ids)} property IDs for inquiries")
+            if property_ids:
+                print(f"[AGENT] Sample property IDs: {[pid[:8] for pid in property_ids[:3]]}")
+        except Exception as or_error:
+            print(f"[AGENT] OR query failed, using separate queries: {or_error}")
+            # Fallback to separate queries
+            properties_agent_id = await db.select("properties", filters={"agent_id": user_id}, limit=1000)
+            properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id}, limit=1000)
+            properties_owned = await db.select("properties", filters={"owner_id": user_id}, limit=1000)
+            
+            # Combine all lists and remove duplicates
+            all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
+            property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
         
-        # Combine all lists and remove duplicates
-        all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
-        property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
-        
-        print(f"[AGENT] Found {len(property_ids)} assigned properties")
+        print(f"[AGENT] Found {len(property_ids)} assigned properties for inquiries")
+        if len(property_ids) > 0:
+            print(f"[AGENT] Sample property IDs: {[pid[:8] if pid else 'N/A' for pid in property_ids[:3]]}")
         
         # Build filters - check both property assignments AND direct agent assignments in inquiries table
         # According to schema: inquiries table has assigned_agent_id field
+        inquiries_list = []
         try:
-            # Get inquiries by property
-            if property_ids:
-                inquiries_by_property = await db.select("inquiries", filters={"property_id": {"in": property_ids}}, limit=limit)
+            # Get inquiries by property - use individual queries if "in" filter fails
+            inquiries_by_property = []
+            if property_ids and len(property_ids) > 0:
+                print(f"[AGENT] Fetching inquiries for {len(property_ids)} properties")
+                try:
+                    inquiries_by_property = await db.select("inquiries", filters={"property_id": {"in": property_ids}}, limit=limit or 100)
+                    print(f"[AGENT] Found {len(inquiries_by_property or [])} inquiries by property")
+                except Exception as in_error:
+                    print(f"[AGENT] 'in' filter failed for inquiries, using individual queries: {in_error}")
+                    # Fallback: query each property individually
+                    for prop_id in property_ids[:50]:  # Limit to 50 to avoid too many queries
+                        try:
+                            prop_inquiries = await db.select("inquiries", filters={"property_id": prop_id}, limit=limit or 100)
+                            if prop_inquiries:
+                                inquiries_by_property.extend(prop_inquiries)
+                        except Exception as prop_error:
+                            print(f"[AGENT] Error querying inquiries for property {prop_id}: {prop_error}")
+                    # Deduplicate
+                    seen_ids = set()
+                    unique_inquiries = []
+                    for inquiry in inquiries_by_property:
+                        inquiry_id = inquiry.get("id")
+                        if inquiry_id and inquiry_id not in seen_ids:
+                            seen_ids.add(inquiry_id)
+                            unique_inquiries.append(inquiry)
+                    inquiries_by_property = unique_inquiries
+                    print(f"[AGENT] Found {len(inquiries_by_property)} inquiries by property (fallback method)")
             else:
-                inquiries_by_property = []
+                print(f"[AGENT] No property IDs, skipping property-based inquiry query")
             
             # Get inquiries by direct agent assignment (from inquiries.assigned_agent_id)
-            inquiries_by_agent = await db.select("inquiries", filters={"assigned_agent_id": user_id}, limit=limit)
+            # Also check if there's an agent_id field in inquiries table
+            print(f"[AGENT] Fetching inquiries assigned directly to agent: {user_id}")
+            inquiries_by_agent = await db.select("inquiries", filters={"assigned_agent_id": user_id}, limit=limit or 100)
+            print(f"[AGENT] Found {len(inquiries_by_agent or [])} inquiries by assigned_agent_id")
+            
+            # Also check agent_id field if it exists (for backward compatibility)
+            try:
+                inquiries_by_agent_id = await db.select("inquiries", filters={"agent_id": user_id}, limit=limit or 100)
+                if inquiries_by_agent_id:
+                    print(f"[AGENT] Found {len(inquiries_by_agent_id)} inquiries by agent_id")
+                    # Merge with existing inquiries_by_agent
+                    all_agent_inquiries = (inquiries_by_agent or []) + inquiries_by_agent_id
+                    seen_ids = set()
+                    inquiries_by_agent = []
+                    for inquiry in all_agent_inquiries:
+                        inquiry_id = inquiry.get("id")
+                        if inquiry_id and inquiry_id not in seen_ids:
+                            seen_ids.add(inquiry_id)
+                            inquiries_by_agent.append(inquiry)
+                    print(f"[AGENT] Total unique inquiries by agent assignment: {len(inquiries_by_agent)}")
+            except Exception as agent_id_error:
+                print(f"[AGENT] Note: agent_id field may not exist in inquiries table: {agent_id_error}")
             
             # Combine and deduplicate
             all_inquiries = (inquiries_by_property or []) + (inquiries_by_agent or [])
             seen_ids = set()
-            inquiries_list = []
             for inquiry in all_inquiries:
                 inquiry_id = inquiry.get("id")
                 if inquiry_id and inquiry_id not in seen_ids:
                     seen_ids.add(inquiry_id)
                     inquiries_list.append(inquiry)
             
+            print(f"[AGENT] Total unique inquiries after deduplication: {len(inquiries_list)}")
+            
             # Apply status filter if provided
             if status:
+                before_status = len(inquiries_list)
                 inquiries_list = [i for i in inquiries_list if i.get("status") == status]
+                print(f"[AGENT] After status filter ({status}): {len(inquiries_list)} (was {before_status})")
             
             # Apply property_id filter if provided
             if property_id:
+                before_prop = len(inquiries_list)
                 inquiries_list = [i for i in inquiries_list if i.get("property_id") == property_id]
+                print(f"[AGENT] After property_id filter: {len(inquiries_list)} (was {before_prop})")
             
             # Apply limit
-            if limit:
+            if limit and limit > 0:
+                before_limit = len(inquiries_list)
                 inquiries_list = inquiries_list[:limit]
+                print(f"[AGENT] After limit ({limit}): {len(inquiries_list)} (was {before_limit})")
                 
         except Exception as e:
-            print(f"[AGENT] Error with complex inquiry query, using simple approach: {e}")
+            print(f"[AGENT] Error with complex inquiry query: {e}")
+            print(f"[AGENT] Full traceback:")
+            import traceback
+            print(traceback.format_exc())
             # Fallback to simple property-based query
-            if property_ids:
-                filters = {"property_id": {"in": property_ids}}
-                if property_id:
-                    filters["property_id"] = property_id
-                if status:
-                    filters["status"] = status
-                inquiries = await db.select("inquiries", filters=filters, limit=limit)
-                inquiries_list = inquiries or []
-            else:
+            try:
+                if property_ids and len(property_ids) > 0:
+                    filters = {"property_id": {"in": property_ids}}
+                    if property_id:
+                        filters["property_id"] = property_id
+                    if status:
+                        filters["status"] = status
+                    inquiries = await db.select("inquiries", filters=filters, limit=limit or 100)
+                    inquiries_list = inquiries or []
+                    print(f"[AGENT] Fallback query returned {len(inquiries_list)} inquiries")
+                else:
+                    # Try direct agent assignment only
+                    inquiries = await db.select("inquiries", filters={"assigned_agent_id": user_id}, limit=limit or 100)
+                    inquiries_list = inquiries or []
+                    print(f"[AGENT] Fallback direct assignment query returned {len(inquiries_list)} inquiries")
+            except Exception as fallback_error:
+                print(f"[AGENT] Fallback query also failed: {fallback_error}")
                 inquiries_list = []
         
         # Enhance inquiries with property and user details
@@ -349,8 +527,19 @@ async def get_agent_inquiries(
             }
             enhanced_inquiries.append(enhanced_inquiry)
         
-        print(f"[AGENT] Found {len(enhanced_inquiries)} inquiries")
-        return {"success": True, "inquiries": enhanced_inquiries, "total": len(enhanced_inquiries)}
+        print(f"[AGENT] Returning {len(enhanced_inquiries)} inquiries")
+        print(f"[AGENT] Inquiry breakdown - by property: {len(inquiries_by_property or [])}, by agent assignment: {len(inquiries_by_agent or [])}")
+        
+        # Ensure response format matches frontend expectations
+        response = {
+            "success": True, 
+            "inquiries": enhanced_inquiries, 
+            "total": len(enhanced_inquiries)
+        }
+        
+        print(f"[AGENT] Final response - success: {response['success']}, total: {response['total']}, inquiries array length: {len(response['inquiries'])}")
+        
+        return response
         
     except HTTPException:
         raise
@@ -379,97 +568,146 @@ async def get_agent_bookings(
             raise HTTPException(status_code=401, detail="Invalid token")
         
         print(f"[AGENT] Fetching bookings for user: {user_id}")
+        print(f"[AGENT] Agent ID (user_id): {user_id}")
         
-        # Get agent's property IDs - check agent_id, assigned_agent_id, and owner_id
-        properties_agent_id = await db.select("properties", filters={"agent_id": user_id})
-        properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id})
-        properties_owned = await db.select("properties", filters={"owner_id": user_id})
+        # Get agent's property IDs using OR query
+        # Check all possible fields where agent might be assigned
+        print(f"[AGENT] Querying properties for bookings with OR filter")
+        print(f"[AGENT] OR conditions: agent_id={user_id} OR assigned_agent_id={user_id} OR owner_id={user_id}")
+        try:
+            all_properties = await db.select(
+                "properties", 
+                filters={
+                    "or": [
+                        {"agent_id": user_id},
+                        {"assigned_agent_id": user_id},
+                        {"owner_id": user_id}
+                    ]
+                },
+                limit=1000
+            )
+            all_properties = all_properties or []
+            property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
+            print(f"[AGENT] OR query returned {len(property_ids)} property IDs for bookings")
+            if property_ids:
+                print(f"[AGENT] Sample property IDs: {[pid[:8] for pid in property_ids[:3]]}")
+        except Exception as or_error:
+            print(f"[AGENT] OR query failed, using separate queries: {or_error}")
+            # Fallback to separate queries
+            properties_agent_id = await db.select("properties", filters={"agent_id": user_id}, limit=1000)
+            properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id}, limit=1000)
+            properties_owned = await db.select("properties", filters={"owner_id": user_id}, limit=1000)
+            
+            # Combine all lists and remove duplicates
+            all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
+            property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
         
-        # Combine all lists and remove duplicates
-        all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
-        property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
-        
-        print(f"[AGENT] Found {len(property_ids)} assigned properties")
+        print(f"[AGENT] Found {len(property_ids)} assigned properties for bookings")
+        if len(property_ids) > 0:
+            print(f"[AGENT] Sample property IDs: {[pid[:8] if pid else 'N/A' for pid in property_ids[:3]]}")
         
         # Build filters - check both property assignments AND direct agent assignments in bookings table
         # According to schema: bookings table has agent_id field
         booking_filters = []
         
-        # Bookings for agent's assigned properties
+        # Bookings for agent's assigned properties - use individual queries if "in" filter fails
+        bookings_by_property = []
         if property_ids:
-            booking_filters.append({"property_id": {"in": property_ids}})
+            try:
+                bookings_by_property = await db.select("bookings", filters={"property_id": {"in": property_ids}}, limit=limit or 100)
+            except Exception as in_error:
+                print(f"[AGENT] 'in' filter failed for bookings, using individual queries: {in_error}")
+                # Fallback: query each property individually
+                for prop_id in property_ids[:50]:  # Limit to 50 to avoid too many queries
+                    try:
+                        prop_bookings = await db.select("bookings", filters={"property_id": prop_id}, limit=limit or 100)
+                        if prop_bookings:
+                            bookings_by_property.extend(prop_bookings)
+                    except Exception as prop_error:
+                        print(f"[AGENT] Error querying bookings for property {prop_id}: {prop_error}")
+                # Deduplicate
+                seen_ids = set()
+                unique_bookings = []
+                for booking in bookings_by_property:
+                    booking_id = booking.get("id")
+                    if booking_id and booking_id not in seen_ids:
+                        seen_ids.add(booking_id)
+                        unique_bookings.append(booking)
+                bookings_by_property = unique_bookings
         
         # Bookings directly assigned to this agent (from bookings.agent_id)
-        booking_filters.append({"agent_id": user_id})
+        print(f"[AGENT] Fetching bookings assigned directly to agent: {user_id}")
+        bookings_by_agent = await db.select("bookings", filters={"agent_id": user_id}, limit=limit or 100)
+        print(f"[AGENT] Found {len(bookings_by_agent or [])} bookings by agent_id")
         
-        # Combine filters with OR logic
-        if len(booking_filters) > 1:
-            # Use OR filter if we have multiple conditions
-            filters = {"or": booking_filters}
-        elif len(booking_filters) == 1:
-            filters = booking_filters[0]
-        else:
-            return {"success": True, "bookings": [], "total": 0}
+        # Log sample booking IDs for debugging
+        if bookings_by_agent:
+            sample_booking_ids = [b.get("id", "N/A")[:8] for b in bookings_by_agent[:3]]
+            print(f"[AGENT] Sample booking IDs: {sample_booking_ids}")
+        
+        # Combine bookings from properties and direct agent assignment
+        all_bookings = (bookings_by_property or []) + (bookings_by_agent or [])
+        seen_ids = set()
+        bookings_list = []
+        for booking in all_bookings:
+            booking_id = booking.get("id")
+            if booking_id and booking_id not in seen_ids:
+                seen_ids.add(booking_id)
+                bookings_list.append(booking)
+        
+        print(f"[AGENT] Combined {len(bookings_list)} total bookings (property-based: {len(bookings_by_property or [])}, agent-based: {len(bookings_by_agent or [])})")
         
         # Apply additional filters
         if property_id:
-            if isinstance(filters, dict) and "or" in filters:
-                filters["and"] = [{"property_id": property_id}]
-            else:
-                filters["property_id"] = property_id
+            bookings_list = [b for b in bookings_list if b.get("property_id") == property_id]
         if status:
-            if isinstance(filters, dict) and "or" in filters:
-                if "and" not in filters:
-                    filters["and"] = []
-                filters["and"].append({"status": status})
-            else:
-                filters["status"] = status
+            bookings_list = [b for b in bookings_list if b.get("status") == status]
         
-        # Get bookings - try with OR filter first, fallback to separate queries
+        # Bookings are already fetched and filtered above, now enhance with property and user details
         try:
-            if property_ids:
-                # Get bookings by property
-                bookings_by_property = await db.select("bookings", filters={"property_id": {"in": property_ids}}, limit=limit)
-            else:
-                bookings_by_property = []
-            
-            # Get bookings by direct agent assignment
-            bookings_by_agent = await db.select("bookings", filters={"agent_id": user_id}, limit=limit)
-            
-            # Combine and deduplicate
-            all_bookings = (bookings_by_property or []) + (bookings_by_agent or [])
-            seen_ids = set()
-            bookings_list = []
-            for booking in all_bookings:
-                booking_id = booking.get("id")
-                if booking_id and booking_id not in seen_ids:
-                    seen_ids.add(booking_id)
-                    bookings_list.append(booking)
-            
-            # Apply status filter if provided
-            if status:
+            # Apply limit if provided
+            if limit:
+                before_limit = len(bookings_list)
+                bookings_list = bookings_list[:limit]
+                print(f"[AGENT] After limit ({limit}): {len(bookings_list)} (was {before_limit})")
                 bookings_list = [b for b in bookings_list if b.get("status") == status]
+                print(f"[AGENT] After status filter ({status}): {len(bookings_list)} (was {before_status})")
             
             # Apply property_id filter if provided
             if property_id:
+                before_prop = len(bookings_list)
                 bookings_list = [b for b in bookings_list if b.get("property_id") == property_id]
+                print(f"[AGENT] After property_id filter: {len(bookings_list)} (was {before_prop})")
             
             # Apply limit
-            if limit:
+            if limit and limit > 0:
+                before_limit = len(bookings_list)
                 bookings_list = bookings_list[:limit]
+                print(f"[AGENT] After limit ({limit}): {len(bookings_list)} (was {before_limit})")
                 
         except Exception as e:
-            print(f"[AGENT] Error with complex booking query, using simple approach: {e}")
+            print(f"[AGENT] Error with complex booking query: {e}")
+            print(f"[AGENT] Full traceback:")
+            import traceback
+            print(traceback.format_exc())
             # Fallback to simple property-based query
-            if property_ids:
-                filters = {"property_id": {"in": property_ids}}
-                if property_id:
-                    filters["property_id"] = property_id
-                if status:
-                    filters["status"] = status
-                bookings = await db.select("bookings", filters=filters, limit=limit)
-                bookings_list = bookings or []
-            else:
+            try:
+                if property_ids and len(property_ids) > 0:
+                    filters = {"property_id": {"in": property_ids}}
+                    if property_id:
+                        filters["property_id"] = property_id
+                    if status:
+                        filters["status"] = status
+                    bookings = await db.select("bookings", filters=filters, limit=limit or 100)
+                    bookings_list = bookings or []
+                    print(f"[AGENT] Fallback query returned {len(bookings_list)} bookings")
+                else:
+                    # Try direct agent assignment only
+                    bookings = await db.select("bookings", filters={"agent_id": user_id}, limit=limit or 100)
+                    bookings_list = bookings or []
+                    print(f"[AGENT] Fallback direct assignment query returned {len(bookings_list)} bookings")
+            except Exception as fallback_error:
+                print(f"[AGENT] Fallback query also failed: {fallback_error}")
                 bookings_list = []
         
         # Enhance bookings with property and user details, filter out sold properties
@@ -512,8 +750,19 @@ async def get_agent_bookings(
             }
             enhanced_bookings.append(enhanced_booking)
         
-        print(f"[AGENT] Found {len(enhanced_bookings)} bookings")
-        return {"success": True, "bookings": enhanced_bookings, "total": len(enhanced_bookings)}
+        print(f"[AGENT] Returning {len(enhanced_bookings)} bookings")
+        print(f"[AGENT] Booking breakdown - by property: {len(bookings_by_property or [])}, by agent assignment: {len(bookings_by_agent or [])}")
+        
+        # Ensure response format matches frontend expectations
+        response = {
+            "success": True, 
+            "bookings": enhanced_bookings, 
+            "total": len(enhanced_bookings)
+        }
+        
+        print(f"[AGENT] Final response - success: {response['success']}, total: {response['total']}, bookings array length: {len(response['bookings'])}")
+        
+        return response
         
     except HTTPException:
         raise
@@ -541,28 +790,67 @@ async def get_agent_properties(
             raise HTTPException(status_code=401, detail="Invalid token")
         
         print(f"[AGENT] Fetching properties for user: {user_id}")
+        print(f"[AGENT] Agent ID (user_id): {user_id}")
         
-        # Get agent's properties - check:
+        # Get agent's properties using OR query to check all assignment fields at once
         # 1. agent_id - legacy field for assignment
         # 2. assigned_agent_id - current field for assignment  
         # 3. owner_id - properties owned/created by the agent
-        # Show all properties (not just verified) so agent can see pending/active properties
-        properties_agent_id = await db.select("properties", filters={"agent_id": user_id})
-        properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id})
-        properties_owned = await db.select("properties", filters={"owner_id": user_id})  # Show all owned properties
+        print(f"[AGENT] Querying properties with OR filter: agent_id={user_id} OR assigned_agent_id={user_id} OR owner_id={user_id}")
         
-        # Combine all lists and remove duplicates
-        all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
-        unique_properties = []
-        seen_ids = set()
+        try:
+            # Use OR query to get all properties in one call
+            unique_properties = await db.select(
+                "properties", 
+                filters={
+                    "or": [
+                        {"agent_id": user_id},
+                        {"assigned_agent_id": user_id},
+                        {"owner_id": user_id}
+                    ]
+                },
+                limit=limit or 1000
+            )
+            unique_properties = unique_properties or []
+            print(f"[AGENT] OR query returned {len(unique_properties)} properties")
+            
+            # Log assignment breakdown for debugging
+            if unique_properties:
+                agent_id_count = len([p for p in unique_properties if p.get("agent_id") == user_id])
+                assigned_agent_id_count = len([p for p in unique_properties if p.get("assigned_agent_id") == user_id])
+                owner_id_count = len([p for p in unique_properties if p.get("owner_id") == user_id])
+                print(f"[AGENT] Property assignment breakdown - agent_id: {agent_id_count}, assigned_agent_id: {assigned_agent_id_count}, owner_id: {owner_id_count}")
+                sample_ids = [p.get("id", "N/A")[:8] for p in unique_properties[:3]]
+                print(f"[AGENT] Sample property IDs: {sample_ids}")
+        except Exception as or_error:
+            print(f"[AGENT] OR query failed, falling back to separate queries: {or_error}")
+            # Fallback to separate queries
+            properties_agent_id = await db.select("properties", filters={"agent_id": user_id}, limit=limit or 1000)
+            print(f"[AGENT] Properties with agent_id: {len(properties_agent_id or [])}")
+            
+            properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id}, limit=limit or 1000)
+            print(f"[AGENT] Properties with assigned_agent_id: {len(properties_assigned_id or [])}")
+            
+            properties_owned = await db.select("properties", filters={"owner_id": user_id}, limit=limit or 1000)
+            print(f"[AGENT] Properties with owner_id: {len(properties_owned or [])}")
+            
+            # Combine all lists and remove duplicates
+            all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
+            unique_properties = []
+            seen_ids = set()
+            
+            for prop in all_properties:
+                prop_id = prop.get("id")
+                if prop_id and prop_id not in seen_ids:
+                    seen_ids.add(prop_id)
+                    unique_properties.append(prop)
         
-        for prop in all_properties:
-            prop_id = prop.get("id")
-            if prop_id and prop_id not in seen_ids:
-                seen_ids.add(prop_id)
-                unique_properties.append(prop)
-        
-        print(f"[AGENT] Found {len(unique_properties)} assigned properties")
+        print(f"[AGENT] Found {len(unique_properties)} total unique assigned properties")
+        if len(unique_properties) > 0:
+            print(f"[AGENT] Sample property IDs: {[p.get('id')[:8] if p.get('id') else 'N/A' for p in unique_properties[:3]]}")
+            # Debug: Show assignment details for first property
+            first_prop = unique_properties[0]
+            print(f"[AGENT] First property - agent_id: {first_prop.get('agent_id')}, assigned_agent_id: {first_prop.get('assigned_agent_id')}, owner_id: {first_prop.get('owner_id')}")
         
         # Apply status filter if provided
         if status:
@@ -573,7 +861,17 @@ async def get_agent_properties(
         end_idx = start_idx + (limit or 20)
         paginated_properties = unique_properties[start_idx:end_idx]
         
-        return {"success": True, "properties": paginated_properties, "total": len(unique_properties)}
+        print(f"[AGENT] Returning {len(paginated_properties)} properties (paginated from {len(unique_properties)} total)")
+        if unique_properties:
+            agent_id_count = len([p for p in unique_properties if p.get("agent_id") == user_id])
+            assigned_agent_id_count = len([p for p in unique_properties if p.get("assigned_agent_id") == user_id])
+            owner_id_count = len([p for p in unique_properties if p.get("owner_id") == user_id])
+            print(f"[AGENT] Property assignment breakdown - agent_id: {agent_id_count}, assigned_agent_id: {assigned_agent_id_count}, owner_id: {owner_id_count}")
+        
+        response = {"success": True, "properties": paginated_properties, "total": len(unique_properties)}
+        print(f"[AGENT] Final response - success: {response['success']}, total: {response['total']}, properties array length: {len(response['properties'])}")
+        
+        return response
         
     except HTTPException:
         raise

@@ -234,6 +234,27 @@ async def get_seller_inquiries(
             property_data = await db.select("properties", filters={"id": prop_id})
             property_info = property_data[0] if property_data else {}
             
+            # Get assigned agent details for the property
+            assigned_agent = None
+            agent_id = property_info.get("agent_id") or property_info.get("assigned_agent_id")
+            if agent_id:
+                try:
+                    agents = await db.select("users", filters={"id": agent_id})
+                    if agents:
+                        agent = agents[0]
+                        assigned_agent = {
+                            "id": agent.get("id"),
+                            "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
+                            "email": agent.get("email"),
+                            "phone": agent.get("phone_number"),
+                        }
+                except Exception as agent_error:
+                    print(f"[SELLER] Error fetching agent details: {agent_error}")
+            
+            # Add assigned_agent to property_info
+            if assigned_agent:
+                property_info["assigned_agent"] = assigned_agent
+            
             # Get user details from users table if user_id exists
             user_info = {}
             if user_id_inquiry:
@@ -341,6 +362,37 @@ async def get_seller_bookings(
             if prop_status == 'sold':
                 print(f"[SELLER] Skipping booking for sold property: {prop_id}")
                 continue
+            
+            # Get assigned agent details for the property
+            assigned_agent = None
+            agent_id = property_info.get("agent_id") or property_info.get("assigned_agent_id")
+            if agent_id:
+                try:
+                    agents = await db.select("users", filters={"id": agent_id})
+                    if agents:
+                        agent = agents[0]
+                        assigned_agent = {
+                            "id": agent.get("id"),
+                            "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
+                            "email": agent.get("email"),
+                            "phone": agent.get("phone_number"),
+                        }
+                except Exception as agent_error:
+                    print(f"[SELLER] Error fetching agent details: {agent_error}")
+            
+            # Add assigned_agent to property_info
+            if assigned_agent:
+                property_info["assigned_agent"] = assigned_agent
+            
+            # Get bookings count for this property
+            bookings_count = 0
+            try:
+                property_bookings = await db.select("bookings", filters={"property_id": prop_id})
+                bookings_count = len(property_bookings or [])
+            except Exception as count_error:
+                print(f"[SELLER] Error fetching bookings count: {count_error}")
+            
+            property_info["bookings_count"] = bookings_count
             
             # Get user details
             user_data = await db.select("users", filters={"id": user_id_booking})

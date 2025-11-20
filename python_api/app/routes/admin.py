@@ -795,7 +795,17 @@ async def assign_agent(property_id: str, payload: dict, _=Depends(require_api_ke
         }
         result = await db.update("properties", update_data, {"id": property_id})
         
-        print(f"[ADMIN] Assigned agent {agent_id} to property {property_id}")
+        # Verify the update was successful
+        if result:
+            print(f"[ADMIN] ✅ Successfully assigned agent {agent_id} to property {property_id}")
+            print(f"[ADMIN] Update result: {result}")
+            # Double-check by querying the property
+            verify_property = await db.select("properties", filters={"id": property_id})
+            if verify_property:
+                print(f"[ADMIN] Verification - Property agent_id: {verify_property[0].get('agent_id')}")
+                print(f"[ADMIN] Verification - Property assigned_agent_id: {verify_property[0].get('assigned_agent_id')}")
+        else:
+            print(f"[ADMIN] ⚠️ Warning: Update returned empty result for property {property_id}")
 
         # Send email notifications to BOTH agent and property owner/seller
         try:

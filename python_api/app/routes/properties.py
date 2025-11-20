@@ -619,11 +619,62 @@ async def create_property(property_data: dict, request: Request = None):
                 elif value is None or value == '' or value == 'NA':
                     property_data[field] = False
         
-        # Handle coordinates - set to None if not provided or invalid
-        if 'latitude' in property_data and (property_data['latitude'] is None or property_data['latitude'] == '' or property_data['latitude'] == 'NA'):
-            property_data['latitude'] = None
-        if 'longitude' in property_data and (property_data['longitude'] is None or property_data['longitude'] == '' or property_data['longitude'] == 'NA'):
-            property_data['longitude'] = None
+        # Handle coordinates - convert to float if provided, set to None if invalid
+        if 'latitude' in property_data:
+            lat_value = property_data['latitude']
+            if lat_value is None or lat_value == '' or lat_value == 'NA' or lat_value == 'null' or lat_value == 'undefined':
+                property_data['latitude'] = None
+            else:
+                try:
+                    # Convert to float if it's a string
+                    if isinstance(lat_value, str):
+                        lat_value = float(lat_value)
+                    elif isinstance(lat_value, (int, float)):
+                        lat_value = float(lat_value)
+                    else:
+                        property_data['latitude'] = None
+                        print(f"[PROPERTIES] Invalid latitude type: {type(lat_value)}, value: {lat_value}")
+                        lat_value = None
+                    
+                    # Validate latitude range if conversion succeeded
+                    if lat_value is not None:
+                        if -90 <= lat_value <= 90:
+                            property_data['latitude'] = lat_value
+                            print(f"[PROPERTIES] Set latitude: {lat_value}")
+                        else:
+                            print(f"[PROPERTIES] Latitude out of range: {lat_value}, setting to None")
+                            property_data['latitude'] = None
+                except (ValueError, TypeError) as e:
+                    print(f"[PROPERTIES] Error converting latitude to float: {e}, value: {lat_value}")
+                    property_data['latitude'] = None
+        
+        if 'longitude' in property_data:
+            lng_value = property_data['longitude']
+            if lng_value is None or lng_value == '' or lng_value == 'NA' or lng_value == 'null' or lng_value == 'undefined':
+                property_data['longitude'] = None
+            else:
+                try:
+                    # Convert to float if it's a string
+                    if isinstance(lng_value, str):
+                        lng_value = float(lng_value)
+                    elif isinstance(lng_value, (int, float)):
+                        lng_value = float(lng_value)
+                    else:
+                        property_data['longitude'] = None
+                        print(f"[PROPERTIES] Invalid longitude type: {type(lng_value)}, value: {lng_value}")
+                        lng_value = None
+                    
+                    # Validate longitude range if conversion succeeded
+                    if lng_value is not None:
+                        if -180 <= lng_value <= 180:
+                            property_data['longitude'] = lng_value
+                            print(f"[PROPERTIES] Set longitude: {lng_value}")
+                        else:
+                            print(f"[PROPERTIES] Longitude out of range: {lng_value}, setting to None")
+                            property_data['longitude'] = None
+                except (ValueError, TypeError) as e:
+                    print(f"[PROPERTIES] Error converting longitude to float: {e}, value: {lng_value}")
+                    property_data['longitude'] = None
         
         # Auto-populate location fields from zipcode (suggested values, editable)
         if property_data.get('zip_code'):
@@ -1234,18 +1285,61 @@ async def update_property(property_id: str, update_data: dict):
         # Update timestamp
         update_data['updated_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
         
-        # Handle coordinates - ensure they're never null to prevent map crashes
-        if 'latitude' in update_data and (update_data['latitude'] is None or update_data['latitude'] == '' or update_data['latitude'] == 'NA'):
-            update_data['latitude'] = None
-        if 'longitude' in update_data and (update_data['longitude'] is None or update_data['longitude'] == '' or update_data['longitude'] == 'NA'):
-            update_data['longitude'] = None
+        # Handle coordinates - convert to float if provided, set to None if invalid
+        if 'latitude' in update_data:
+            lat_value = update_data['latitude']
+            if lat_value is None or lat_value == '' or lat_value == 'NA' or lat_value == 'null' or lat_value == 'undefined':
+                update_data['latitude'] = None
+            else:
+                try:
+                    # Convert to float if it's a string
+                    if isinstance(lat_value, str):
+                        lat_value = float(lat_value)
+                    elif isinstance(lat_value, (int, float)):
+                        lat_value = float(lat_value)
+                    else:
+                        update_data['latitude'] = None
+                        print(f"[PROPERTIES] Invalid latitude type in update: {type(lat_value)}, value: {lat_value}")
+                    # Validate latitude range
+                    if update_data['latitude'] is not None and -90 <= lat_value <= 90:
+                        update_data['latitude'] = lat_value
+                        print(f"[PROPERTIES] Updated latitude: {lat_value}")
+                    elif update_data['latitude'] is not None:
+                        print(f"[PROPERTIES] Latitude out of range in update: {lat_value}, setting to None")
+                        update_data['latitude'] = None
+                except (ValueError, TypeError) as e:
+                    print(f"[PROPERTIES] Error converting latitude to float in update: {e}, value: {lat_value}")
+                    update_data['latitude'] = None
         
-        # Set default coordinates if both are missing (to prevent map crashes)
-        if (update_data.get('latitude') is None and update_data.get('longitude') is None):
-            # Default coordinates for Hyderabad, India
-            update_data['latitude'] = 17.3850
-            update_data['longitude'] = 78.4867
-            print(f"[PROPERTIES] Set default coordinates for update: {update_data['latitude']}, {update_data['longitude']}")
+        if 'longitude' in update_data:
+            lng_value = update_data['longitude']
+            if lng_value is None or lng_value == '' or lng_value == 'NA' or lng_value == 'null' or lng_value == 'undefined':
+                update_data['longitude'] = None
+            else:
+                try:
+                    # Convert to float if it's a string
+                    if isinstance(lng_value, str):
+                        lng_value = float(lng_value)
+                    elif isinstance(lng_value, (int, float)):
+                        lng_value = float(lng_value)
+                    else:
+                        update_data['longitude'] = None
+                        print(f"[PROPERTIES] Invalid longitude type in update: {type(lng_value)}, value: {lng_value}")
+                    # Validate longitude range
+                    if update_data['longitude'] is not None and -180 <= lng_value <= 180:
+                        update_data['longitude'] = lng_value
+                        print(f"[PROPERTIES] Updated longitude: {lng_value}")
+                    elif update_data['longitude'] is not None:
+                        print(f"[PROPERTIES] Longitude out of range in update: {lng_value}, setting to None")
+                        update_data['longitude'] = None
+                except (ValueError, TypeError) as e:
+                    print(f"[PROPERTIES] Error converting longitude to float in update: {e}, value: {lng_value}")
+                    update_data['longitude'] = None
+        
+        # DO NOT set default coordinates - coordinates must come from map picker
+        # If coordinates are missing, they will be None (user must set via map)
+        if update_data.get('latitude') is None or update_data.get('longitude') is None:
+            print(f"[PROPERTIES] Coordinates not set in update - user must set via map picker")
         
         # Remove sections from update_data as it's handled separately
         sections_data = update_data.pop('sections', None)

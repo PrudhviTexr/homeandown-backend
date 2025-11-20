@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Response, Request, Header
 from typing import Dict, Any, List, Optional
-from ..models.schemas import SignupRequest, LoginRequest, SendOTPRequest, VerifyOTPRequest
+from ..models.schemas import SignupRequest, LoginRequest, SendOTPRequest, VerifyOTPRequest, UpdateProfileRequest
 from ..core.config import settings
 from ..core.security import get_current_user_claims
 from ..core.crypto import (
