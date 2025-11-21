@@ -114,10 +114,10 @@ async def send_email(to: str, subject: str, html: str, sender: str | None = None
             loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(None, lambda: requests.post(resend_url, json=payload, headers=headers, timeout=15))
             if resp.status_code in (200, 201, 202):
-                print(f"[EMAIL] ✅ Resend accepted message for delivery: {resp.status_code}")
+                print(f"[EMAIL] Resend accepted message for delivery: {resp.status_code}")
                 return {"status": "sent", "provider": "resend", "http_status": resp.status_code}
             else:
-                print(f"[EMAIL] ❌ Resend API returned {resp.status_code}: {resp.text}")
+                print(f"[EMAIL] Resend API returned {resp.status_code}: {resp.text}")
                 print(f"[EMAIL] Response body: {resp.text}")
         except Exception as e:
             print(f"[EMAIL]  Resend send failed: {e}")
@@ -172,12 +172,12 @@ async def send_email(to: str, subject: str, html: str, sender: str | None = None
             loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(None, lambda: requests.post(EMAILJS_ENDPOINT, json=payload, headers=headers, timeout=15))
             if resp.status_code in (200, 202):
-                print(f"[EMAIL] ✅ EmailJS accepted message for delivery: {resp.status_code}")
+                print(f"[EMAIL] EmailJS accepted message for delivery: {resp.status_code}")
                 return {"status": "sent", "provider": "emailjs", "http_status": resp.status_code}
             else:
-                print(f"[EMAIL] ❌ EmailJS API returned {resp.status_code}: {resp.text}")
+                print(f"[EMAIL] EmailJS API returned {resp.status_code}: {resp.text}")
         except Exception as e:
-            print(f"[EMAIL] ❌ EmailJS send failed: {e}")
+            print(f"[EMAIL] EmailJS send failed: {e}")
             import traceback
             print(traceback.format_exc())
         # Fallthrough to next provider if EmailJS fails
@@ -199,12 +199,12 @@ async def send_email(to: str, subject: str, html: str, sender: str | None = None
             }
             resp = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers, timeout=15)
             if resp.status_code in (200, 202):
-                print(f"[EMAIL] ✅ SendGrid accepted message for delivery: {resp.status_code}")
+                print(f"[EMAIL] SendGrid accepted message for delivery: {resp.status_code}")
                 return {"status": "sent", "provider": "sendgrid", "http_status": resp.status_code}
             else:
-                print(f"[EMAIL] ❌ SendGrid API returned {resp.status_code}: {resp.text}")
+                print(f"[EMAIL] SendGrid API returned {resp.status_code}: {resp.text}")
         except Exception as e:
-            print(f"[EMAIL] ❌ SendGrid send failed: {e}")
+            print(f"[EMAIL] SendGrid send failed: {e}")
             import traceback
             print(traceback.format_exc())
         # Fallthrough to SMTP path if SendGrid fails
@@ -249,17 +249,17 @@ async def send_email(to: str, subject: str, html: str, sender: str | None = None
                 timeout=30,
                 tls_context=tls_ctx,
             )
-            print(f"[EMAIL] ✅ Email sent successfully via Gmail SMTP to: {to}")
+            print(f"[EMAIL] Email sent successfully via Gmail SMTP to: {to}")
             return {"status": "sent", "provider": "gmail"}
         except Exception as e:
-            print(f"[EMAIL] ❌ Gmail SMTP failed: {e}")
+            print(f"[EMAIL] Gmail SMTP failed: {e}")
             import traceback
             print(traceback.format_exc())
     else:
         print(f"[EMAIL] Gmail SMTP not configured, skipping...")
         
     # If we reach here, all email providers failed
-    print(f"[EMAIL] ❌❌❌ ALL EMAIL PROVIDERS FAILED OR NOT CONFIGURED! ❌❌❌")
+    print(f"[EMAIL] ALL EMAIL PROVIDERS FAILED OR NOT CONFIGURED!")
     print(f"[EMAIL-ERROR] Email would have been sent to: {to}")
     print(f"[EMAIL-ERROR] Subject: {subject}")
     print(f"[EMAIL-ERROR] Please configure one of the following:")

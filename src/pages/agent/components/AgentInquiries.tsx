@@ -18,9 +18,20 @@ import {
   Users,
   TrendingUp
 } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
 import { pyFetch } from '@/utils/backend';
 import { formatIndianCurrency } from '@/utils/currency';
 import toast from 'react-hot-toast';
+
+// Fix for default marker icons in React-Leaflet
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
 
 interface Inquiry {
   id: string;
@@ -118,12 +129,12 @@ const AgentInquiries: React.FC = () => {
       const inquiriesData = response.inquiries || response || [];
       console.log('[AgentInquiries] Inquiries data:', inquiriesData);
       
-      // Enhance inquiries with property and user details
+      // Use property and user data from API response if available, otherwise fetch separately
       const enhancedInquiries = await Promise.all(inquiriesData.map(async (inquiry: any) => {
         try {
-          // Get property details
-          let property = null;
-          if (inquiry.property_id) {
+          // Use property from API response if available
+          let property = inquiry.property || null;
+          if (!property && inquiry.property_id) {
             try {
               property = await pyFetch(`/api/properties/${inquiry.property_id}`, {
                 method: 'GET',
@@ -134,9 +145,9 @@ const AgentInquiries: React.FC = () => {
             }
           }
           
-          // Get user details
-          let user = null;
-          if (inquiry.user_id) {
+          // Use user from API response if available
+          let user = inquiry.user || null;
+          if (!user && inquiry.user_id) {
             try {
               user = await pyFetch(`/api/users/${inquiry.user_id}`, {
                 method: 'GET',
@@ -662,6 +673,29 @@ const AgentInquiries: React.FC = () => {
                         <p className="text-gray-900">{selectedInquiry.property.bathrooms || 'N/A'}</p>
                       </div>
                     </div>
+                    
+                    {/* Property Map */}
+                    {selectedInquiry.property.latitude && selectedInquiry.property.longitude && (
+                      <div className="mt-4">
+                        <label className="text-sm font-medium text-gray-600 mb-2 block">Property Location</label>
+                        <div className="h-64 rounded-lg overflow-hidden border border-gray-300">
+                          <MapContainer
+                            center={[parseFloat(String(selectedInquiry.property.latitude)) || 17.3850, parseFloat(String(selectedInquiry.property.longitude)) || 78.4867]}
+                            zoom={15}
+                            style={{ height: '100%', width: '100%' }}
+                            key={`${selectedInquiry.property.latitude}-${selectedInquiry.property.longitude}`}
+                          >
+                            <TileLayer 
+                              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                            />
+                            <Marker position={[parseFloat(String(selectedInquiry.property.latitude)) || 17.3850, parseFloat(String(selectedInquiry.property.longitude)) || 78.4867]}>
+                              <Popup>{selectedInquiry.property.title || 'Property Location'}</Popup>
+                            </Marker>
+                          </MapContainer>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 

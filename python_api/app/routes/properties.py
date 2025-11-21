@@ -518,6 +518,10 @@ async def create_property(property_data: dict, request: Request = None):
         property_data.setdefault('verified', False)  # Must be verified by admin before showing
         property_data.setdefault('priority', 0)
         
+        # CRITICAL: Force verified to False for new properties (admin approval required)
+        property_data['verified'] = False
+        print(f"[PROPERTIES] Property will require admin approval: status={property_data['status']}, verified={property_data['verified']}")
+        
         # Handle required fields - set to 'NA' if empty
         # Note: area_sqft is not required for new_property, new_apartment, and lot types
         property_type = property_data.get('property_type', 'independent_house').lower()
@@ -903,6 +907,11 @@ async def create_property(property_data: dict, request: Request = None):
         print(f"  - zip_code: {property_data.get('zip_code')}")
         print(f"  - listing_type: {property_data.get('listing_type')}")
         print(f"  - property_type: {property_data.get('property_type')}")
+        print(f"[PROPERTIES] Coordinates and Images check:")
+        print(f"  - latitude: {property_data.get('latitude')} (type: {type(property_data.get('latitude')).__name__})")
+        print(f"  - longitude: {property_data.get('longitude')} (type: {type(property_data.get('longitude')).__name__})")
+        print(f"  - images: {property_data.get('images')} (count: {len(property_data.get('images', []))})")
+        print(f"  - amenities: {property_data.get('amenities')} (count: {len(property_data.get('amenities', []))})")
         
         # Insert property
         try:
@@ -912,9 +921,23 @@ async def create_property(property_data: dict, request: Request = None):
                 print(f"[PROPERTIES] ⚠️ PRE-INSERT CHECK: Set area_sqft to 0.0 before database insert")
             
             result = await db.insert("properties", property_data)
-            print(f"[PROPERTIES] Property created with ID: {property_id}")
+            print(f"[PROPERTIES] Property created successfully with ID: {property_id}")
             
-            # Auto-assign agent if property doesn't have one
+            # Verify the property was saved correctly
+            saved_property = await db.select("properties", filters={"id": property_id})
+            if saved_property and len(saved_property) > 0:
+                prop = saved_property[0]
+                print(f"[PROPERTIES] ✅ VERIFICATION - Property saved to database:")
+                print(f"  - Title: {prop.get('title')}")
+                print(f"  - Coordinates: lat={prop.get('latitude')}, lng={prop.get('longitude')}")
+                print(f"  - Images: {len(prop.get('images', []))} images")
+                print(f"  - Location: {prop.get('city')}, {prop.get('state')}")
+            else:
+                print(f"[PROPERTIES] ❌ WARNING: Property not found after creation!")
+        except Exception as verify_error:
+            print(f"[PROPERTIES] ❌ Error verifying saved property: {verify_error}")
+        
+        # Auto-assign agent if property doesn't have one
             if not property_data.get('agent_id'):
                 try:
                     from ..services.agent_assignment import AgentAssignmentService
@@ -1863,17 +1886,26 @@ async def get_zipcode_suggestions(zipcode: str):
             raise HTTPException(status_code=404, detail=f"No location data found for zipcode {zipcode}")
         
         # Return only the suggested fields for easy frontend integration
+        coordinates = location_data.get('coordinates')
+        suggested_fields = location_data.get('suggested_fields', {})
+        
+        # Ensure coordinates are available in multiple places for frontend compatibility
         suggestions = {
             "zipcode": zipcode,
             "pincode": zipcode,  # Keep for backward compatibility
-            "suggestions": location_data.get('suggested_fields', {}),
+            "suggestions": suggested_fields,
             "map_data": {
-                "coordinates": location_data.get('coordinates'),
+                "coordinates": coordinates,
+                "latitude": coordinates[0] if coordinates else suggested_fields.get('latitude'),
+                "longitude": coordinates[1] if coordinates else suggested_fields.get('longitude'),
                 "map_bounds": location_data.get('map_bounds')
             },
             "editable": True,
             "message": "These are suggested values. All fields can be edited."
         }
+        
+        print(f"[PROPERTIES] Returning coordinates in suggestions: lat={suggested_fields.get('latitude')}, lng={suggested_fields.get('longitude')}")
+        print(f"[PROPERTIES] Returning coordinates in map_data: {coordinates}")
         
         print(f"[PROPERTIES] Successfully fetched suggestions for zipcode {zipcode}")
         return suggestions

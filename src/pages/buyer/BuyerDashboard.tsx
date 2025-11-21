@@ -28,7 +28,7 @@ import {
   Bookmark,
   Share2
 } from 'lucide-react';
-import { toast } from '@/components/ui/toast';
+import { toast } from 'react-hot-toast';
 import { pyFetch } from '@/utils/backend';
 
 interface DashboardStats {

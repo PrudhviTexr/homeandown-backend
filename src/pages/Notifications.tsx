@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { NotificationsApi } from '@/services/pyApi';
+import { NotificationApi } from '@/services/notificationApi';
 import Navbar from '@/components/Navbar';
 import { Bell, Check, CheckCheck, Clock } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -33,8 +33,8 @@ const Notifications: React.FC = () => {
   const loadNotifications = async () => {
     try {
       setLoading(true);
-      const response = await NotificationsApi.list(user?.id);
-      setNotifications(response.data || response || []);
+      const notifications = await NotificationApi.getNotifications();
+      setNotifications(notifications || []);
     } catch (error) {
       console.error('Error loading notifications:', error);
       toast.error('Failed to load notifications');
@@ -45,8 +45,8 @@ const Notifications: React.FC = () => {
 
   const handleMarkAsRead = async (notificationId: string) => {
     try {
-      await NotificationsApi.markAsRead(notificationId);
-      setNotifications(notifications.map(n => 
+      await NotificationApi.markAsRead(notificationId);
+      setNotifications(notifications.map(n =>
         n.id === notificationId ? { ...n, read: true } : n
       ));
     } catch (error) {
@@ -57,9 +57,9 @@ const Notifications: React.FC = () => {
 
   const handleMarkAllAsRead = async () => {
     if (!user?.id) return;
-    
+
     try {
-      await NotificationsApi.markAllAsRead(user.id);
+      await NotificationApi.markAllAsRead();
       setNotifications(notifications.map(n => ({ ...n, read: true })));
       toast.success('All notifications marked as read');
     } catch (error) {

@@ -69,36 +69,74 @@ const TourBookingModal: React.FC<TourBookingModalProps> = ({ isOpen, onClose, pr
 
     setLoading(true);
     try {
-      const result = await ApiService.createBooking({
+      const bookingPayload = {
         property_id: property.id,
-        name: `${user.first_name} ${user.last_name}`,
+        name: `${user.first_name} ${user.last_name}`.trim() || user.email?.split('@')[0] || 'User',
         email: user.email,
         phone: phoneNumber,
         booking_date: selectedDate,
         booking_time: selectedTime,
         notes: notes || 'Tour request via website'
-      });
+      };
 
-      // Show success message with booking details
-      const successMessage = result?.message || `Tour booking confirmed for ${result?.property_name || property.title} on ${result?.booking_date || selectedDate} at ${result?.booking_time || selectedTime}`;
-      toast.success(`🎉 ${successMessage}`, {
-        duration: 6000, // Show for 6 seconds
-      });
+      console.log('[TourBookingModal] Sending booking request:', bookingPayload);
+      const result = await ApiService.createBooking(bookingPayload);
+
+      console.log('[TourBookingModal] Booking API response:', result);
       
-      console.log('[TourBookingModal] Booking created successfully:', result);
+      // Check if booking was successful
+      if (result?.success === false || result?.error) {
+        const errorMsg = result?.error || result?.detail || 'Failed to book tour. Please try again.';
+        toast.error(`❌ ${errorMsg}`, {
+          duration: 6000,
+        });
+        setLoading(false);
+        return;
+      }
       
-      // Reset form
+      // Get booking status from result
+      const bookingStatus = result?.status || result?.booking?.status || 'pending';
+      const bookingId = result?.id || result?.booking?.id;
+      
+      // Show immediate success notification with confirmation
+      toast.success(
+        (t) => (
+          <div className="flex flex-col">
+            <div className="font-semibold">✅ Booking Confirmed!</div>
+            <div className="text-sm mt-1">
+              Your tour request for <strong>{property.title}</strong> has been submitted successfully.
+            </div>
+            <div className="text-xs mt-1 text-gray-600">
+              Date: {selectedDate} at {selectedTime}
+            </div>
+            {bookingId && (
+              <div className="text-xs mt-1 text-gray-500">
+                Booking ID: {bookingId.substring(0, 8)}...
+              </div>
+            )}
+          </div>
+        ),
+        {
+          duration: 6000,
+          icon: '🎉',
+        }
+      );
+      
+      // Reset form immediately
       setSelectedDate('');
       setSelectedTime('');
       setNotes('');
       
-      // Close modal first
-      onClose();
+      // Close modal immediately after showing success
+      setLoading(false);
+      setTimeout(() => {
+        onClose();
+      }, 500);
       
-      // Navigate to My Bookings page after a short delay to ensure modal closes
+      // Navigate to My Bookings page after modal closes
       setTimeout(() => {
         window.location.href = '/my-bookings';
-      }, 1000);
+      }, 1500);
     } catch (error: any) {
       console.error('Error booking tour:', error);
       
@@ -113,14 +151,32 @@ const TourBookingModal: React.FC<TourBookingModalProps> = ({ isOpen, onClose, pr
       
       // User-friendly error messages - ALWAYS show notification
       let errorMessage = 'Failed to book tour. Please try again.';
-      if (error.message?.includes('NetworkError')) {
-        errorMessage = 'Unable to reach the server. Please check your internet connection and try again.';
-      } else if (error.message?.includes('500') || error.message?.includes('Internal Server Error')) {
-        errorMessage = 'Server error occurred. Please try again in a few moments.';
-      } else if (error.message?.includes('400') || error.message?.includes('Bad Request')) {
-        errorMessage = 'Invalid booking details. Please check your information and try again.';
-      } else if (error.message) {
-        errorMessage = error.message;
+      
+      // Parse error message from API response
+      if (error.message) {
+        try {
+          const errorObj = JSON.parse(error.message);
+          if (errorObj.detail) {
+            errorMessage = errorObj.detail;
+          } else if (errorObj.error) {
+            errorMessage = errorObj.error;
+          } else if (typeof errorObj === 'string') {
+            errorMessage = errorObj;
+          }
+        } catch {
+          // If not JSON, use the message as is
+          if (error.message.includes('404') || error.message.includes('Not Found')) {
+            errorMessage = 'Booking service is temporarily unavailable. Please try again later.';
+          } else if (error.message.includes('NetworkError') || error.message.includes('Failed to fetch')) {
+            errorMessage = 'Unable to reach the server. Please check your internet connection and try again.';
+          } else if (error.message.includes('500') || error.message.includes('Internal Server Error')) {
+            errorMessage = 'Server error occurred. Please try again in a few moments.';
+          } else if (error.message.includes('400') || error.message.includes('Bad Request')) {
+            errorMessage = 'Invalid booking details. Please check your information and try again.';
+          } else {
+            errorMessage = error.message;
+          }
+        }
       }
       
       // Always show error notification

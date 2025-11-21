@@ -22,12 +22,21 @@ const PropertyActionButtons: React.FC<PropertyActionButtonsProps> = ({
   console.log('[PropertyActionButtons] onInquiry:', typeof onInquiry);
   console.log('[PropertyActionButtons] onBooking:', typeof onBooking);
 
-  const handleInquiryClick = () => {
+  const handleInquiryClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
     console.log('[PropertyActionButtons] Inquiry button clicked');
-    if (onInquiry) {
-      onInquiry();
+    console.log('[PropertyActionButtons] onInquiry type:', typeof onInquiry);
+    console.log('[PropertyActionButtons] onInquiry value:', onInquiry);
+    
+    if (onInquiry && typeof onInquiry === 'function') {
+      try {
+        onInquiry();
+      } catch (error) {
+        console.error('[PropertyActionButtons] Error calling onInquiry:', error);
+      }
     } else {
-      console.error('[PropertyActionButtons] onInquiry callback is not defined');
+      console.error('[PropertyActionButtons] onInquiry callback is not defined or not a function');
     }
   };
 
@@ -78,14 +87,16 @@ const PropertyActionButtons: React.FC<PropertyActionButtonsProps> = ({
       {user ? (
         <>
           <button
+            type="button"
             onClick={handleInquiryClick}
             disabled={inquiryLoading}
-            className="w-full bg-[#90C641] text-white py-3 rounded-full hover:bg-[#7DAF35] transition-all duration-200 font-semibold text-sm md:text-base disabled:opacity-50 shadow-md hover:shadow-lg flex items-center justify-center"
+            className="w-full bg-[#90C641] text-white py-3 rounded-full hover:bg-[#7DAF35] transition-all duration-200 font-semibold text-sm md:text-base disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg flex items-center justify-center"
           >
             {inquiryLoading && <div className="animate-spin h-4 w-4 border-b-2 border-white rounded-full mr-2" />}
             {inquiryLoading ? 'Sending...' : 'Send Enquiry'}
           </button>
           <button
+            type="button"
             onClick={handleBookingClick}
             className="w-full bg-[#162e5a] text-white py-3 rounded-full hover:bg-[#0f2340] transition-all duration-200 font-semibold text-sm md:text-base shadow-md hover:shadow-lg flex items-center justify-center"
           >
@@ -95,9 +106,10 @@ const PropertyActionButtons: React.FC<PropertyActionButtonsProps> = ({
       ) : (
         <div className="space-y-3">
           <button
+            type="button"
             onClick={handleInquiryClick}
             disabled={inquiryLoading}
-            className="w-full bg-[#90C641] text-white py-3 rounded-full hover:bg-[#7DAF35] transition-all duration-200 font-semibold text-sm md:text-base disabled:opacity-50 shadow-md hover:shadow-lg flex items-center justify-center"
+            className="w-full bg-[#90C641] text-white py-3 rounded-full hover:bg-[#7DAF35] transition-all duration-200 font-semibold text-sm md:text-base disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg flex items-center justify-center"
           >
             {inquiryLoading && <div className="animate-spin h-4 w-4 border-b-2 border-white rounded-full mr-2" />}
             {inquiryLoading ? 'Sending...' : 'Send Enquiry'}

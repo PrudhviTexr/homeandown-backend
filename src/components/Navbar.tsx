@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Menu, X, User, LogOut, Settings, CreditCard, Bell } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { NotificationsApi } from '@/services/pyApi';
+import { NotificationApi } from '@/services/notificationApi';
 import AuthModal from './AuthModal';
 import PasswordChangeModal from './PasswordChangeModal';
 import BankDetailsModal from './auth/BankDetailsModal';
@@ -104,8 +104,7 @@ const Navbar: React.FC = () => {
     if (user?.id) {
       const loadUnreadCount = async () => {
         try {
-          const response = await NotificationsApi.list(user.id);
-          const notifications = response.data || response || [];
+          const notifications = await NotificationApi.getNotifications();
           const unread = notifications.filter((n: any) => !n.read).length;
           setUnreadCount(unread);
         } catch (error) {

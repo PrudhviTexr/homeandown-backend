@@ -50,11 +50,18 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
     
     // Set up auto-refresh every 30 seconds for real-time data
     const interval = setInterval(() => {
+      console.log('[FastDashboard] Auto-refreshing data...');
       fetchDashboardData();
     }, 30000); // Refresh every 30 seconds
     
     return () => clearInterval(interval);
   }, [user]);
+  
+  // Also refresh when component remounts (via key prop from parent)
+  useEffect(() => {
+    // This will trigger when parent refreshes (key changes)
+    fetchDashboardData();
+  }, []);
   
   // Expose refresh function for manual refresh
   const handleManualRefresh = () => {
@@ -139,7 +146,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
 
       // Process dashboard stats
       if (statsRes.status === 'fulfilled') {
-        const statsData = statsRes.value?.stats || {};
+        const statsData = statsRes.value?.stats || statsRes.value || {};
         console.log('[FastDashboard] Stats fetched:', statsData);
         setStats(prev => ({
           ...prev,
@@ -147,10 +154,10 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
           assignedProperties: statsData.active_properties || 0,
           totalInquiries: statsData.total_inquiries || 0,
           totalBookings: statsData.total_bookings || 0,
-          responseRate: statsData.response_rate || 0,
-          monthlyCommission: 0, // This would need to be calculated separately
-          totalEarnings: 0, // This would need to be calculated separately
-          clientSatisfaction: 0 // This would need to be calculated separately
+          responseRate: statsData.response_rate || statsData.avg_response_rate || 0,
+          monthlyCommission: statsData.monthly_commission || statsData.total_commission || 0,
+          totalEarnings: statsData.total_earnings || statsData.total_commission || 0,
+          clientSatisfaction: statsData.customer_rating || statsData.client_satisfaction || 0
         }));
       } else {
         console.error('[FastDashboard] Error fetching stats:', statsRes.reason);
@@ -159,14 +166,37 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
       // Process properties
       if (propertiesRes.status === 'fulfilled') {
         const response = propertiesRes.value;
-        const properties = response?.properties || response || [];
-        console.log('[FastDashboard] Properties fetched:', properties.length);
-        console.log('[FastDashboard] Properties data:', properties);
+        console.log('[FastDashboard] Properties API response:', response);
+        console.log('[FastDashboard] Properties response type:', typeof response);
+        console.log('[FastDashboard] Properties response keys:', response ? Object.keys(response) : 'null');
+        
+        // Try multiple ways to extract properties
+        let properties = [];
+        if (response?.properties && Array.isArray(response.properties)) {
+          properties = response.properties;
+          console.log('[FastDashboard] Found properties in response.properties:', properties.length);
+        } else if (Array.isArray(response)) {
+          properties = response;
+          console.log('[FastDashboard] Response is array directly:', properties.length);
+        } else if (response?.data && Array.isArray(response.data)) {
+          properties = response.data;
+          console.log('[FastDashboard] Found properties in response.data:', properties.length);
+        } else {
+          console.warn('[FastDashboard] Could not extract properties from response:', response);
+          properties = [];
+        }
+        
+        console.log('[FastDashboard] Final properties array:', properties.length);
+        console.log('[FastDashboard] Sample property:', properties[0]);
+        
         // Sort by created_at descending to show most recent first
         const sortedProperties = [...properties].sort((a, b) => 
-          new Date(b.created_at || b.updated_at || 0).getTime() - new Date(a.created_at || a.updated_at || 0).getTime()
+          new Date(b.created_at || b.createdAt || b.updated_at || b.updatedAt || 0).getTime() - 
+          new Date(a.created_at || a.createdAt || a.updated_at || a.updatedAt || 0).getTime()
         );
         setAssignedProperties(sortedProperties.slice(0, 6)); // Show 6 properties
+        console.log('[FastDashboard] Set assignedProperties:', sortedProperties.slice(0, 6).length);
+        
         // Don't override stats if they were already set by statsRes
         if (statsRes.status !== 'fulfilled') {
           setStats(prev => ({
@@ -184,13 +214,36 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
       // Process inquiries
       if (inquiriesRes.status === 'fulfilled') {
         const response = inquiriesRes.value;
-        const inquiries = response?.inquiries || response || [];
-        console.log('[FastDashboard] Inquiries fetched:', inquiries.length);
+        console.log('[FastDashboard] Inquiries API response:', response);
+        console.log('[FastDashboard] Inquiries response type:', typeof response);
+        console.log('[FastDashboard] Inquiries response keys:', response ? Object.keys(response) : 'null');
+        
+        // Try multiple ways to extract inquiries
+        let inquiries = [];
+        if (response?.inquiries && Array.isArray(response.inquiries)) {
+          inquiries = response.inquiries;
+          console.log('[FastDashboard] Found inquiries in response.inquiries:', inquiries.length);
+        } else if (Array.isArray(response)) {
+          inquiries = response;
+          console.log('[FastDashboard] Response is array directly:', inquiries.length);
+        } else if (response?.data && Array.isArray(response.data)) {
+          inquiries = response.data;
+          console.log('[FastDashboard] Found inquiries in response.data:', inquiries.length);
+        } else {
+          console.warn('[FastDashboard] Could not extract inquiries from response:', response);
+          inquiries = [];
+        }
+        
+        console.log('[FastDashboard] Final inquiries array:', inquiries.length);
+        console.log('[FastDashboard] Sample inquiry:', inquiries[0]);
+        
         // Sort by created_at descending to show most recent first
         const sortedInquiries = [...inquiries].sort((a, b) => 
-          new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+          new Date(b.created_at || b.createdAt || 0).getTime() - new Date(a.created_at || a.createdAt || 0).getTime()
         );
         setRecentInquiries(sortedInquiries.slice(0, 5)); // Show only 5 most recent
+        console.log('[FastDashboard] Set recentInquiries:', sortedInquiries.slice(0, 5).length);
+        
         // Don't override stats if they were already set by statsRes
         if (statsRes.status !== 'fulfilled') {
           setStats(prev => ({
@@ -207,14 +260,36 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
       // Process bookings
       if (bookingsRes.status === 'fulfilled') {
         const response = bookingsRes.value;
-        const bookings = response?.bookings || response || [];
-        console.log('[FastDashboard] Bookings fetched:', bookings.length);
-        console.log('[FastDashboard] Bookings data:', bookings);
+        console.log('[FastDashboard] Bookings API response:', response);
+        console.log('[FastDashboard] Bookings response type:', typeof response);
+        console.log('[FastDashboard] Bookings response keys:', response ? Object.keys(response) : 'null');
+        
+        // Try multiple ways to extract bookings
+        let bookings = [];
+        if (response?.bookings && Array.isArray(response.bookings)) {
+          bookings = response.bookings;
+          console.log('[FastDashboard] Found bookings in response.bookings:', bookings.length);
+        } else if (Array.isArray(response)) {
+          bookings = response;
+          console.log('[FastDashboard] Response is array directly:', bookings.length);
+        } else if (response?.data && Array.isArray(response.data)) {
+          bookings = response.data;
+          console.log('[FastDashboard] Found bookings in response.data:', bookings.length);
+        } else {
+          console.warn('[FastDashboard] Could not extract bookings from response:', response);
+          bookings = [];
+        }
+        
+        console.log('[FastDashboard] Final bookings array:', bookings.length);
+        console.log('[FastDashboard] Sample booking:', bookings[0]);
+        
         // Sort by created_at descending to show most recent first
         const sortedBookings = [...bookings].sort((a, b) => 
-          new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+          new Date(b.created_at || b.createdAt || 0).getTime() - new Date(a.created_at || a.createdAt || 0).getTime()
         );
         setRecentBookings(sortedBookings.slice(0, 5)); // Show only 5 most recent
+        console.log('[FastDashboard] Set recentBookings:', sortedBookings.slice(0, 5).length);
+        
         // Don't override stats if they were already set by statsRes
         if (statsRes.status !== 'fulfilled') {
           setStats(prev => ({
@@ -241,17 +316,38 @@ const Dashboard: React.FC<DashboardProps> = ({ user, agentProfile }) => {
         setPendingAssignments([]); // Set empty array on error
       }
 
-      // Calculate mock earnings (replace with real calculation)
-      setStats(prev => ({
-        ...prev,
-        monthlyCommission: prev.assignedProperties * 50000 * 0.02, // 2% of property value
-        totalEarnings: prev.assignedProperties * 50000 * 0.02 * 12, // Annual
-        responseRate: 95,
-        clientSatisfaction: 4.8
-      }));
+      // Update stats with real-time data from API responses
+      // Only update if stats weren't already set from statsRes
+      if (statsRes.status !== 'fulfilled') {
+        // Calculate from actual data if stats API failed
+        const propertiesCount = propertiesRes.status === 'fulfilled' ? 
+          ((propertiesRes.value?.properties || propertiesRes.value || []).length) : 0;
+        const inquiriesCount = inquiriesRes.status === 'fulfilled' ? 
+          ((inquiriesRes.value?.inquiries || inquiriesRes.value || []).length) : 0;
+        const bookingsCount = bookingsRes.status === 'fulfilled' ? 
+          ((bookingsRes.value?.bookings || bookingsRes.value || []).length) : 0;
+        
+        setStats(prev => ({
+          ...prev,
+          totalProperties: propertiesCount || prev.totalProperties,
+          assignedProperties: propertiesCount || prev.assignedProperties,
+          totalInquiries: inquiriesCount || prev.totalInquiries,
+          totalBookings: bookingsCount || prev.totalBookings,
+          responseRate: inquiriesCount > 0 ? ((bookingsCount / inquiriesCount) * 100) : 0,
+          monthlyCommission: prev.monthlyCommission || 0,
+          totalEarnings: prev.totalEarnings || 0,
+          clientSatisfaction: prev.clientSatisfaction || 0
+        }));
+      }
 
     } catch (error) {
       console.error('[FastDashboard] Error fetching dashboard data:', error);
+      console.error('[FastDashboard] Full error:', error);
+      // Set empty state on error to prevent stale data
+      setAssignedProperties([]);
+      setRecentInquiries([]);
+      setRecentBookings([]);
+      setPendingAssignments([]);
     } finally {
       setLoading(false);
     }

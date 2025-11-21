@@ -144,6 +144,11 @@ async def create_property(payload: CreatePropertyRequest, _=Depends(require_api_
         property_data["id"] = str(uuid.uuid4())
         property_data["created_at"] = dt.datetime.utcnow().isoformat()
         
+        # Ensure properties created via admin also require approval
+        property_data.setdefault("status", "pending")
+        property_data.setdefault("verified", False)
+        property_data.setdefault("featured", False)
+        
         new_property = await db.admin_insert("properties", property_data)
         print(f"[ADMIN] Property created: {new_property}")
         return new_property

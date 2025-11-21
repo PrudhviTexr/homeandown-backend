@@ -26,7 +26,7 @@ import {
   Star,
   Image as ImageIcon
 } from 'lucide-react';
-import { toast } from '@/components/ui/toast';
+import { toast } from 'react-hot-toast';
 import { pyFetch } from '@/utils/backend';
 import RoleBasedPropertyForm from '@/components/RoleBasedPropertyForm';
 import SellerHeader from '@/components/seller/SellerHeader';
@@ -665,18 +665,26 @@ const SellerDashboard: React.FC = () => {
                             <div className="bg-gray-50 rounded-lg p-3 mb-3">
                               <p className="text-gray-700 text-sm">{inquiry.message}</p>
                             </div>
-                            <div className="flex items-center gap-2 text-sm text-gray-600">
-                              <Users className="w-4 h-4" />
-                              <span className="font-medium">{inquiry.user.first_name} {inquiry.user.last_name}</span>
-                            </div>
-                            <div className="flex items-center gap-2 text-sm text-gray-600">
-                              <Mail className="w-4 h-4" />
-                              {inquiry.user.email}
-                            </div>
-                            {inquiry.user.phone_number && (
-                              <div className="flex items-center gap-2 text-sm text-gray-600">
-                                <Phone className="w-4 h-4" />
-                                {inquiry.user.phone_number}
+                            {/* Show only agent info, not buyer info */}
+                            {inquiry.property?.assigned_agent ? (
+                              <>
+                                <div className="flex items-center gap-2 text-sm text-gray-600">
+                                  <Users className="w-4 h-4" />
+                                  <span className="font-medium">Agent: {inquiry.property.assigned_agent.name || 'Not Assigned'}</span>
+                                </div>
+                                {inquiry.property.assigned_agent.phone && (
+                                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                                    <Phone className="w-4 h-4" />
+                                    <a href={`tel:${inquiry.property.assigned_agent.phone}`} className="text-blue-600 hover:underline">
+                                      {inquiry.property.assigned_agent.phone}
+                                    </a>
+                                  </div>
+                                )}
+                              </>
+                            ) : (
+                              <div className="flex items-center gap-2 text-sm text-gray-500">
+                                <Users className="w-4 h-4" />
+                                <span>No agent assigned</span>
                               </div>
                             )}
                             <div className="flex items-center gap-2 text-sm text-gray-600">
@@ -758,28 +766,43 @@ const SellerDashboard: React.FC = () => {
                           </div>
                           
                           <div className="mb-4 space-y-2">
-                            <div className="flex items-center gap-2 text-sm text-gray-600">
-                              <Users className="w-4 h-4" />
-                              <span className="font-medium">{booking.user.first_name} {booking.user.last_name}</span>
-                            </div>
-                            <div className="flex items-center gap-2 text-sm text-gray-600">
-                              <Mail className="w-4 h-4" />
-                              {booking.user.email}
-                            </div>
-                            {booking.user.phone_number && (
-                              <div className="flex items-center gap-2 text-sm text-gray-600">
-                                <Phone className="w-4 h-4" />
-                                {booking.user.phone_number}
+                            {/* Show only agent info, not buyer info */}
+                            {booking.property?.assigned_agent ? (
+                              <>
+                                <div className="flex items-center gap-2 text-sm text-gray-600">
+                                  <Users className="w-4 h-4" />
+                                  <span className="font-medium">Agent: {booking.property.assigned_agent.name || 'Not Assigned'}</span>
+                                </div>
+                                {booking.property.assigned_agent.phone && (
+                                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                                    <Phone className="w-4 h-4" />
+                                    <a href={`tel:${booking.property.assigned_agent.phone}`} className="text-blue-600 hover:underline">
+                                      {booking.property.assigned_agent.phone}
+                                    </a>
+                                  </div>
+                                )}
+                              </>
+                            ) : (
+                              <div className="flex items-center gap-2 text-sm text-gray-500">
+                                <Users className="w-4 h-4" />
+                                <span>No agent assigned</span>
                               </div>
                             )}
                             <div className="flex items-center gap-2 text-sm text-gray-600">
                               <Calendar className="w-4 h-4" />
-                              Tour Date: {formatDate(booking.tour_date)}
+                              Tour Date: {formatDate(booking.tour_date || booking.booking_date || booking.created_at)}
                             </div>
                             <div className="flex items-center gap-2 text-sm text-gray-600">
                               <Clock className="w-4 h-4" />
                               Booked: {formatDate(booking.created_at)}
                             </div>
+                            {/* Show booking count if available */}
+                            {booking.property?.bookings_count !== undefined && (
+                              <div className="flex items-center gap-2 text-sm text-gray-600">
+                                <Calendar className="w-4 h-4" />
+                                Total Bookings for this property: {booking.property.bookings_count}
+                              </div>
+                            )}
                           </div>
 
                           <div className="flex gap-2 pt-2 border-t border-gray-100">

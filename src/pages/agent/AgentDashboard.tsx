@@ -58,19 +58,19 @@ const AgentDashboard: React.FC = () => {
       return;
     }
     
-    // Load dashboard immediately without waiting for data
-    setLoading(false);
+    // Fetch data immediately on mount
+    fetchAgentDashboard(true);
+    fetchAgentProfile();
     
-    // Fetch data asynchronously in background
-    if (!dataLoaded) {
-      Promise.all([
-        fetchAgentDashboard(),
-        fetchAgentProfile()
-      ]).finally(() => {
-        setDataLoaded(true);
-      });
-    }
-  }, [user, navigate, dataLoaded]);
+    // Set up auto-refresh every 30 seconds for real-time data
+    const interval = setInterval(() => {
+      console.log('[AgentDashboard] Auto-refreshing dashboard data...');
+      fetchAgentDashboard(true);
+      fetchAgentProfile();
+    }, 30000); // Refresh every 30 seconds
+    
+    return () => clearInterval(interval);
+  }, [user, navigate]);
 
   const fetchAgentProfile = async () => {
     if (!user) return;
@@ -88,21 +88,16 @@ const AgentDashboard: React.FC = () => {
   const fetchAgentDashboard = async (forceRefresh = false) => {
     if (!user || (user as any).user_type !== 'agent') return;
 
-    // If data is already loaded and not forcing refresh, skip
-    if (dashboardStats && !forceRefresh) {
-      return;
-    }
-
     setLoading(true);
     try {
-      console.log('[AgentDashboard] Fetching dashboard data for agent:', user.id);
+      console.log('[AgentDashboard] Fetching dashboard data for agent:', user.id, forceRefresh ? '(force refresh)' : '');
       
       // Use the proper AgentApi to fetch agent-specific data
       const [statsResponse, inquiriesResponse, bookingsResponse, propertiesResponse] = await Promise.allSettled([
         AgentApi.getDashboardStats(),
-        AgentApi.getInquiries(),
-        AgentApi.getBookings(),
-        AgentApi.getProperties()
+        AgentApi.getInquiries(undefined, undefined, 50),
+        AgentApi.getBookings(undefined, undefined, 50),
+        AgentApi.getProperties(undefined, 50)
       ]);
       
       let stats: any = {};
@@ -111,53 +106,75 @@ const AgentDashboard: React.FC = () => {
       let properties: any[] = [];
       
       if (statsResponse.status === 'fulfilled') {
-        stats = statsResponse.value.stats || {};
-        console.log('[AgentDashboard] Stats fetched:', stats);
+        const statsValue = statsResponse.value;
+        console.log('[AgentDashboard] Stats API response:', statsValue);
+        stats = statsValue?.stats || statsValue || {};
+        console.log('[AgentDashboard] Stats extracted:', stats);
       } else {
         console.error('[AgentDashboard] Error fetching stats:', statsResponse.reason);
+        console.error('[AgentDashboard] Stats error details:', statsResponse.reason?.message || statsResponse.reason);
       }
       
       if (inquiriesResponse.status === 'fulfilled') {
-        inquiries = inquiriesResponse.value.inquiries || [];
-        console.log('[AgentDashboard] Inquiries fetched:', inquiries.length);
+        const inquiriesValue = inquiriesResponse.value;
+        console.log('[AgentDashboard] Inquiries API response:', inquiriesValue);
+        inquiries = inquiriesValue?.inquiries || (Array.isArray(inquiriesValue) ? inquiriesValue : []);
+        console.log('[AgentDashboard] Inquiries extracted:', inquiries.length);
       } else {
         console.error('[AgentDashboard] Error fetching inquiries:', inquiriesResponse.reason);
+        console.error('[AgentDashboard] Inquiries error details:', inquiriesResponse.reason?.message || inquiriesResponse.reason);
       }
       
       if (bookingsResponse.status === 'fulfilled') {
-        bookings = bookingsResponse.value.bookings || [];
-        console.log('[AgentDashboard] Bookings fetched:', bookings.length);
+        const bookingsValue = bookingsResponse.value;
+        console.log('[AgentDashboard] Bookings API response:', bookingsValue);
+        bookings = bookingsValue?.bookings || (Array.isArray(bookingsValue) ? bookingsValue : []);
+        console.log('[AgentDashboard] Bookings extracted:', bookings.length);
       } else {
         console.error('[AgentDashboard] Error fetching bookings:', bookingsResponse.reason);
+        console.error('[AgentDashboard] Bookings error details:', bookingsResponse.reason?.message || bookingsResponse.reason);
       }
       
       if (propertiesResponse.status === 'fulfilled') {
-        properties = propertiesResponse.value.properties || [];
-        console.log('[AgentDashboard] Properties fetched:', properties.length);
+        const propertiesValue = propertiesResponse.value;
+        console.log('[AgentDashboard] Properties API response:', propertiesValue);
+        properties = propertiesValue?.properties || (Array.isArray(propertiesValue) ? propertiesValue : []);
+        console.log('[AgentDashboard] Properties extracted:', properties.length);
       } else {
         console.error('[AgentDashboard] Error fetching properties:', propertiesResponse.reason);
+        console.error('[AgentDashboard] Properties error details:', propertiesResponse.reason?.message || propertiesResponse.reason);
       }
       
       // Use the stats from the API response or calculate from individual data
       const dashboardStatsData: AgentDashboardStats = {
-        totalAssignments: stats.total_properties || properties.length,
-        totalInquiries: stats.total_inquiries || inquiries.length,
-        totalBookings: stats.total_bookings || bookings.length,
-        acceptedAssignments: stats.active_properties || properties.filter(p => p.status === 'active').length,
-        totalEarnings: (stats.active_properties || 0) * 15000,
-        monthlyCommission: ((stats.active_properties || 0) * 15000) / 12,
+        totalAssignments: stats.total_properties || properties.length || 0,
+        totalInquiries: stats.total_inquiries || inquiries.length || 0,
+        totalBookings: stats.total_bookings || bookings.length || 0,
+        acceptedAssignments: stats.active_properties || properties.filter((p: any) => p.status === 'active').length || 0,
+        totalEarnings: stats.total_earnings || (stats.active_properties || 0) * 15000 || 0,
+        monthlyCommission: stats.monthly_commission || ((stats.active_properties || 0) * 15000) / 12 || 0,
         performance: {
-          conversionRate: stats.conversion_rate || 0,
-          responseTime: '< 2 hours',
-          customerRating: 4.8,
-          activeAssignments: stats.pending_properties || properties.filter(p => p.status === 'pending').length
+          conversionRate: stats.conversion_rate || (inquiries.length > 0 ? (bookings.length / inquiries.length) * 100 : 0) || 0,
+          responseTime: stats.avg_response_time || '< 2 hours',
+          customerRating: stats.customer_rating || 4.8,
+          activeAssignments: stats.pending_properties || properties.filter((p: any) => p.status === 'pending').length || 0
         },
         recentContacts: [...inquiries.slice(0, 5), ...bookings.slice(0, 5)],
-        todayContacts: [...inquiries.filter(inq => String(inq.created_at).startsWith(new Date().toISOString().split('T')[0])), 
-                       ...bookings.filter(b => String(b.created_at).startsWith(new Date().toISOString().split('T')[0]))]
+        todayContacts: [
+          ...inquiries.filter((inq: any) => {
+            const created = inq.created_at || inq.createdAt;
+            return created && String(created).startsWith(new Date().toISOString().split('T')[0]);
+          }), 
+          ...bookings.filter((b: any) => {
+            const created = b.created_at || b.createdAt;
+            return created && String(created).startsWith(new Date().toISOString().split('T')[0]);
+          })
+        ]
       };
       
+      console.log('[AgentDashboard] Dashboard stats updated:', dashboardStatsData);
       setDashboardStats(dashboardStatsData);
+      setDataLoaded(true);
     } catch (error) {
       console.error('[AgentDashboard] Error fetching agent dashboard:', error);
       // Default empty data
@@ -188,7 +205,8 @@ const AgentDashboard: React.FC = () => {
   };
 
   const handleRefresh = () => {
-    setDataLoaded(false);
+    console.log('[AgentDashboard] Manual refresh triggered');
+    setRefreshTrigger(prev => prev + 1);
     fetchAgentDashboard(true);
     fetchAgentProfile();
   };
@@ -204,7 +222,7 @@ const AgentDashboard: React.FC = () => {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <FastDashboard user={user} agentProfile={agentProfile} key={refreshTrigger} />;
+        return <FastDashboard user={user} agentProfile={agentProfile} key={`dashboard-${refreshTrigger}-${Date.now()}`} />;
 
       case 'bookings':
         return <AgentBookings key={refreshTrigger} />;

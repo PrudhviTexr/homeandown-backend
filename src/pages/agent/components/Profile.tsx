@@ -5,6 +5,7 @@ import {
   Building, CreditCard, Shield, Settings
 } from 'lucide-react';
 import { getApiUrl } from '@/utils/backend';
+import LocationSelector from '@/components/LocationSelector';
 
 interface AgentProfileProps {
   user: any;
@@ -19,7 +20,12 @@ interface ProfileData {
   phoneNumber: string;
   city: string;
   state: string;
+  district: string;
+  mandal: string;
+  zipCode: string;
   address: string;
+  latitude: string;
+  longitude: string;
   bio: string;
   profileImageUrl: string;
   licenseNumber: string;
@@ -28,8 +34,6 @@ interface ProfileData {
   verificationStatus: string;
   commissionRate: number;
   businessName: string;
-  district: string;
-  mandal: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -78,7 +82,12 @@ const AgentProfile: React.FC<AgentProfileProps> = ({ user, onProfileUpdate }) =>
           phoneNumber: user.phone_number || '',
           city: user.city || '',
           state: user.state || '',
+          district: user.district || '',
+          mandal: user.mandal || '',
+          zipCode: user.zip_code || '',
           address: user.address || '',
+          latitude: user.latitude || '',
+          longitude: user.longitude || '',
           bio: user.bio || '',
           profileImageUrl: user.profile_image_url || '',
           licenseNumber: user.license_number || user.agent_license_number || '',
@@ -87,8 +96,6 @@ const AgentProfile: React.FC<AgentProfileProps> = ({ user, onProfileUpdate }) =>
           verificationStatus: user.verification_status || 'pending',
           commissionRate: user.commission_rate || 0.02,
           businessName: user.business_name || '',
-          district: user.district || '',
-          mandal: user.mandal || '',
           createdAt: user.created_at || '',
           updatedAt: user.updated_at || ''
         };
@@ -147,42 +154,52 @@ const AgentProfile: React.FC<AgentProfileProps> = ({ user, onProfileUpdate }) =>
 
     try {
       setSaving(true);
-      const apiKey = import.meta.env.VITE_PYTHON_API_KEY || 'g7lshzFb55RKuskTH0WOu_oC7MW5hNE1lmgS2wBflZCyHV6CUk9b4wxSjAnXYYXj';
       
-      const response = await fetch(getApiUrl(`/api/admin/users/${user?.id}`), {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': apiKey
-        },
-        body: JSON.stringify({
-          first_name: formData.firstName,
-          last_name: formData.lastName,
-          email: formData.email,
-          phone_number: formData.phoneNumber,
-          city: formData.city,
-          state: formData.state,
-          address: formData.address,
-          bio: formData.bio,
-          business_name: formData.businessName,
-          district: formData.district,
-          mandal: formData.mandal
-        })
+      // Use the user profile endpoint instead of admin endpoint
+      const { pyFetch } = await import('@/utils/backend');
+      
+      const updateData = {
+        first_name: formData.firstName,
+        last_name: formData.lastName,
+        phone_number: formData.phoneNumber,
+        city: formData.city,
+        state: formData.state,
+        district: formData.district,
+        mandal: formData.mandal,
+        zip_code: formData.zipCode,
+        address: formData.address,
+        latitude: formData.latitude,
+        longitude: formData.longitude,
+        bio: formData.bio,
+        business_name: formData.businessName
+      };
+
+      console.log('[AGENT PROFILE] Updating profile with data:', updateData);
+      
+      const response = await pyFetch('/api/users/profile', {
+        method: 'PATCH',
+        body: JSON.stringify(updateData),
+        useApiKey: false
       });
 
-      if (response.ok) {
-        const updatedProfile = await response.json();
-        setProfile(updatedProfile);
-        setEditing(false);
-        
-        if (onProfileUpdate) {
-          onProfileUpdate(updatedProfile);
-        }
-      } else {
-        console.error('Failed to update profile');
+      console.log('[AGENT PROFILE] Profile updated successfully:', response);
+      
+      // Update local state
+      setProfile(response);
+      setEditing(false);
+      
+      if (onProfileUpdate) {
+        onProfileUpdate(response);
       }
-    } catch (error) {
-      console.error('Error updating profile:', error);
+      
+      // Show success message
+      const toast = (await import('react-hot-toast')).default;
+      toast.success('Profile updated successfully!');
+      
+    } catch (error: any) {
+      console.error('[AGENT PROFILE] Error updating profile:', error);
+      const toast = (await import('react-hot-toast')).default;
+      toast.error(error.message || 'Failed to update profile. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -382,46 +399,91 @@ const AgentProfile: React.FC<AgentProfileProps> = ({ user, onProfileUpdate }) =>
               {errors.phoneNumber && <p className="mt-1 text-sm text-red-600">{errors.phoneNumber}</p>}
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">City</label>
-              <input
-                type="text"
-                value={formData.city || ''}
-                onChange={(e) => handleInputChange('city', e.target.value)}
-                disabled={!editing}
-                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  errors.city ? 'border-red-300' : 'border-gray-300'
-                } ${!editing ? 'bg-gray-50' : ''}`}
-              />
-              {errors.city && <p className="mt-1 text-sm text-red-600">{errors.city}</p>}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">State</label>
-              <input
-                type="text"
-                value={formData.state || ''}
-                onChange={(e) => handleInputChange('state', e.target.value)}
-                disabled={!editing}
-                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  errors.state ? 'border-red-300' : 'border-gray-300'
-                } ${!editing ? 'bg-gray-50' : ''}`}
-              />
-              {errors.state && <p className="mt-1 text-sm text-red-600">{errors.state}</p>}
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Address</label>
-              <textarea
-                value={formData.address || ''}
-                onChange={(e) => handleInputChange('address', e.target.value)}
-                disabled={!editing}
-                rows={3}
-                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  !editing ? 'bg-gray-50' : ''
-                }`}
-              />
-            </div>
+            {editing ? (
+              <div className="md:col-span-2">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                  <p className="text-sm text-blue-800 mb-3">
+                    <strong>Location Information:</strong> Enter your zipcode (6 digits) to automatically fill all location details.
+                  </p>
+                  <LocationSelector
+                    formData={{
+                      zip_code: formData.zipCode || '',
+                      city: formData.city || '',
+                      state: formData.state || '',
+                      district: formData.district || '',
+                      mandal: formData.mandal || '',
+                      address: formData.address || '',
+                      latitude: formData.latitude || '',
+                      longitude: formData.longitude || ''
+                    }}
+                    setFormData={(newData) => {
+                      setFormData(prev => ({
+                        ...prev,
+                        zipCode: newData.zip_code,
+                        city: newData.city,
+                        state: newData.state,
+                        district: newData.district,
+                        mandal: newData.mandal,
+                        address: newData.address,
+                        latitude: newData.latitude,
+                        longitude: newData.longitude
+                      }));
+                    }}
+                    handleInputChange={(e) => {
+                      const { name, value } = e.target;
+                      const fieldMap: { [key: string]: string } = {
+                        'zip_code': 'zipCode',
+                        'city': 'city',
+                        'state': 'state',
+                        'district': 'district',
+                        'mandal': 'mandal',
+                        'address': 'address',
+                        'latitude': 'latitude',
+                        'longitude': 'longitude'
+                      };
+                      const mappedField = fieldMap[name] || name;
+                      handleInputChange(mappedField, value);
+                    }}
+                    required={false}
+                  />
+                </div>
+              </div>
+            ) : (
+              // Display mode - show all location fields
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Zipcode</label>
+                  <p className="text-gray-900">{formData.zipCode || 'Not provided'}</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">City</label>
+                  <p className="text-gray-900 flex items-center">
+                    <MapPin size={16} className="mr-2 text-gray-400" />
+                    {formData.city || 'Not provided'}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">State</label>
+                  <p className="text-gray-900">{formData.state || 'Not provided'}</p>
+                </div>
+                {formData.district && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">District</label>
+                    <p className="text-gray-900">{formData.district}</p>
+                  </div>
+                )}
+                {formData.mandal && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Mandal</label>
+                    <p className="text-gray-900">{formData.mandal}</p>
+                  </div>
+                )}
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Address</label>
+                  <p className="text-gray-900">{formData.address || 'Not provided'}</p>
+                </div>
+              </>
+            )}
 
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-2">Bio</label>

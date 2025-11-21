@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import toast from '@/components/ui/toast';
+import toast from 'react-hot-toast';
 
 interface SignInProps {
   onSuccess: () => void;

@@ -11,7 +11,7 @@ import {
   Eye,
   MessageSquare
 } from 'lucide-react';
-import { toast } from '@/components/ui/toast';
+import { toast } from 'react-hot-toast';
 import { pyFetch } from '@/utils/backend';
 
 interface PropertyAssignment {

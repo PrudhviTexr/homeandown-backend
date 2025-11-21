@@ -132,29 +132,40 @@ const PropertyMap: React.FC<PropertyMapProps> = ({
               return null;
             }
             
+            // Convert coordinates to numbers
+            const lat = p.latitude !== undefined && p.latitude !== null ? Number(p.latitude) : null;
+            const lng = p.longitude !== undefined && p.longitude !== null ? Number(p.longitude) : null;
+            
             return {
               ...p,
-              latitude: p.latitude !== undefined && p.latitude !== null ? Number(p.latitude) : undefined,
-              longitude: p.longitude !== undefined && p.longitude !== null ? Number(p.longitude) : undefined,
+              latitude: lat,
+              longitude: lng,
             };
           })
           .filter((p: any) => p !== null) // Remove null entries
-          .filter((p: any) => typeof p.latitude === 'number' && !isNaN(p.latitude) && typeof p.longitude === 'number' && !isNaN(p.longitude))
           .filter((p: any) => {
-            // Ensure properties have valid price/rent based on listing type
-            if (p.listing_type === 'SALE') {
-              return p.price && p.price > 0;
-            } else if (p.listing_type === 'RENT') {
-              return p.monthly_rent && p.monthly_rent > 0;
-            }
-            return true;
+            // Only filter out properties without valid coordinates
+            // Don't filter based on price/rent - show all properties with coordinates
+            return typeof p.latitude === 'number' && 
+                   !isNaN(p.latitude) && 
+                   p.latitude !== null &&
+                   typeof p.longitude === 'number' && 
+                   !isNaN(p.longitude) && 
+                   p.longitude !== null &&
+                   // Basic coordinate validation (latitude: -90 to 90, longitude: -180 to 180)
+                   p.latitude >= -90 && p.latitude <= 90 &&
+                   p.longitude >= -180 && p.longitude <= 180;
           });
           
         if (mapped.length > 0) {
+          console.log('[PropertyMap] Properties with valid coordinates:', mapped.length);
           setProperties(mapped);
-          setCenter([mapped[0].latitude, mapped[0].longitude]);
+          // Calculate center from all properties (average of all coordinates)
+          const avgLat = mapped.reduce((sum, p) => sum + p.latitude, 0) / mapped.length;
+          const avgLng = mapped.reduce((sum, p) => sum + p.longitude, 0) / mapped.length;
+          setCenter([avgLat, avgLng]);
         } else {
-          console.warn('No properties with valid coordinates found');
+          console.warn('[PropertyMap] No properties with valid coordinates found. Total properties received:', data?.length || 0);
           setProperties([]);
         }
       } catch (err) {
@@ -234,10 +245,23 @@ const PropertyMap: React.FC<PropertyMapProps> = ({
         />
 
         {/* Fit bounds component - adjusts view to include all markers */}
-        <FitBounds positions={(properties || [])
-          .map(p => [p.latitude, p.longitude] as [number, number])
-          .filter(pos => pos && pos[0] && pos[1] && !isNaN(pos[0]) && !isNaN(pos[1]))
-        } />
+        <FitBounds 
+          key={`fitbounds-${properties.length}`}
+          positions={(properties || [])
+            .map(p => [p.latitude, p.longitude] as [number, number])
+            .filter(pos => 
+              pos && 
+              Array.isArray(pos) && 
+              pos.length === 2 && 
+              typeof pos[0] === 'number' && 
+              typeof pos[1] === 'number' && 
+              !isNaN(pos[0]) && 
+              !isNaN(pos[1]) &&
+              pos[0] >= -90 && pos[0] <= 90 &&
+              pos[1] >= -180 && pos[1] <= 180
+            )
+          } 
+        />
 
         {(properties || []).map(p => {
           // Safety check for coordinates
@@ -294,16 +318,19 @@ const PropertyMap: React.FC<PropertyMapProps> = ({
 /* Helper component to fit map to markers */
 function FitBounds({ positions }: { positions: [number, number][] }) {
   const map = useMap();
+  const hasFittedRef = React.useRef(false);
 
   useEffect(() => {
     try {
       // Enhanced safety checks
       if (!positions || !Array.isArray(positions) || positions.length === 0) {
-        console.warn('[FitBounds] Invalid positions array:', positions);
+        if (positions.length === 0) {
+          console.log('[FitBounds] No positions provided, skipping fit bounds');
+        }
         return;
       }
 
-      // Filter out invalid positions
+      // Filter out invalid positions with coordinate range validation
       const validPositions = positions.filter(pos => 
         pos && 
         Array.isArray(pos) && 
@@ -311,19 +338,23 @@ function FitBounds({ positions }: { positions: [number, number][] }) {
         typeof pos[0] === 'number' && 
         typeof pos[1] === 'number' &&
         !isNaN(pos[0]) && 
-        !isNaN(pos[1])
+        !isNaN(pos[1]) &&
+        pos[0] >= -90 && pos[0] <= 90 &&  // Valid latitude range
+        pos[1] >= -180 && pos[1] <= 180  // Valid longitude range
       );
 
       if (validPositions.length === 0) {
-        console.warn('[FitBounds] No valid positions found');
+        console.warn('[FitBounds] No valid positions found after filtering');
         return;
       }
+
+      console.log('[FitBounds] Fitting bounds for', validPositions.length, 'markers');
 
       const latlngs = validPositions.map(p => {
         try {
           return L.latLng(p[0], p[1]);
         } catch (e) {
-          console.warn('[FitBounds] Invalid coordinates:', p);
+          console.warn('[FitBounds] Invalid coordinates:', p, e);
           return null;
         }
       }).filter((latlng): latlng is L.LatLng => latlng !== null);
@@ -333,16 +364,49 @@ function FitBounds({ positions }: { positions: [number, number][] }) {
         return;
       }
 
-      const bounds = L.latLngBounds(latlngs);
-      
-      // If only one marker, set a default zoom/center
-      if (latlngs.length === 1) {
-        map.setView(latlngs[0], 12);
-      } else {
-        map.fitBounds(bounds.pad(0.2));
+      // Wait for map to be ready
+      if (!map || !map.getContainer()) {
+        console.log('[FitBounds] Map not ready yet, will retry');
+        const timeout = setTimeout(() => {
+          if (map && map.getContainer()) {
+            fitMapToBounds();
+          }
+        }, 100);
+        return () => clearTimeout(timeout);
       }
+
+      const fitMapToBounds = () => {
+        try {
+          const bounds = L.latLngBounds(latlngs);
+          
+          // If only one marker, set a default zoom/center
+          if (latlngs.length === 1) {
+            map.setView(latlngs[0], 13);
+            console.log('[FitBounds] Single marker, centered at:', latlngs[0].lat, latlngs[0].lng);
+          } else {
+            // Fit bounds with padding
+            map.fitBounds(bounds.pad(0.1), {
+              maxZoom: 15, // Don't zoom in too much
+              padding: [20, 20] // Add padding around bounds
+            });
+            console.log('[FitBounds] Fitted bounds for', latlngs.length, 'markers');
+          }
+          hasFittedRef.current = true;
+        } catch (e) {
+          console.error('[FitBounds] Error fitting bounds:', e);
+        }
+      };
+
+      // Use a small delay to ensure map is fully initialized
+      const timeout = setTimeout(() => {
+        fitMapToBounds();
+      }, 100);
+
+      return () => {
+        clearTimeout(timeout);
+      };
     } catch (e) {
-      console.error('[FitBounds] Error fitting bounds:', e);
+      console.error('[FitBounds] Error in useEffect:', e);
     }
   }, [positions, map]);
 

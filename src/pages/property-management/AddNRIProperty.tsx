@@ -3,7 +3,8 @@ import { Plus, Home, MapPin, DollarSign, FileText, Upload } from 'lucide-react';
 import Navbar from '../../components/Navbar';
 import Footer from '../../components/Footer';
 import { toast } from 'react-hot-toast';
-import LocationSelectorManual from '../../components/LocationSelectorManual';
+import LocationSelector from '../../components/LocationSelector';
+import MapPicker from '../../components/MapPicker';
 import { uploadMultipleImages } from '../../utils/imageUpload';
 
 const AddNRIProperty: React.FC = () => {
@@ -15,7 +16,11 @@ const AddNRIProperty: React.FC = () => {
     address: '',
     city: '',
     state: '',
+    district: '',
+    mandal: '',
     zip_code: '',
+    latitude: '',
+    longitude: '',
     bedrooms: '',
     bathrooms: '',
     area_sqft: '',
@@ -27,12 +32,6 @@ const AddNRIProperty: React.FC = () => {
     amenities: [] as string[],
     management_type: 'FULL_SERVICE',
     images: [] as File[]
-  });
-
-  const [locationData, setLocationData] = useState({
-    state: '',
-    district: '',
-    mandal: ''
   });
 
   const [loading, setLoading] = useState(false);
@@ -91,17 +90,8 @@ const AddNRIProperty: React.FC = () => {
     }));
   };
 
-  const handleLocationChange = (field: string, value: string) => {
-    setLocationData(prev => ({
-      ...prev,
-      [field]: value
-    }));
-    
-    // Update form data with location info
-    if (field === 'state') {
-      setFormData(prev => ({ ...prev, state: value }));
-    }
-  };
+  // Location handling is now done by LocationSelector component
+  // Removed handleLocationChange - LocationSelector handles it internally
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -119,7 +109,7 @@ const AddNRIProperty: React.FC = () => {
     try {
       const propertyData = {
         ...formData,
-        ...locationData,
+        // Location data is now in formData (state, district, mandal)
         owner_id: localStorage.getItem('user_id'),
         added_by: localStorage.getItem('user_id'),
         listing_type: 'RENT',
@@ -192,11 +182,7 @@ const AddNRIProperty: React.FC = () => {
           management_type: 'FULL_SERVICE',
           images: []
         });
-        setLocationData({
-          state: '',
-          district: '',
-          mandal: ''
-        });
+        // Location data is now handled by LocationSelector component
       } else {
         const errorData = await response.json();
         toast.error(errorData.detail || 'Failed to add property. Please try again.');
@@ -273,65 +259,59 @@ const AddNRIProperty: React.FC = () => {
               </div>
             </div>
 
-            {/* Location Information */}
+            {/* Location Information - Using LocationSelector for consistency */}
             <div className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
                 <MapPin className="w-5 h-5 mr-2 text-[#90C641]" />
                 Location Details
               </h2>
               
-              {/* Location Selector */}
-              <div className="mb-6">
-                <LocationSelectorManual
-                  selectedState={locationData.state}
-                  selectedDistrict={locationData.district}
-                  selectedMandal={locationData.mandal}
-                  onStateChange={(value) => handleLocationChange('state', value)}
-                  onDistrictChange={(value) => handleLocationChange('district', value)}
-                  onMandalChange={(value) => handleLocationChange('mandal', value)}
-                  required={true}
-                />
-              </div>
+              {/* Location Selector - Same as agent/admin forms */}
+              <LocationSelector
+                key={`location-${formData.property_type}`}
+                formData={formData}
+                setFormData={(fn) => {
+                  if (typeof fn === 'function') {
+                    setFormData(fn);
+                  } else {
+                    setFormData(fn);
+                  }
+                }}
+                handleInputChange={handleInputChange}
+                required
+              />
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="md:col-span-2">
-                  <label className="block text-gray-700 font-medium mb-2">Address*</label>
-                  <input
-                    type="text"
-                    name="address"
-                    value={formData.address}
-                    onChange={handleInputChange}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#90C641] focus:border-[#90C641]"
-                    placeholder="Full address of the property"
-                    required
+              {/* Map Picker - Show when pincode is entered */}
+              {formData.zip_code && formData.zip_code.length === 6 && /^\d{6}$/.test(formData.zip_code) && (
+                <div className="mt-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">📍 Pinpoint Property Location on Map</h3>
+                  <MapPicker
+                    latitude={formData.latitude || ''}
+                    longitude={formData.longitude || ''}
+                    zipCode={formData.zip_code}
+                    onLocationChange={(lat, lng) => {
+                      setFormData(prev => ({
+                        ...prev,
+                        latitude: lat,
+                        longitude: lng
+                      }));
+                    }}
+                    height="400px"
+                    showReverseGeocode={true}
+                    onAddressUpdate={(address) => {
+                      // Optionally update address field when marker is moved
+                      if (address && !formData.address) {
+                        setFormData(prev => ({ ...prev, address }));
+                      }
+                    }}
                   />
+                  <p className="mt-2 text-sm text-gray-600">
+                    💡 <strong>Instructions:</strong> The map is centered on your pincode. 
+                    <strong> Click anywhere on the map</strong> or <strong>drag the marker</strong> to set the exact property location. 
+                    Coordinates will be automatically saved.
+                  </p>
                 </div>
-                
-                <div>
-                  <label className="block text-gray-700 font-medium mb-2">City*</label>
-                  <input
-                    type="text"
-                    name="city"
-                    value={formData.city}
-                    onChange={handleInputChange}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#90C641] focus:border-[#90C641]"
-                    placeholder="Enter specific area/locality"
-                    required
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-gray-700 font-medium mb-2">ZIP Code</label>
-                  <input
-                    type="text"
-                    name="zip_code"
-                    value={formData.zip_code}
-                    onChange={handleInputChange}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#90C641] focus:border-[#90C641]"
-                    placeholder="ZIP Code"
-                  />
-                </div>
-              </div>
+              )}
             </div>
 
             {/* Property Details */}

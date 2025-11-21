@@ -55,43 +55,44 @@ const Settings: React.FC<SettingsProps> = ({
   const handleSaveChanges = async () => {
     setSaving(true);
     try {
-      // Update profile via Admin API
+      // Update profile via User API instead of Admin API
       const { pyFetch } = await import('@/utils/backend');
-      await pyFetch(`/api/admin/users/${user.id}/profile`, {
-        method: 'POST',
-        body: JSON.stringify({
-          education_background: agentProfile.education_background,
-          specialization: agentProfile.specialization,
-          bio: agentProfile.bio,
-        }),
-        useApiKey: true,
-      });
-
-      if (accountVerified) {
-        await pyFetch(`/api/admin/users/${user.id}/bank`, {
-          method: 'POST',
-          body: JSON.stringify({
-            bank_account_number: agentProfile.bank_account_number,
-            ifsc_code: agentProfile.ifsc_code,
-          }),
-          useApiKey: true,
-        });
-      }
-
-      await pyFetch(`/api/admin/users/${user.id}`, {
+      
+      // Update basic profile information
+      await pyFetch('/api/users/profile', {
         method: 'PATCH',
         body: JSON.stringify({
           phone_number: agentProfile.phone_number,
           city: agentProfile.city,
           state: agentProfile.state,
+          bio: agentProfile.bio,
+          // Add other profile fields if needed
         }),
-        useApiKey: true,
+        useApiKey: false,
       });
+
+      // Handle bank details separately if verified
+      if (accountVerified && agentProfile.bank_account_number && agentProfile.ifsc_code) {
+        try {
+          // For bank details, we might still need admin API or a separate endpoint
+          await pyFetch(`/api/admin/users/${user.id}/bank`, {
+            method: 'POST',
+            body: JSON.stringify({
+              bank_account_number: agentProfile.bank_account_number,
+              ifsc_code: agentProfile.ifsc_code,
+            }),
+            useApiKey: true,
+          });
+        } catch (bankError) {
+          console.warn('Bank details update failed:', bankError);
+          // Don't fail the entire operation for bank details
+        }
+      }
 
       toast.success('Profile updated successfully!');
     } catch (err) {
       console.error('Error updating profile:', err);
-      toast.error('Failed to update profile');
+      toast.error('Failed to update profile. Please try again.');
     } finally {
       setSaving(false);
     }

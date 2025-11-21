@@ -37,6 +37,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import ApiService from '@/services/api';
 import { formatIndianCurrency } from '@/utils/currency';
 import toast from 'react-hot-toast';
+import LocationService from '@/services/locationService';
+import { pyFetch } from '@/utils/backend';
 
 // Leaflet marker fix
 delete (Icon.Default.prototype as any)._getIconUrl;
@@ -59,6 +61,9 @@ const PropertyDetails: React.FC = () => {
   const [showTourModal, setShowTourModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'photos' | 'videos'>('photos');
   const [inquiryLoading, setInquiryLoading] = useState(false);
+  const [mapCoordinates, setMapCoordinates] = useState<{ lat: number; lng: number } | null>(null);
+  const [mapLoading, setMapLoading] = useState(false);
+  const [agentInfo, setAgentInfo] = useState<any>(null);
 
   const nextImage = () => {
     if (property?.images) {
@@ -118,6 +123,12 @@ const PropertyDetails: React.FC = () => {
         };
 
         setProperty(enhancedProperty);
+        
+        // Fetch agent information if available
+        await fetchAgentInfo(enhancedProperty);
+        
+        // Fetch coordinates if not available but pincode exists
+        await fetchCoordinatesForMap(enhancedProperty);
       }
     } catch (error) {
       console.error('Error fetching property details:', error);
@@ -125,6 +136,95 @@ const PropertyDetails: React.FC = () => {
       setProperty(null);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchAgentInfo = async (propertyData: any) => {
+    // Check if agent info is already in property data
+    if (propertyData.assigned_agent && propertyData.assigned_agent.id) {
+      setAgentInfo(propertyData.assigned_agent);
+      console.log('[PropertyDetails] Using agent info from property data');
+      return;
+    }
+    
+    // Try to fetch agent info using agent_id or assigned_agent_id
+    const agentId = propertyData.assigned_agent_id || propertyData.agent_id;
+    if (agentId) {
+      try {
+        console.log('[PropertyDetails] Fetching agent info for agent_id:', agentId);
+        const agentData = await pyFetch(`/api/users/${agentId}`, {
+          method: 'GET',
+          useApiKey: false
+        });
+        if (agentData && agentData.user_type === 'agent') {
+          setAgentInfo(agentData);
+          console.log('[PropertyDetails] Fetched agent info:', agentData);
+        } else {
+          console.warn('[PropertyDetails] User is not an agent:', agentData?.user_type);
+        }
+      } catch (error) {
+        console.error('[PropertyDetails] Error fetching agent info:', error);
+      }
+    } else {
+      console.log('[PropertyDetails] No agent assigned to this property');
+    }
+  };
+
+  const fetchCoordinatesForMap = async (propertyData: any) => {
+    // Check if coordinates already exist and are valid
+    let lat = propertyData.latitude ? parseFloat(String(propertyData.latitude)) : null;
+    let lng = propertyData.longitude ? parseFloat(String(propertyData.longitude)) : null;
+    
+    // Validate coordinates are numbers and within valid ranges
+    if (lat !== null && lng !== null && !isNaN(lat) && !isNaN(lng)) {
+      // Ensure coordinates are within valid ranges
+      if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+        // Valid coordinates exist, use them
+        setMapCoordinates({ lat, lng });
+        console.log('[PropertyDetails] Using existing coordinates:', { lat, lng });
+        return;
+      } else {
+        console.warn('[PropertyDetails] Coordinates out of valid range:', { lat, lng });
+        // Reset invalid coordinates
+        lat = null;
+        lng = null;
+      }
+    }
+    
+    // If no valid coordinates, try to fetch from pincode
+    const pincode = propertyData.zip_code || propertyData.pincode || propertyData.zipcode;
+    if (pincode && pincode.length >= 6) {
+      setMapLoading(true);
+      try {
+        console.log('[PropertyDetails] Fetching coordinates for pincode:', pincode);
+        const locationService = LocationService.getInstance();
+        const coords = await locationService.getCoordinatesFromPincode(pincode);
+        
+        if (coords && coords.lat && coords.lng && !isNaN(coords.lat) && !isNaN(coords.lng)) {
+          // Validate fetched coordinates
+          if (coords.lat >= -90 && coords.lat <= 90 && coords.lng >= -180 && coords.lng <= 180) {
+            setMapCoordinates(coords);
+            console.log('[PropertyDetails] Fetched coordinates from pincode:', coords);
+          } else {
+            console.warn('[PropertyDetails] Fetched coordinates out of range:', coords);
+            setMapCoordinates({ lat: 17.3850, lng: 78.4867 });
+          }
+        } else {
+          console.warn('[PropertyDetails] Could not fetch coordinates for pincode:', pincode);
+          // Set default coordinates (Hyderabad) as fallback
+          setMapCoordinates({ lat: 17.3850, lng: 78.4867 });
+        }
+      } catch (error) {
+        console.error('[PropertyDetails] Error fetching coordinates:', error);
+        // Set default coordinates (Hyderabad) as fallback
+        setMapCoordinates({ lat: 17.3850, lng: 78.4867 });
+      } finally {
+        setMapLoading(false);
+      }
+    } else {
+      // No pincode available, use default coordinates
+      console.warn('[PropertyDetails] No pincode available, using default coordinates');
+      setMapCoordinates({ lat: 17.3850, lng: 78.4867 });
     }
   };
 
@@ -158,49 +258,103 @@ const PropertyDetails: React.FC = () => {
     console.log('[PropertyDetails] User:', user);
     console.log('[PropertyDetails] Property:', property);
     
+    if (!property) {
+      console.log('[PropertyDetails] No property data');
+      toast.error('Property information is not available. Please refresh the page.');
+      return;
+    }
+
+    // If user is not logged in, show auth modal
     if (!user) {
       console.log('[PropertyDetails] No user, showing auth modal');
       setShowAuthModal(true);
       return;
     }
 
-    if (!property) {
-      console.log('[PropertyDetails] No property data');
+    // Validate required user information
+    if (!user.email) {
+      toast.error('Email is required. Please update your profile.');
       return;
     }
 
     // Validate phone number - use a default if not available
-    const phoneNumber = user.phone_number || user.phone || '1234567890';
+    const phoneNumber = user.phone_number || user.phone || '';
     if (!phoneNumber || phoneNumber.trim() === '') {
       toast.error('Phone number is required. Please update your profile with a valid phone number.');
       return;
     }
 
+    const userName = user.first_name && user.last_name 
+      ? `${user.first_name} ${user.last_name}`.trim()
+      : user.first_name || user.last_name || user.email?.split('@')[0] || 'User';
+
     console.log('[PropertyDetails] Using phone number:', phoneNumber);
+    console.log('[PropertyDetails] User name:', userName);
 
     console.log('[PropertyDetails] Starting inquiry creation...');
     setInquiryLoading(true);
     try {
-      const result = await ApiService.createInquiry({
+      const inquiryData = {
         property_id: property.id,
-        name: `${user.first_name} ${user.last_name}`,
+        name: userName,
         email: user.email,
         phone: phoneNumber,
         message: `Hi, I'm interested in this property: ${property.title}. Please contact me with more details.`,
         inquiry_type: 'general'
-      });
+      };
 
-      // Show success notification with details from response
-      const successMessage = result?.message || 'Your inquiry has been sent successfully! The agent will contact you soon.';
-      toast.success(`🎉 ${successMessage}`, {
-        duration: 6000, // Show for 6 seconds
-      });
+      console.log('[PropertyDetails] Sending inquiry with data:', inquiryData);
+      const result = await ApiService.createInquiry(inquiryData);
+
+      console.log('[PropertyDetails] Inquiry API response:', result);
+
+      // Check if inquiry was successful
+      if (result?.success === false || result?.error || result?.detail) {
+        const errorMsg = result?.error || result?.detail || 'Failed to send inquiry. Please try again.';
+        toast.error(`❌ ${errorMsg}`, {
+          duration: 6000,
+        });
+        setInquiryLoading(false);
+        return;
+      }
+
+      // Get inquiry ID from result
+      const inquiryId = result?.id || result?.inquiry?.id;
+      
+      // Show immediate success message with confirmation
+      toast.success(
+        (t) => (
+          <div className="flex flex-col">
+            <div className="font-semibold">✅ Request Sent!</div>
+            <div className="text-sm mt-1">
+              Your inquiry for <strong>{property.title}</strong> has been submitted successfully.
+            </div>
+            <div className="text-xs mt-1 text-gray-600">
+              The agent will contact you soon.
+            </div>
+            {inquiryId && (
+              <div className="text-xs mt-1 text-gray-500">
+                Inquiry ID: {inquiryId.substring(0, 8)}...
+              </div>
+            )}
+          </div>
+        ),
+        {
+          duration: 6000,
+          icon: '🎉',
+        }
+      );
       console.log('[PropertyDetails] Inquiry sent successfully:', result);
       
-      // Navigate to My Inquiries page to see the inquiry details
-      setTimeout(() => {
-        window.location.href = '/my-inquiries';
-      }, 1500);
+      // Reset loading state immediately
+      setInquiryLoading(false);
+      
+      // Navigate to My Inquiries page to see the inquiry details (only if user is logged in)
+      if (user) {
+        setTimeout(() => {
+          window.location.href = '/my-inquiries';
+        }, 2000);
+      }
     } catch (error: any) {
       console.error('[PropertyDetails] Error sending inquiry:', error);
       
@@ -1015,27 +1169,51 @@ const PropertyDetails: React.FC = () => {
               )}
 
               {/* Map */}
-              {property.latitude && property.longitude && (
+              {mapCoordinates && (
                 <div className="bg-white rounded-lg p-4 md:p-6 shadow-lg">
                   <h3 className="text-lg font-semibold text-[#3B5998] mb-4">Location</h3>
-                  <div className="h-48 md:h-64 rounded-lg overflow-hidden">
-                    <MapContainer
-                      center={[parseFloat(String(property.latitude)) || 17.3850, parseFloat(String(property.longitude)) || 78.4867]}
-                      zoom={15}
-                      style={{ height: '100%', width: '100%' }}
-                      key={`${property.latitude}-${property.longitude}`}
-                    >
-                      <TileLayer 
-                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                      />
-                      <Marker position={[parseFloat(String(property.latitude)) || 17.3850, parseFloat(String(property.longitude)) || 78.4867]}>
-                        <Popup>{property.title || 'Property Location'}</Popup>
-                      </Marker>
-                    </MapContainer>
-                  </div>
+                  {mapLoading ? (
+                    <div className="h-48 md:h-64 rounded-lg overflow-hidden bg-gray-100 flex items-center justify-center">
+                      <div className="text-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
+                        <p className="text-sm text-gray-600">Loading map location...</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="h-48 md:h-64 rounded-lg overflow-hidden">
+                      <MapContainer
+                        center={[mapCoordinates.lat, mapCoordinates.lng]}
+                        zoom={15}
+                        style={{ height: '100%', width: '100%' }}
+                        key={`${mapCoordinates.lat}-${mapCoordinates.lng}`}
+                      >
+                        <TileLayer 
+                          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                        />
+                        <Marker position={[mapCoordinates.lat, mapCoordinates.lng]}>
+                          <Popup>
+                            <div>
+                              <strong>{property.title || 'Property Location'}</strong>
+                              {property.address && (
+                                <div className="text-sm mt-1">{property.address}</div>
+                              )}
+                              {(property.zip_code || property.pincode) && (
+                                <div className="text-xs text-gray-500 mt-1">
+                                  Pincode: {property.zip_code || property.pincode}
+                                </div>
+                              )}
+                            </div>
+                          </Popup>
+                        </Marker>
+                      </MapContainer>
+                    </div>
+                  )}
                   <p className="text-sm text-gray-600 mt-2">
-                    📍 {property.address || 'Location coordinates: ' + property.latitude + ', ' + property.longitude}
+                    📍 {property.address || property.city || 'Location'} 
+                    {property.zip_code && ` - ${property.zip_code}`}
+                    {property.pincode && !property.zip_code && ` - ${property.pincode}`}
+                    {!property.address && !property.city && ` (${mapCoordinates.lat.toFixed(6)}, ${mapCoordinates.lng.toFixed(6)})`}
                   </p>
                 </div>
               )}
@@ -1173,11 +1351,42 @@ const PropertyDetails: React.FC = () => {
                   inquiryLoading={inquiryLoading}
                 />
 
-                {/* Owner Information */}
-                {property.owner_id && (
-                  <div className="mt-6">
-                    <h3 className="text-xl font-semibold text-[#162e5a] mb-4">Owner Information</h3>
-                    <UserInfo userId={property.owner_id} />
+                {/* Agent Information */}
+                {agentInfo && (
+                  <div className="mt-6 bg-blue-50 border-2 border-blue-200 rounded-lg p-6">
+                    <h3 className="text-xl font-semibold text-[#162e5a] mb-4">Contact Agent</h3>
+                    <div className="flex items-start space-x-4">
+                      <div className="p-3 bg-blue-200 rounded-full">
+                        <User className="w-8 h-8 text-blue-700" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-bold text-lg text-gray-900">
+                          {agentInfo.first_name} {agentInfo.last_name}
+                        </p>
+                        {agentInfo.email && (
+                          <p className="text-gray-600 flex items-center gap-2 mt-2">
+                            <Mail className="w-4 h-4" />
+                            <a href={`mailto:${agentInfo.email}`} className="hover:text-blue-600">
+                              {agentInfo.email}
+                            </a>
+                          </p>
+                        )}
+                        {agentInfo.phone_number && (
+                          <p className="text-gray-600 flex items-center gap-2 mt-2">
+                            <Phone className="w-4 h-4" />
+                            <a href={`tel:${agentInfo.phone_number}`} className="hover:text-blue-600">
+                              {agentInfo.phone_number}
+                            </a>
+                          </p>
+                        )}
+                        {agentInfo.city && (
+                          <p className="text-gray-600 flex items-center gap-2 mt-2">
+                            <MapPin className="w-4 h-4" />
+                            {agentInfo.city}{agentInfo.state && `, ${agentInfo.state}`}
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

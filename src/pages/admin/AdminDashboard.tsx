@@ -37,7 +37,7 @@ import CommissionPayments from '@/components/admin/CommissionPayments';
 import AgentEarnings from '@/components/admin/AgentEarnings';
 import UnassignedPropertiesManagement from '@/components/admin/UnassignedPropertiesManagement';
 import NotificationsPage from './NotificationsPage';
-import AdvancedAnalyticsDashboard from '@/components/admin/AdvancedAnalyticsDashboard';
+import AdvancedAnalyticsDashboard from '@/components/admin/AdvancedAnalytics';
 
 const AdminDashboard: React.FC = () => {
   const { user, signOut, loading: authLoading } = useAuth();

@@ -113,10 +113,12 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
           zip_code: zipcode,
           // DO NOT auto-populate address - it's a user entry field
           // address field should remain unchanged (user will type it)
-          // Set coordinates from map_data (for map centering on pincode)
-          latitude: lat || (isNewZipcode ? '' : (prev.latitude || '')),
-          longitude: lng || (isNewZipcode ? '' : (prev.longitude || ''))
+          // Set coordinates from map_data (ALWAYS update coordinates from pincode)
+          latitude: lat || '',
+          longitude: lng || ''
         }));
+        
+        console.log('[LocationSelector] Updated form with coordinates:', { lat, lng });
         
         // Update local zipcode state immediately
         setLocalZipcode(zipcode);
@@ -405,23 +407,28 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
   const [selectedCity, setSelectedCity] = useState('');
 
   // Sync local zipcode with formData when it changes externally (but preserve during typing)
+  // Use a ref to track if user is currently typing to prevent interference
+  const isTypingRef = useRef(false);
+  
   useEffect(() => {
-    // Always sync if formData has a zipcode value (preserves after auto-population)
-    // This ensures zipcode is displayed correctly
-    if (formData?.zip_code) {
-      // Sync if formData has zipcode (preserves value after auto-population)
-      // Always update to ensure display, even if values appear the same
-      if (formData.zip_code !== localZipcode) {
-        console.log('[LocationSelector] Syncing zipcode from formData:', formData.zip_code);
-        setLocalZipcode(formData.zip_code);
-      }
-    } else if (!formData?.zip_code && localZipcode && localZipcode.length > 0) {
-      // Only clear if formData is explicitly empty AND localZipcode has a value
-      // This allows clearing when formData is reset
-      setLocalZipcode('');
+    // Only sync if user is NOT currently typing (prevents interference with input)
+    if (isTypingRef.current) {
+      return;
     }
-    // Don't clear localZipcode if formData is empty but user is typing
-  }, [formData?.zip_code]);
+    
+    // Sync when formData.zip_code changes externally (e.g., form reset, edit mode)
+    // Only sync if the values are actually different to prevent loops
+    const formZipcode = formData?.zip_code || '';
+    if (formZipcode !== localZipcode) {
+      // Only sync if formData has a value OR if localZipcode is empty and formData is also empty
+      // This allows clearing the input
+      if (formZipcode || (!formZipcode && !localZipcode)) {
+        console.log('[LocationSelector] Syncing zipcode from formData:', formZipcode);
+        setLocalZipcode(formZipcode);
+        previousZipcodeLengthRef.current = formZipcode.length;
+      }
+    }
+  }, [formData?.zip_code, localZipcode]);
   
   // Initialize local zipcode from formData on mount
   useEffect(() => {
@@ -440,26 +447,36 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
       const newDistrict = formData.district || '';
       const newMandal = formData.mandal || '';
       const newCity = formData.city || '';
-      
-      // Only update state if value changed
+
+      // Batch all state updates together to prevent multiple re-renders
+      let hasChanges = false;
+      const updates: any = {};
+
       if (selectedState !== newState) {
-        setSelectedState(newState);
+        updates.state = newState;
+        hasChanges = true;
       }
       if (selectedDistrict !== newDistrict) {
-        setSelectedDistrict(newDistrict);
+        updates.district = newDistrict;
+        hasChanges = true;
       }
       if (selectedMandal !== newMandal) {
-        setSelectedMandal(newMandal);
+        updates.mandal = newMandal;
+        hasChanges = true;
       }
       if (selectedCity !== newCity) {
-        setSelectedCity(newCity);
+        updates.city = newCity;
+        hasChanges = true;
       }
-    } else {
-      // Reset all selections when formData is empty/null
-      setSelectedState('');
-      setSelectedDistrict('');
-      setSelectedMandal('');
-      setSelectedCity('');
+
+      if (hasChanges) {
+        startTransition(() => {
+          if (updates.state !== undefined) setSelectedState(updates.state);
+          if (updates.district !== undefined) setSelectedDistrict(updates.district);
+          if (updates.mandal !== undefined) setSelectedMandal(updates.mandal);
+          if (updates.city !== undefined) setSelectedCity(updates.city);
+        });
+      }
     }
     // Only depend on location fields, NOT on zip_code or entire formData
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -585,12 +602,42 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
               // Only allow numeric input, max 6 digits
               const numericValue = value.replace(/\D/g, '').slice(0, 6);
               
-              // Update local state only - NO formData update, NO API calls during typing
+              // Mark that user is typing to prevent useEffect from interfering
+              isTypingRef.current = true;
+              
+              // Update local state immediately - allows clearing
               setLocalZipcode(numericValue);
+              
+              // Update formData immediately so it can be cleared
+              setFormData((prev: any) => ({
+                ...prev,
+                zip_code: numericValue
+              }));
               
               previousZipcodeLengthRef.current = numericValue.length;
               
-              // DO NOT update formData here - wait for blur or 6 digits + Enter
+              // Clear coordinates and location fields if zipcode is cleared
+              if (numericValue.length < 6) {
+                setFormData((prev: any) => ({
+                  ...prev,
+                  zip_code: numericValue,
+                  latitude: '',
+                  longitude: '',
+                  state: '',
+                  district: '',
+                  mandal: '',
+                  city: ''
+                }));
+                // Reset last processed zipcode when cleared
+                lastProcessedZipcodeRef.current = '';
+              }
+              
+              // Reset typing flag after a short delay
+              setTimeout(() => {
+                isTypingRef.current = false;
+              }, 100);
+              
+              // DO NOT trigger API calls during typing - wait for blur or 6 digits + Enter
             }}
             onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
               // If Enter is pressed and we have 6 digits, trigger fetch immediately
@@ -606,6 +653,9 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
               }
             }}
             onBlur={(e: React.FocusEvent<HTMLInputElement>) => {
+              // Mark that user is no longer typing
+              isTypingRef.current = false;
+              
               // Update formData with zipcode value
               const zipcode = e.target.value.replace(/\D/g, '').slice(0, 6);
               
@@ -616,14 +666,20 @@ const LocationSelector: React.FC<LocationSelectorProps> = ({
               }));
               
               // Clear dependent fields if zipcode becomes less than 6 digits
-              if (zipcode.length < 6 && previousZipcodeLengthRef.current === 6) {
+              if (zipcode.length < 6) {
                 setFormData((prev: any) => ({
                   ...prev,
+                  zip_code: zipcode,
                   state: '', district: '', mandal: '', city: '',
                   latitude: '', longitude: ''
                 }));
                 // Reset last processed zipcode when cleared
                 lastProcessedZipcodeRef.current = '';
+                // Clear selected dropdowns
+                setSelectedState('');
+                setSelectedDistrict('');
+                setSelectedMandal('');
+                setSelectedCity('');
               } else if (zipcode.length === 6 && /^\d{6}$/.test(zipcode)) {
                 // Only trigger auto-population on blur if we have exactly 6 digits
                 // This prevents multiple calls during typing

@@ -171,7 +171,9 @@ async def upload_file(
         
         if result_doc:
             # Ensure the response has a 'url' key for frontend compatibility
-            return {"success": True, "id": result_doc.get('id'), "url": result_doc.get('file_path')}
+            file_url = result_doc.get('file_path') or result_doc.get('url')
+            print(f"[UPLOAD] Returning URL to frontend: {file_url}")
+            return {"success": True, "id": result_doc.get('id'), "url": file_url}
         else:
             raise HTTPException(status_code=500, detail="Failed to get document details after upload.")
 

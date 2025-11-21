@@ -233,12 +233,14 @@ export class ApiService {
   static async createBooking(bookingData: any) {
     try {
       console.log('[API] 📅 Creating booking...');
-      const response = await pyFetch('/api/bookings', {
+      console.log('[API] Booking data:', bookingData);
+      // Use /api/records/bookings endpoint (records router is mounted at /api/records)
+      const response = await pyFetch('/api/records/bookings', {
         method: 'POST',
         body: JSON.stringify(bookingData),
-        useApiKey: true  // Require authentication for bookings
+        useApiKey: false  // Allow bookings without API key (uses auth token if available)
       });
-      console.log('[API] ✅ Booking created');
+      console.log('[API] ✅ Booking created:', response);
       return response;
     } catch (error) {
       console.error('[API] ❌ Create booking error:', error);
@@ -249,14 +251,15 @@ export class ApiService {
   static async getUserBookings() {
     try {
       console.log('[API] 📅 Getting user bookings...');
-      const response = await pyFetch('/api/bookings', { 
+      // Use /api/records/bookings endpoint
+      const response = await pyFetch('/api/records/bookings', { 
         method: 'GET',
         useApiKey: false 
       });
-      console.log('[API] ✅ Bookings received');
+      console.log('[API] ✅ User bookings received');
       return response;
     } catch (error) {
-      console.error('[API] ❌ Get bookings error:', error);
+      console.error('[API] ❌ Get user bookings error:', error);
       throw error;
     }
   }

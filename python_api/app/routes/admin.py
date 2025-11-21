@@ -601,6 +601,12 @@ async def create_property(payload: PropertyRequest, _=Depends(require_api_key)):
         property_data = payload.dict()
         property_data["id"] = str(uuid.uuid4())
         property_data["created_at"] = dt.datetime.utcnow().isoformat()
+        
+        # Ensure properties created via admin also require approval
+        property_data.setdefault("status", "pending")
+        property_data.setdefault("verified", False)
+        property_data.setdefault("featured", False)
+        
         return await db.insert("properties", property_data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

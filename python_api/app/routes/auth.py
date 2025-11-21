@@ -995,11 +995,11 @@ async def request_additional_role(request: Request) -> Dict[str, Any]:
                         html=user_email_html
                     )
                     if email_result.get("status") == "sent":
-                        print(f"[AUTH] ✅ Role request confirmation email sent to user: {user['email']} via {email_result.get('provider', 'unknown')}")
+                        print(f"[AUTH] Role request confirmation email sent to user: {user['email']} via {email_result.get('provider', 'unknown')}")
                     else:
-                        print(f"[AUTH] ⚠️ Role request confirmation email may have failed for user {user['email']}: {email_result.get('error', 'Unknown error')}")
+                        print(f"[AUTH] Role request confirmation email may have failed for user {user['email']}: {email_result.get('error', 'Unknown error')}")
                 except Exception as email_error:
-                    print(f"[AUTH] ❌ Failed to send role request email to user: {email_error}")
+                    print(f"[AUTH] Failed to send role request email to user: {email_error}")
                 
                 # Send notification to admins
                 try:
@@ -1070,11 +1070,11 @@ async def request_additional_role(request: Request) -> Dict[str, Any]:
                                 html=admin_email_html
                             )
                             if email_result.get("status") == "sent":
-                                print(f"[AUTH] ✅ Role request notification sent to admin: {admin['email']} via {email_result.get('provider', 'unknown')}")
+                                print(f"[AUTH] Role request notification sent to admin: {admin['email']} via {email_result.get('provider', 'unknown')}")
                             else:
-                                print(f"[AUTH] ⚠️ Role request notification may have failed for admin {admin['email']}: {email_result.get('error', 'Unknown error')}")
+                                print(f"[AUTH] Role request notification may have failed for admin {admin['email']}: {email_result.get('error', 'Unknown error')}")
                         except Exception as admin_email_error:
-                            print(f"[AUTH] ❌ Failed to send admin notification: {admin_email_error}")
+                            print(f"[AUTH] Failed to send admin notification: {admin_email_error}")
                             
                 except Exception as admin_notify_error:
                     print(f"[AUTH] Failed to send admin notifications: {admin_notify_error}")
@@ -1123,8 +1123,16 @@ async def forgot_password(request: Request) -> Dict[str, Any]:
         # Check if user exists
         users = await db.select("users", filters={"email": email})
         if not users:
-            # Return specific error for user not found
-            raise HTTPException(status_code=404, detail="No user found with this email address. Please sign up for a new account.")
+            # Return specific error for user not found with better messaging
+            user_type_display = user_type.title() if user_type else "User"
+            raise HTTPException(
+                status_code=404, 
+                detail={
+                    "message": f"No {user_type_display.lower()} account found with this email address.",
+                    "suggestion": "Please check your email address or sign up for a new account.",
+                    "action": "signup"
+                }
+            )
         
         user = users[0]
         user_id = user["id"]
@@ -1135,7 +1143,13 @@ async def forgot_password(request: Request) -> Dict[str, Any]:
             print(f"[AUTH] Role mismatch: User is {actual_user_type}, but {user_type} was requested")
             raise HTTPException(
                 status_code=404, 
-                detail=f"No {user_type} account found with this email address. Please sign up for a new account."
+                detail={
+                    "message": f"No {user_type} account found with this email address.",
+                    "suggestion": f"This email is registered as a {actual_user_type}. Please use the {actual_user_type} login page or sign up for a new {user_type} account.",
+                    "action": "wrong_user_type",
+                    "actual_user_type": actual_user_type,
+                    "requested_user_type": user_type
+                }
             )
         
         # Generate reset token
@@ -1186,7 +1200,7 @@ async def forgot_password(request: Request) -> Dict[str, Any]:
         site_url = settings.SITE_URL or "https://homeandown.com"
         # Ensure we never use localhost for password reset links
         if "localhost" in site_url.lower() or "127.0.0.1" in site_url or site_url.startswith("http://"):
-            print(f"[AUTH] ⚠️ SITE_URL is set to localhost/development URL: {site_url}, using production URL instead")
+            print(f"[AUTH] SITE_URL is set to localhost/development URL: {site_url}, using production URL instead")
             site_url = "https://homeandown.com"
         
         if actual_user_type == "admin":
@@ -1260,7 +1274,7 @@ async def forgot_password(request: Request) -> Dict[str, Any]:
                     <!-- Security Notice -->
                     <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; margin: 30px 0; border-radius: 4px;">
                         <p style="color: #92400e; font-size: 14px; margin: 0; line-height: 1.5;">
-                            <strong>⚠️ Security Notice:</strong><br>
+                            <strong>Security Notice:</strong><br>
                             This link will expire in <strong>1 hour</strong> for your security.<br>
                             If you didn't request this password reset, please ignore this email and your password will remain unchanged.
                         </p>
@@ -1294,9 +1308,9 @@ async def forgot_password(request: Request) -> Dict[str, Any]:
         
         # Check email sending result
         if email_result.get("status") == "sent":
-            print(f"[AUTH] ✅ Password reset email sent successfully to: {email} via {email_result.get('provider', 'unknown')}")
+            print(f"[AUTH] Password reset email sent successfully to: {email} via {email_result.get('provider', 'unknown')}")
         else:
-            print(f"[AUTH] ⚠️ Password reset email may have failed: {email_result.get('error', 'Unknown error')}")
+            print(f"[AUTH] Password reset email may have failed: {email_result.get('error', 'Unknown error')}")
             # Still return success to user for security (don't reveal if email exists)
         
         return {
@@ -1388,7 +1402,7 @@ async def reset_password(request: Request) -> Dict[str, Any]:
             site_url = settings.SITE_URL or "https://homeandown.com"
             # Ensure we never use localhost for login links
             if "localhost" in site_url.lower() or "127.0.0.1" in site_url or site_url.startswith("http://"):
-                print(f"[AUTH] ⚠️ SITE_URL is set to localhost/development URL: {site_url}, using production URL instead")
+                print(f"[AUTH] SITE_URL is set to localhost/development URL: {site_url}, using production URL instead")
                 site_url = "https://homeandown.com"
             login_url = f"{site_url}{role['url']}"
             

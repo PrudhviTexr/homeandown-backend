@@ -152,7 +152,7 @@ class LocationService:
     async def _get_from_nominatim_async(pincode: str) -> Optional[Tuple[float, float]]:
         """Get coordinates from OpenStreetMap Nominatim API (async, faster)"""
         try:
-            print(f"[LOCATION] 🌍 Using OpenStreetMap Nominatim for pincode {pincode}")
+            print(f"[LOCATION] Using OpenStreetMap Nominatim for pincode {pincode}")
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(
                     f"https://nominatim.openstreetmap.org/search",
@@ -176,26 +176,26 @@ class LocationService:
                         lat = float(data[0]['lat'])
                         lon = float(data[0]['lon'])
                         if lat != 0 and lon != 0:
-                            print(f"[LOCATION] ✅ OpenStreetMap found coordinates for {pincode}: {lat}, {lon}")
+                            print(f"[LOCATION] OpenStreetMap found coordinates for {pincode}: {lat}, {lon}")
                             return (lat, lon)
                     else:
-                        print(f"[LOCATION] ⚠️ OpenStreetMap returned empty results for {pincode}")
+                        print(f"[LOCATION] OpenStreetMap returned empty results for {pincode}")
                 elif response.status_code == 429:
-                    print(f"[LOCATION] ⚠️ OpenStreetMap rate limit reached")
+                    print(f"[LOCATION] OpenStreetMap rate limit reached")
                     await asyncio.sleep(1)  # Respect rate limits
                 else:
-                    print(f"[LOCATION] ⚠️ OpenStreetMap returned status {response.status_code}")
+                    print(f"[LOCATION] OpenStreetMap returned status {response.status_code}")
         except httpx.TimeoutException:
-            print(f"[LOCATION] ⚠️ OpenStreetMap request timeout for pincode {pincode}")
+            print(f"[LOCATION] OpenStreetMap request timeout for pincode {pincode}")
         except Exception as e:
-            print(f"[LOCATION] ❌ OpenStreetMap API error for {pincode}: {e}")
+            print(f"[LOCATION] OpenStreetMap API error for {pincode}: {e}")
         return None
     
     @staticmethod
     def _get_from_nominatim(pincode: str) -> Optional[Tuple[float, float]]:
         """Get coordinates from OpenStreetMap Nominatim API (sync fallback)"""
         try:
-            print(f"[LOCATION] 🌍 Using OpenStreetMap Nominatim for pincode {pincode}")
+            print(f"[LOCATION] Using OpenStreetMap Nominatim for pincode {pincode}")
             response = requests.get(
                 f"https://nominatim.openstreetmap.org/search",
                 params={
@@ -219,7 +219,7 @@ class LocationService:
                     if lat != 0 and lon != 0:
                         return (lat, lon)
         except Exception as e:
-            print(f"[LOCATION] ❌ OpenStreetMap API error: {e}")
+            print(f"[LOCATION] OpenStreetMap API error: {e}")
         return None
     
     @staticmethod
@@ -527,89 +527,97 @@ class LocationService:
     
     @staticmethod
     async def get_pincode_location_data(pincode: str) -> Dict[str, Any]:
-        """Get complete location data for property form auto-population"""
-        # Use OpenStreetMap + Postal API (free solution)
-        # Priority: Postal API for location data, OpenStreetMap for coordinates
+        """Get complete location data for property form auto-population with parallel API calls"""
+        # NEW APPROACH: Run PostalPincode API (for location data) and OpenStreetMap API (for coordinates) in parallel
+        # Priority: PostalPincode for location details, OpenStreetMap for accurate coordinates
         
-        # Fallback to hardcoded data for common pincodes
+        # Fallback to hardcoded data for common pincodes (now returns None since we removed hardcoded data)
         fallback_data = LocationService._get_fallback_pincode_data(pincode)
         if fallback_data:
             print(f"[LOCATION] Using fallback data for pincode {pincode}")
             return fallback_data
             
         try:
-            print(f"[LOCATION] Fetching complete location data for pincode: {pincode}")
+            print(f"[LOCATION] Fetching location data and coordinates in parallel for pincode: {pincode}")
             
-            # Try the postal pincode API as fallback
-            response = requests.get(
-                f"https://api.postalpincode.in/pincode/{pincode}",
-                timeout=15,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            )
+            # Run both APIs in parallel for faster response
+            postal_task = LocationService._fetch_postal_data(pincode)
+            osm_task = LocationService._get_from_nominatim_async(pincode)
             
-            print(f"[LOCATION] API Response Status: {response.status_code}")
+            # Wait for both APIs to complete
+            postal_data, osm_coordinates = await asyncio.gather(postal_task, osm_task, return_exceptions=True)
             
-            if response.status_code == 200:
-                data = response.json()
-                print(f"[LOCATION] API Response Data: {data}")
+            # Handle postal API results
+            post_office = None
+            if not isinstance(postal_data, Exception) and postal_data:
+                post_office = postal_data
+                print(f"[LOCATION] PostalPincode API: Found location data for {pincode}")
+            else:
+                print(f"[LOCATION] PostalPincode API: Failed for {pincode}")
+            
+            # Handle OpenStreetMap results  
+            coordinates = None
+            if not isinstance(osm_coordinates, Exception) and osm_coordinates:
+                coordinates = osm_coordinates
+                print(f"[LOCATION] OpenStreetMap API: Found coordinates {coordinates} for {pincode}")
+            else:
+                print(f"[LOCATION] OpenStreetMap API: Failed for {pincode}")
+                # Fallback to other coordinate methods if OSM fails
+                print(f"[LOCATION] Trying fallback coordinate methods...")
+                coordinates = await LocationService.get_coordinates_from_pincode(pincode)
+            
+            # If we have location data from postal API, create response
+            if post_office:
+                # Create a comprehensive address from the location data
+                address_parts = []
+                if post_office.get('Name'):
+                    address_parts.append(post_office.get('Name'))
+                if post_office.get('Block'):
+                    address_parts.append(post_office.get('Block'))
+                if post_office.get('District'):
+                    address_parts.append(post_office.get('District'))
+                if post_office.get('State'):
+                    address_parts.append(post_office.get('State'))
                 
-                if data and len(data) > 0 and data[0].get('Status') == 'Success':
-                    post_office = data[0]['PostOffice'][0]
-                    print(f"[LOCATION] Post Office Data: {post_office}")
-                    
-                    # Get coordinates using multiple methods
-                    coordinates = await LocationService.get_coordinates_from_pincode(pincode)
-                    print(f"[LOCATION] Coordinates: {coordinates}")
-                    
-                    # Create a comprehensive address from the location data
-                    address_parts = []
-                    if post_office.get('Name'):
-                        address_parts.append(post_office.get('Name'))
-                    if post_office.get('Block'):
-                        address_parts.append(post_office.get('Block'))
-                    if post_office.get('District'):
-                        address_parts.append(post_office.get('District'))
-                    if post_office.get('State'):
-                        address_parts.append(post_office.get('State'))
-                    
-                    suggested_address = ", ".join(address_parts) if address_parts else ""
-                    
-                    location_data = {
-                        "pincode": pincode,
+                suggested_address = ", ".join(address_parts) if address_parts else ""
+                
+                location_data = {
+                    "pincode": pincode,
+                    "country": post_office.get('Country', 'India'),
+                    "state": post_office.get('State', ''),
+                    "district": post_office.get('District', ''),
+                    "mandal": post_office.get('Name', ''),  # Name field is mandal
+                    "city": post_office.get('Name', ''),  # For city field
+                    "address": suggested_address,  # Auto-generated address
+                    "region": post_office.get('Region', ''),
+                    "division": post_office.get('Division', ''),
+                    "circle": post_office.get('Circle', ''),
+                    "block": post_office.get('Block', ''),
+                    # PRIORITY: Use OpenStreetMap coordinates for map marker positioning
+                    "latitude": coordinates[0] if coordinates else None,
+                    "longitude": coordinates[1] if coordinates else None,
+                    "coordinates": coordinates if coordinates else None,
+                    "map_bounds": LocationService.calculate_pincode_bounds(coordinates[0], coordinates[1]) if coordinates else None,
+                    "auto_populated": True,
+                    "editable_fields": True,  # All fields can be edited
+                    "suggested_fields": {
                         "country": post_office.get('Country', 'India'),
                         "state": post_office.get('State', ''),
                         "district": post_office.get('District', ''),
-                        "mandal": post_office.get('Name', ''),  # Name field is mandal
-                        "city": post_office.get('Name', ''),  # For city field
-                        "address": suggested_address,  # Auto-generated address
-                        "region": post_office.get('Region', ''),
-                        "division": post_office.get('Division', ''),
-                        "circle": post_office.get('Circle', ''),
-                        "block": post_office.get('Block', ''),
+                        "mandal": post_office.get('Name', ''),
+                        "city": post_office.get('Name', ''),
+                        "address": suggested_address,
+                        # PRIORITY: Use OpenStreetMap coordinates for form fields
                         "latitude": coordinates[0] if coordinates else None,
-                        "longitude": coordinates[1] if coordinates else None,
-                        "coordinates": coordinates if coordinates else None,
-                        "map_bounds": LocationService.calculate_pincode_bounds(coordinates[0], coordinates[1]) if coordinates else None,
-                        "auto_populated": True,
-                        "editable_fields": True,  # All fields can be edited
-                        "suggested_fields": {
-                            "country": post_office.get('Country', 'India'),
-                            "state": post_office.get('State', ''),
-                            "district": post_office.get('District', ''),
-                            "mandal": post_office.get('Name', ''),
-                            "city": post_office.get('Name', ''),
-                            "address": suggested_address,
-                            "latitude": coordinates[0] if coordinates else None,
-                            "longitude": coordinates[1] if coordinates else None
-                        }
+                        "longitude": coordinates[1] if coordinates else None
                     }
-                    
-                    print(f"[LOCATION] Successfully fetched location data for pincode {pincode}")
-                    return location_data
-                else:
-                    print(f"[LOCATION] API returned unsuccessful status: {data}")
+                }
+                
+                print(f"[LOCATION] Successfully combined location data and coordinates for pincode {pincode}")
+                print(f"[LOCATION] Final coordinates: {coordinates}")
+                return location_data
             else:
-                print(f"[LOCATION] API returned status {response.status_code}: {response.text}")
+                print(f"[LOCATION] No location data found for pincode {pincode}")
                 
         except Exception as e:
             print(f"[LOCATION] Error fetching complete location data: {e}")
@@ -671,11 +679,49 @@ class LocationService:
         }
     
     @staticmethod
+    async def _fetch_postal_data(pincode: str) -> Optional[Dict[str, Any]]:
+        """Fetch location data from PostalPincode API (async)"""
+        try:
+            print(f"[LOCATION] Fetching postal data for pincode: {pincode}")
+            
+            # Use httpx for async HTTP requests
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"https://api.postalpincode.in/pincode/{pincode}",
+                    headers={'User-Agent': 'HomeAndOwn-PropertyPlatform/1.0 (contact@homeandown.com)'}
+                )
+                
+                print(f"[LOCATION] PostalPincode API response status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    if data and len(data) > 0 and data[0].get('Status') == 'Success':
+                        post_office = data[0]['PostOffice'][0]
+                        print(f"[LOCATION] PostalPincode API success: {post_office.get('Name')}, {post_office.get('District')}, {post_office.get('State')}")
+                        return post_office
+                    else:
+                        print(f"[LOCATION] PostalPincode API returned unsuccessful status: {data}")
+                else:
+                    print(f"[LOCATION] PostalPincode API returned status {response.status_code}")
+                    
+        except Exception as e:
+            print(f"[LOCATION] PostalPincode API error: {e}")
+        
+        return None
+    
+    @staticmethod
+    def _get_approximate_coordinates(district: str, state: str) -> Optional[Tuple[float, float]]:
+        """Get approximate coordinates for major districts/cities - removed hardcoded data"""
+        # No hardcoded coordinates - rely on external APIs only
+        return None
+    
+    @staticmethod
     async def _reverse_geocode_coordinates(lat: float, lon: float) -> Optional[Dict[str, Any]]:
         """Reverse geocode coordinates to get location details using OpenStreetMap"""
         try:
             # Use OpenStreetMap Nominatim for reverse geocoding
-            print(f"[LOCATION] 🌍 Reverse geocoding with OpenStreetMap: {lat}, {lon}")
+            print(f"[LOCATION] Reverse geocoding with OpenStreetMap: {lat}, {lon}")
             response = requests.get(
                 f"https://nominatim.openstreetmap.org/reverse",
                 params={
@@ -716,83 +762,8 @@ class LocationService:
     
     @staticmethod
     def _get_fallback_pincode_data(pincode: str) -> Optional[Dict[str, Any]]:
-        """Get fallback pincode data for common pincodes"""
-        fallback_mappings = {
-            '500090': {
-                'state': 'Telangana',
-                'district': 'Hyderabad',
-                'mandal': 'Serilingampally',
-                'city': 'Hyderabad',
-                'address': 'Serilingampally, Hyderabad, Telangana',
-                'latitude': 17.3850,
-                'longitude': 78.4867
-            },
-            '500001': {
-                'state': 'Telangana',
-                'district': 'Hyderabad',
-                'mandal': 'Secunderabad',
-                'city': 'Hyderabad',
-                'address': 'Secunderabad, Hyderabad, Telangana',
-                'latitude': 17.4399,
-                'longitude': 78.4983
-            },
-            '500002': {
-                'state': 'Telangana',
-                'district': 'Hyderabad',
-                'mandal': 'Khairatabad',
-                'city': 'Hyderabad',
-                'address': 'Khairatabad, Hyderabad, Telangana',
-                'latitude': 17.4065,
-                'longitude': 78.4772
-            },
-            '500003': {
-                'state': 'Telangana',
-                'district': 'Hyderabad',
-                'mandal': 'Himayathnagar',
-                'city': 'Hyderabad',
-                'address': 'Himayathnagar, Hyderabad, Telangana',
-                'latitude': 17.4065,
-                'longitude': 78.4772
-            },
-            '500004': {
-                'state': 'Telangana',
-                'district': 'Hyderabad',
-                'mandal': 'Abids',
-                'city': 'Hyderabad',
-                'address': 'Abids, Hyderabad, Telangana',
-                'latitude': 17.4065,
-                'longitude': 78.4772
-            }
-        }
-        
-        if pincode in fallback_mappings:
-            data = fallback_mappings[pincode]
-            return {
-                "pincode": pincode,
-                "country": "India",
-                "state": data['state'],
-                "district": data['district'],
-                "mandal": data['mandal'],
-                "city": data['city'],
-                "address": data['address'],
-                "latitude": data['latitude'],
-                "longitude": data['longitude'],
-                "coordinates": (data['latitude'], data['longitude']),
-                "map_bounds": LocationService.calculate_pincode_bounds(data['latitude'], data['longitude']),
-                "auto_populated": True,
-                "editable_fields": True,
-                "suggested_fields": {
-                    "country": "India",
-                    "state": data['state'],
-                    "district": data['district'],
-                    "mandal": data['mandal'],
-                    "city": data['city'],
-                    "address": data['address'],
-                    "latitude": data['latitude'],
-                    "longitude": data['longitude']
-                }
-            }
-        
+        """Get fallback pincode data for common pincodes - removed hardcoded data"""
+        # No hardcoded pincode mappings - rely on external APIs only
         return None
     
     @staticmethod

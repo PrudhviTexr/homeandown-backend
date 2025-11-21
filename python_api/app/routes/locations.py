@@ -152,25 +152,7 @@ async def get_coordinates_from_pincode(
         except Exception as db_error:
             print(f"[LOCATIONS] Database query failed: {db_error}")
         
-        # Fallback to hardcoded coordinates for common pincodes
-        fallback_coordinates = {
-            "500033": {"lat": 17.3850, "lng": 78.4867},  # Hyderabad
-            "500034": {"lat": 17.3850, "lng": 78.4867},  # Hyderabad
-            "500045": {"lat": 17.3850, "lng": 78.4867},  # Hyderabad
-            "400050": {"lat": 19.0760, "lng": 72.8777},  # Mumbai
-            "110049": {"lat": 28.6139, "lng": 77.2090},  # Delhi
-            "535270": {"lat": 18.1124, "lng": 83.4150},  # Visakhapatnam
-            "530001": {"lat": 17.6868, "lng": 83.2185},  # Visakhapatnam
-            "560001": {"lat": 12.9716, "lng": 77.5946},  # Bangalore
-            "600001": {"lat": 13.0827, "lng": 80.2707},  # Chennai
-        }
-        
-        if pincode in fallback_coordinates:
-            return {
-                "lat": fallback_coordinates[pincode]["lat"],
-                "lng": fallback_coordinates[pincode]["lng"],
-                "pincode": pincode
-            }
+        # No hardcoded fallback coordinates - rely on database or external APIs only
         
         # If no coordinates found, return null
         return {"lat": None, "lng": None, "pincode": pincode}

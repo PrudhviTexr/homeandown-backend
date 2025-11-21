@@ -188,6 +188,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           first_name: userData.first_name,
           last_name: userData.last_name,
           role: userData.userType || 'buyer',
+          user_type: userData.userType || 'buyer', // Ensure user_type is set
           phone_number: userData.phone_number,
           city: userData.city,
           state: userData.state
@@ -196,11 +197,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       });
 
       if (response.success) {
-        console.log('[AUTH] Sign up successful');
+        console.log('[AUTH] Sign up successful, user_type:', userData.userType);
         // Don't auto-login after signup - require email verification first
         setUser(null);
-        toast.success('Account created! Please check your email to verify your account.');
-        return { success: true };
+        const userTypeMessage = userData.userType === 'agent' 
+          ? 'Agent account created! Please check your email to verify your account.'
+          : userData.userType === 'seller'
+          ? 'Seller account created! Please check your email to verify your account.'
+          : 'Account created! Please check your email to verify your account.';
+        toast.success(userTypeMessage);
+        return { success: true, userType: userData.userType };
       } else {
         return { error: response.error || 'Signup failed' };
       }

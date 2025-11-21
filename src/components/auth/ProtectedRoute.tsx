@@ -1,6 +1,6 @@
 import { useAuth } from '@/contexts/AuthContext';
 import { Navigate } from 'react-router-dom';
-import toast from '@/components/ui/toast';
+import toast from 'react-hot-toast';
 import React, { useEffect, useState } from 'react';
 
 interface ProtectedRouteProps {

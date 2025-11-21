@@ -8,7 +8,7 @@ import Footer from '@/components/Footer';
 import AuthModal from '@/components/AuthModal';
 import RoleRequestComponent from '@/components/RoleRequestComponent';
 import LocationSelector from '@/components/LocationSelector';
-import PasswordConfirmModal from '@/components/PasswordConfirmModal';
+import PasswordConfirmModal from '@/components/PasswordChangeModal';
 
 interface UserProfile {
   id: string;
@@ -141,8 +141,43 @@ const Profile: React.FC = () => {
   const handleSave = async () => {
     if (!user) return;
     
-    // Show password confirmation modal for profile updates
-    setShowPasswordConfirm(true);
+    setSaving(true);
+    
+    try {
+      // Upload profile image if changed
+      if (profileImage) {
+        await uploadProfileImage(user.id);
+      }
+
+      // Update user profile directly without password confirmation for basic fields
+      const { pyFetch } = await import('@/utils/backend');
+      
+      console.log('[PROFILE] Sending update data:', formData);
+      console.log('[PROFILE] Current user:', user);
+      
+      const response = await pyFetch('/api/users/profile', {
+        method: 'PATCH',
+        body: JSON.stringify(formData),
+        useApiKey: false
+      });
+      
+      console.log('[PROFILE] Profile updated successfully:', response);
+      
+      // Update local state
+      setProfile(response);
+      setEditing(false);
+      
+      // Show success message
+      const toast = (await import('react-hot-toast')).default;
+      toast.success('Profile updated successfully!');
+      
+    } catch (error: any) {
+      console.error('[PROFILE] Update error:', error);
+      const toast = (await import('react-hot-toast')).default;
+      toast.error(error.message || 'Failed to update profile. Please try again.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handlePasswordConfirm = async (currentPassword: string) => {

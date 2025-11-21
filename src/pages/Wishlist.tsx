@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { FavoritesApi } from '@/services/pyApi';
+import { FavoritesApi } from '@/services/favoritesApi';
 import Navbar from '@/components/Navbar';
 import { Heart, Trash2, MapPin, DollarSign } from 'lucide-react';
 import { Link } from 'react-router-dom';

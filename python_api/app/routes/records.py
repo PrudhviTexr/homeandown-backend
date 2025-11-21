@@ -571,7 +571,7 @@ async def create_property(prop: dict, _=Depends(require_api_key)):
             "listing_type": getattr(prop, 'listing_type', ''),
             "furnishing_status": getattr(prop, 'furnishing_status', None),
             "available_from": getattr(prop, 'available_from', None),
-            "status": "active",
+            "status": "pending",  # Changed from active to pending for admin approval
             "featured": False,
             "verified": False,
             "amenities": getattr(prop, 'amenities', []) or [],

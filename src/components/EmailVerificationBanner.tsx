@@ -12,29 +12,36 @@ const EmailVerificationBanner: React.FC = () => {
 
   useEffect(() => {
     const checkEmailVerification = async () => {
-      if (user) {
-        try {
-          // Always fetch fresh profile to get latest email_verified status
-          const profile = await getUserProfile(true); // Force refresh
-          
-          // CRITICAL FIX: Only show banner for users who are actually not verified
-          // Check both the profile and user object for email_verified status
-          const isVerified = profile?.email_verified === true || user?.email_verified === true;
-          
-          
-          // IMPORTANT: Only show banner if email is explicitly NOT verified
-          // If verification status is undefined/null, assume verified (don't show banner)
-          const shouldShowBanner = isVerified === false || 
-                                   (profile?.email_verified === false && user?.email_verified === false);
-          
-          setIsVisible(shouldShowBanner);
-          
-        } catch (error) {
-          // CHANGED: If we can't check, assume verified (don't show banner)
-          // This prevents the banner from showing unnecessarily
+      // Don't check if user is not logged in
+      if (!user || !user.id) {
+        setIsVisible(false);
+        return;
+      }
+
+      try {
+        // Only fetch profile if user is logged in
+        const profile = await getUserProfile(true); // Force refresh
+        
+        // CRITICAL FIX: Only show banner for users who are actually not verified
+        // Check both the profile and user object for email_verified status
+        const isVerified = profile?.email_verified === true || user?.email_verified === true;
+        
+        
+        // IMPORTANT: Only show banner if email is explicitly NOT verified
+        // If verification status is undefined/null, assume verified (don't show banner)
+        const shouldShowBanner = isVerified === false || 
+                                 (profile?.email_verified === false && user?.email_verified === false);
+        
+        setIsVisible(shouldShowBanner);
+        
+      } catch (error: any) {
+        // If error is 401 (Unauthorized), user is not logged in - don't show banner
+        if (error?.message?.includes('401') || error?.message?.includes('Unauthorized') || error?.message?.includes('Authentication required')) {
           setIsVisible(false);
+          return;
         }
-      } else {
+        // CHANGED: If we can't check, assume verified (don't show banner)
+        // This prevents the banner from showing unnecessarily
         setIsVisible(false);
       }
     };

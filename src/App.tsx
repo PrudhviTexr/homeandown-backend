@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext'; 
-import toast from './components/ui/toast';
+import toast from 'react-hot-toast';
 import ErrorBoundary from './components/ErrorBoundary';
 
 import Home from './pages/client/Home';
@@ -31,6 +31,10 @@ import SellerDashboard from './pages/seller/SellerDashboard';
 import BuyerDashboard from './pages/buyer/BuyerDashboard';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
+import BuyerForgotPassword from './pages/buyer/BuyerForgotPassword';
+import SellerForgotPassword from './pages/seller/SellerForgotPassword';
+import AgentForgotPassword from './pages/agent/AgentForgotPassword';
+import AdminForgotPassword from './pages/admin/AdminForgotPassword';
 import MyProperties from './pages/MyProperties';
 import AddProperty from './pages/AddProperty';
 import PropertyManagement from './pages/property-management/PropertyManagement';
@@ -40,7 +44,21 @@ import MaintenanceRequests from './pages/property-management/MaintenanceRequests
 import NotFound from './pages/NotFound';
 
 function AppRoutes() {
-  const { user, loading, getUserProfile } = useAuth();
+  // Safely get auth context - handle case where it might not be available yet
+  let user, loading, getUserProfile;
+  try {
+    const auth = useAuth();
+    user = auth.user;
+    loading = auth.loading;
+    getUserProfile = auth.getUserProfile;
+  } catch (error) {
+    // If useAuth fails, provide defaults
+    console.warn('[AppRoutes] Auth context not available yet:', error);
+    user = null;
+    loading = true;
+    getUserProfile = async () => null;
+  }
+  
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -75,6 +93,10 @@ function AppRoutes() {
       <Route path="/my-inquiries" element={<ClientRouteGuard><MyInquiries /></ClientRouteGuard>} />
       <Route path="/email-verification" element={<EmailVerification />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/buyer/forgot-password" element={<BuyerForgotPassword />} />
+      <Route path="/seller/forgot-password" element={<SellerForgotPassword />} />
+      <Route path="/agent/forgot-password" element={<AgentForgotPassword />} />
+      <Route path="/admin/forgot-password" element={<AdminForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/profile" element={<ClientRouteGuard><Profile /></ClientRouteGuard>} />
       <Route path="/wishlist" element={<ClientRouteGuard><Wishlist /></ClientRouteGuard>} />
@@ -117,11 +139,12 @@ function AppRoutes() {
 function App() {
   return (
     <ErrorBoundary>
-      <Router>
-        <AppRoutes />
-      </Router>
+      <AppRoutes />
     </ErrorBoundary>
   );
 }
+
+// Export AppRoutes separately for testing if needed
+export { AppRoutes };
 
 export default App;

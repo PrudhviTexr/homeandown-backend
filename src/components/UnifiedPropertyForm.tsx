@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import LocationSelector from '@/components/LocationSelector';
 import ImageUpload from '@/components/ImageUpload';
 import EnhancedImageUpload from '@/components/EnhancedImageUpload';
+import MapPicker from '@/components/MapPicker';
 
 // Types
 interface PropertyFormData {
@@ -24,6 +25,7 @@ interface PropertyFormData {
   maintenance_charges: string;
   rate_per_sqft: string;
   rate_per_sqyd: string;
+  rate_per_acre: string;
 
   // Location
   address: string;
@@ -134,9 +136,10 @@ const initialFormData: PropertyFormData = {
   price: '',
   monthly_rent: '',
   security_deposit: '',
-  maintenance_charges: '',
-  rate_per_sqft: '',
-  rate_per_sqyd: '',
+    maintenance_charges: '',
+    rate_per_sqft: '',
+    rate_per_sqyd: '',
+    rate_per_acre: '',
   address: '',
   state_id: '',
   district_id: '',
@@ -230,14 +233,17 @@ const UnifiedPropertyForm: React.FC<PropertyFormProps> = ({
   const [users, setUsers] = useState<any[]>([]);
   const [currentStep, setCurrentStep] = useState<'type' | 'details'>('type');
 
-  // Property types configuration
+  // Property types configuration - Same as admin page
   const PROPERTY_TYPES = [
     { value: 'independent_house', label: 'Independent House', icon: Home, category: 'Residential' },
     { value: 'standalone_apartment', label: 'Standalone Apartment', icon: Building, category: 'Residential' },
     { value: 'gated_apartment', label: 'Gated Apartment', icon: Building2, category: 'Residential' },
+    { value: 'new_property', label: 'New Property', icon: Building, category: 'Residential' },
+    { value: 'new_apartment', label: 'New Apartment', icon: Building2, category: 'Residential' },
     { value: 'villa', label: 'Villa', icon: Home, category: 'Residential' },
     { value: 'commercial', label: 'Commercial', icon: Warehouse, category: 'Commercial' },
     { value: 'land', label: 'Land', icon: Trees, category: 'Land' },
+    { value: 'lot', label: 'Lot', icon: MapPin, category: 'Land' },
     { value: 'farm_house', label: 'Farm House', icon: Trees, category: 'Land' },
     { value: 'plot', label: 'Plot', icon: MapPin, category: 'Land' }
   ];
@@ -251,6 +257,13 @@ const UnifiedPropertyForm: React.FC<PropertyFormProps> = ({
       }
     }
   }, [mode, property]);
+
+  // Auto-set listing type to SALE for plots/land/lot (same as admin page)
+  useEffect(() => {
+    if ((formData.property_type === 'plot' || formData.property_type === 'land' || formData.property_type === 'lot') && formData.listing_type !== 'SALE') {
+      dispatch({ type: 'SET_FIELD', field: 'listing_type', value: 'SALE' });
+    }
+  }, [formData.property_type]);
 
   // Load users for owner selection (admin/agent only)
   useEffect(() => {
@@ -309,22 +322,64 @@ const UnifiedPropertyForm: React.FC<PropertyFormProps> = ({
       
       if (response && response.suggestions) {
         const suggestions = response.suggestions;
+        const mapData = response.map_data;
         console.log('[UnifiedPropertyForm] Pincode data received:', suggestions);
+        console.log('[UnifiedPropertyForm] Map data received:', mapData);
+        
+        // Extract coordinates from map_data (preferred) or suggestions
+        let lat = '';
+        let lng = '';
+        
+        if (mapData?.coordinates) {
+          if (Array.isArray(mapData.coordinates)) {
+            lat = mapData.coordinates[0]?.toString() || '';
+            lng = mapData.coordinates[1]?.toString() || '';
+          } else if (typeof mapData.coordinates === 'object') {
+            lat = (mapData.coordinates.lat || mapData.coordinates.latitude)?.toString() || '';
+            lng = (mapData.coordinates.lng || mapData.coordinates.longitude)?.toString() || '';
+          }
+        }
+        
+        // Fallback to suggestions or map_data direct fields
+        if (!lat) {
+          lat = (mapData?.latitude || suggestions.latitude)?.toString() || '';
+        }
+        if (!lng) {
+          lng = (mapData?.longitude || suggestions.longitude)?.toString() || '';
+        }
         
         // Auto-populate form fields with suggested values
+        // DO NOT auto-populate address - it's a user entry field
+        console.log('[UnifiedPropertyForm] Raw API Response:', { suggestions, mapData });
+        console.log('[UnifiedPropertyForm] Extracted coordinates:', { 
+          lat, lng, 
+          currentLat: formData.latitude, 
+          currentLng: formData.longitude,
+          suggestionsLat: suggestions.latitude,
+          suggestionsLng: suggestions.longitude,
+          mapDataLat: mapData?.latitude,
+          mapDataLng: mapData?.longitude
+        });
+        
         dispatch({ 
           type: 'SET_MULTIPLE_FIELDS', 
           fields: {
-            address: suggestions.address || formData.address,
-            latitude: suggestions.latitude?.toString() || formData.latitude,
-            longitude: suggestions.longitude?.toString() || formData.longitude,
+            // address is NOT set - user must enter it manually
+            // ALWAYS use fresh coordinates from pincode API (don't fallback to existing)
+            latitude: lat || '', // Clear existing if API doesn't return coordinates
+            longitude: lng || '', // Clear existing if API doesn't return coordinates
             state_id: suggestions.state || formData.state_id,
             district_id: suggestions.district || formData.district_id,
             mandal_id: suggestions.mandal || formData.mandal_id
           }
         });
         
-        console.log('[UnifiedPropertyForm] Form fields auto-populated successfully');
+        console.log('[UnifiedPropertyForm] ✅ Form fields auto-populated successfully');
+        if (lat && lng) {
+          console.log('[UnifiedPropertyForm] ✅ Coordinates set from pincode:', { lat, lng });
+        } else {
+          console.warn('[UnifiedPropertyForm] ⚠️ No coordinates received from pincode API');
+        }
       }
     } catch (error) {
       console.error('[UnifiedPropertyForm] Error fetching pincode data:', error);
@@ -352,36 +407,132 @@ const UnifiedPropertyForm: React.FC<PropertyFormProps> = ({
       let imageUrls: string[] = [...existingImages];
       
       if (imagePreviews.length > 0) {
+        console.log(`[UnifiedPropertyForm] Uploading ${imagePreviews.length} new images...`);
+        toast.loading(`Uploading ${imagePreviews.length} images...`, { id: 'image-upload' });
+        
         const uploadedUrls = await uploadMultipleImages(
           imagePreviews.map(p => p.file),
           'property',
           0
         );
         imageUrls = [...imageUrls, ...uploadedUrls];
+        
+        toast.success(`${uploadedUrls.length} images uploaded successfully!`, { id: 'image-upload' });
+        console.log(`[UnifiedPropertyForm] Successfully uploaded ${uploadedUrls.length} images:`, uploadedUrls);
       }
 
       // Prepare data for API
+      // Convert coordinates to numbers (floats) if they exist
+      let latitude = null;
+      let longitude = null;
+      
+      if (data.latitude && data.latitude !== '' && data.latitude !== 'null' && data.latitude !== 'undefined') {
+        const latNum = parseFloat(String(data.latitude));
+        if (!isNaN(latNum)) {
+          latitude = latNum;
+        }
+      }
+      
+      if (data.longitude && data.longitude !== '' && data.longitude !== 'null' && data.longitude !== 'undefined') {
+        const lngNum = parseFloat(String(data.longitude));
+        if (!isNaN(lngNum)) {
+          longitude = lngNum;
+        }
+      }
+      
       const apiData = {
         ...data,
+        latitude: latitude,
+        longitude: longitude,
         images: imageUrls,
         amenities: amenities.filter(a => a.trim() !== ''),
-        added_by: user?.id,
+        added_by: user?.id || null,
         added_by_role: userRole
       };
       
       // Validate UUID fields before sending
-      const uuidFields = ['owner_id', 'added_by'];
       const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       
-      for (const field of uuidFields) {
-        if (apiData[field] && typeof apiData[field] === 'string') {
-          if (apiData[field] === '' || apiData[field] === 'null' || apiData[field] === 'undefined') {
-            apiData[field] = null;
-          } else if (!uuidPattern.test(apiData[field])) {
-            toast.error(`Invalid ${field.replace('_', ' ')} format. Please check the selected value.`);
-            throw new Error(`Invalid UUID for ${field}`);
+      // Validate owner_id (must be a valid UUID if provided)
+      if (apiData.owner_id) {
+        const ownerIdValue = String(apiData.owner_id).trim();
+        if (ownerIdValue && ownerIdValue !== 'null' && ownerIdValue !== 'undefined' && ownerIdValue !== 'NaN') {
+          if (!uuidPattern.test(ownerIdValue)) {
+            console.error('Invalid UUID format for owner_id:', ownerIdValue);
+            toast.error('Invalid owner ID format. Please check the selected value.');
+            throw new Error('Invalid UUID for owner_id');
           }
+          apiData.owner_id = ownerIdValue;
+        } else {
+          apiData.owner_id = null;
         }
+      }
+      
+      // Validate added_by - allow any non-empty string (admin/dev users may have non-UUID IDs)
+      if (apiData.added_by) {
+        const addedByValue = String(apiData.added_by).trim();
+        if (addedByValue && addedByValue !== 'null' && addedByValue !== 'undefined' && addedByValue !== 'NaN') {
+          // Allow any non-empty string for added_by (admin/dev users can have non-UUID IDs)
+          apiData.added_by = addedByValue;
+        } else {
+          apiData.added_by = null;
+        }
+      }
+      
+      // Ensure added_by is set if user is logged in
+      if (!apiData.added_by && user?.id) {
+        // Accept any user ID format (including non-UUID for admin/dev users)
+        const userIdValue = String(user.id).trim();
+        if (userIdValue) {
+          apiData.added_by = userIdValue;
+        }
+      }
+      
+      // If no user is logged in, show error
+      if (!user || !user.id) {
+        toast.error('You must be logged in to save a property.');
+        throw new Error('User not authenticated');
+      }
+
+      // Log the data being sent for debugging
+      console.log('[UnifiedPropertyForm] Saving property with data:', {
+        title: apiData.title,
+        property_type: apiData.property_type,
+        listing_type: apiData.listing_type,
+        images: `${imageUrls.length} images: ${imageUrls.slice(0, 2).join(', ')}${imageUrls.length > 2 ? '...' : ''}`,
+        amenities: `${apiData.amenities.length} amenities`,
+        added_by: apiData.added_by,
+        owner_id: apiData.owner_id,
+        latitude: apiData.latitude,
+        longitude: apiData.longitude,
+        address: apiData.address,
+        city: apiData.city,
+        state: apiData.state,
+        zip_code: apiData.zip_code
+      });
+      
+      // Ensure coordinates are included
+      if (apiData.latitude === null || apiData.longitude === null) {
+        console.warn('[UnifiedPropertyForm] ⚠️ WARNING: Coordinates are missing!');
+        console.warn('  - Latitude:', apiData.latitude);
+        console.warn('  - Longitude:', apiData.longitude);
+        console.warn('  - Form data latitude:', data.latitude);
+        console.warn('  - Form data longitude:', data.longitude);
+      } else {
+        console.log('[UnifiedPropertyForm] ✅ Coordinates will be saved:', {
+          latitude: apiData.latitude,
+          longitude: apiData.longitude
+        });
+      }
+      
+      // Ensure images are included
+      if (imageUrls.length === 0) {
+        console.warn('[UnifiedPropertyForm] ⚠️ WARNING: No images will be saved!');
+      } else {
+        console.log('[UnifiedPropertyForm] ✅ Images will be saved:', {
+          count: imageUrls.length,
+          urls: imageUrls
+        });
       }
 
       if (mode === 'add') {
@@ -402,9 +553,10 @@ const UnifiedPropertyForm: React.FC<PropertyFormProps> = ({
       
       onSuccess();
       onClose();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving property:', error);
-      toast.error('Failed to save property. Please try again.');
+      const errorMessage = error?.message || 'Failed to save property. Please try again.';
+      toast.error(errorMessage);
     }
   };
 
@@ -428,6 +580,34 @@ const UnifiedPropertyForm: React.FC<PropertyFormProps> = ({
     setLoading(true);
     
     try {
+      // Validate required fields before submission
+      const errors: string[] = [];
+      
+      if (!formData.title?.trim()) {
+        errors.push('Property title is required');
+      }
+      
+      if (!formData.property_type) {
+        errors.push('Property type is required');
+      }
+      
+      if (!formData.zip_code || formData.zip_code.length !== 6) {
+        errors.push('Valid 6-digit pincode is required');
+      }
+      
+      // Warn about missing coordinates but don't block submission
+      if (!formData.latitude || !formData.longitude) {
+        console.warn('[UnifiedPropertyForm] Warning: Property location not set on map. Users should click on the map to set coordinates.');
+        toast.error('Please click on the map to set the exact property location before saving.');
+        errors.push('Property location must be set on the map');
+      }
+      
+      // Show validation errors
+      if (errors.length > 0) {
+        toast.error(errors.join('. '));
+        return;
+      }
+      
       await saveProperty(formData);
     } finally {
       setLoading(false);
@@ -551,10 +731,14 @@ const UnifiedPropertyForm: React.FC<PropertyFormProps> = ({
                       onChange={handleInputChange}
                       className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                       required
+                      disabled={['plot', 'land', 'lot'].includes(formData.property_type)}
                     >
                       <option value="SALE">For Sale</option>
-                      <option value="RENT">For Rent</option>
+                      {!['plot', 'land', 'lot'].includes(formData.property_type) && <option value="RENT">For Rent</option>}
                     </select>
+                    {['plot', 'land', 'lot'].includes(formData.property_type) && (
+                      <p className="text-xs text-gray-500 mt-1">Land/Plots are only available for sale</p>
+                    )}
                   </div>
                 </div>
 
@@ -576,7 +760,7 @@ const UnifiedPropertyForm: React.FC<PropertyFormProps> = ({
 
               {/* Location Details */}
               <LocationSelector
-                key={`location-${formData.property_type}-${formData.zip_code || 'empty'}`}
+                key={`location-${formData.property_type}`}
                 formData={formData}
                 setFormData={(fn) => {
                   if (typeof fn === 'function') {
@@ -589,51 +773,171 @@ const UnifiedPropertyForm: React.FC<PropertyFormProps> = ({
                 required
               />
 
-              {/* Pricing */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Pricing</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Price (₹)
-                    </label>
-                    <input
-                      type="number"
-                      name="price"
-                      value={formData.price}
-                      onChange={handleInputChange}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="Enter price"
-                    />
+              {/* Map Picker - Show when pincode is entered */}
+              {formData.zip_code && formData.zip_code.length === 6 && /^\d{6}$/.test(formData.zip_code) && (
+                <div className="mt-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">📍 Pinpoint Property Location on Map</h3>
+                  
+                  {/* Coordinates Status Indicator */}
+                  <div className="mb-4 p-3 rounded-lg border">
+                    {formData.latitude && formData.longitude ? (
+                      <div className="flex items-center text-green-700 bg-green-50 p-2 rounded">
+                        <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
+                        <span className="text-sm font-medium">
+                          ✅ Location Set: {parseFloat(formData.latitude).toFixed(6)}, {parseFloat(formData.longitude).toFixed(6)}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center text-orange-700 bg-orange-50 p-2 rounded">
+                        <div className="w-2 h-2 bg-orange-500 rounded-full mr-2"></div>
+                        <span className="text-sm font-medium">
+                          ⚠️ Location Not Set - Click on the map to set property location
+                        </span>
+                      </div>
+                    )}
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Monthly Rent (₹)
-                    </label>
-                    <input
-                      type="number"
-                      name="monthly_rent"
-                      value={formData.monthly_rent}
-                      onChange={handleInputChange}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="Enter monthly rent"
-                    />
+                  
+                  <MapPicker
+                    key={`map-${formData.latitude}-${formData.longitude}-${formData.zip_code}`}
+                    latitude={formData.latitude || ''}
+                    longitude={formData.longitude || ''}
+                    zipCode={formData.zip_code}
+                    onLocationChange={(lat, lng) => {
+                      console.log('[UnifiedPropertyForm] MapPicker coordinates updated:', { lat, lng });
+                      dispatch({ 
+                        type: 'SET_MULTIPLE_FIELDS', 
+                        fields: {
+                          latitude: lat,
+                          longitude: lng
+                        }
+                      });
+                    }}
+                    height="400px"
+                    showReverseGeocode={true}
+                    onAddressUpdate={(address) => {
+                      // Optionally update address field when marker is moved
+                      if (address && !formData.address) {
+                        dispatch({ type: 'SET_FIELD', field: 'address', value: address });
+                      }
+                    }}
+                  />
+                  
+                  {/* Debug: Show form coordinates */}
+                  <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs">
+                    <div><strong>Form Debug:</strong></div>
+                    <div>Form Latitude: {formData.latitude || 'null'}</div>
+                    <div>Form Longitude: {formData.longitude || 'null'}</div>
+                    <div>Zip Code: {formData.zip_code || 'null'}</div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Security Deposit (₹)
-                    </label>
-                    <input
-                      type="number"
-                      name="security_deposit"
-                      value={formData.security_deposit}
-                      onChange={handleInputChange}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="Enter security deposit"
-                    />
+                  <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-sm text-blue-800">
+                      <strong>📍 How to set location:</strong>
+                    </p>
+                    <ul className="text-sm text-blue-700 mt-1 space-y-1">
+                      <li>• <strong>Click anywhere on the map</strong> to place a marker at that location</li>
+                      <li>• <strong>Drag the marker</strong> to fine-tune the exact position</li>
+                      <li>• The coordinates will be automatically saved to your property</li>
+                    </ul>
                   </div>
                 </div>
-              </div>
+              )}
+
+              {/* Pricing - Same as admin page */}
+              {formData.listing_type === 'SALE' ? (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Pricing (For Sale)</h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Total Price (₹) *</label>
+                      <input
+                        type="number"
+                        name="price"
+                        value={formData.price}
+                        onChange={handleInputChange}
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter total price"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Rate per Sq.Ft (₹)</label>
+                      <input
+                        type="number"
+                        name="rate_per_sqft"
+                        value={formData.rate_per_sqft}
+                        onChange={handleInputChange}
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter rate per square foot"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Rate per Sq.Yd (₹)</label>
+                      <input
+                        type="number"
+                        name="rate_per_sqyd"
+                        value={formData.rate_per_sqyd}
+                        onChange={handleInputChange}
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter rate per square yard"
+                      />
+                    </div>
+                    {/* Show rate per acre for land/plot/farm_house/lot */}
+                    {(formData.property_type === 'land' || formData.property_type === 'plot' || formData.property_type === 'farm_house' || formData.property_type === 'lot') && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Rate per Acre (₹)</label>
+                        <input
+                          type="number"
+                          name="rate_per_acre"
+                          value={formData.rate_per_acre}
+                          onChange={handleInputChange}
+                          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          placeholder="Enter rate per acre"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Pricing (For Rent)</h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Monthly Rent (₹) *</label>
+                      <input
+                        type="number"
+                        name="monthly_rent"
+                        value={formData.monthly_rent}
+                        onChange={handleInputChange}
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter monthly rent"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Security Deposit (₹)</label>
+                      <input
+                        type="number"
+                        name="security_deposit"
+                        value={formData.security_deposit}
+                        onChange={handleInputChange}
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter security deposit"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Maintenance Charges (₹)</label>
+                      <input
+                        type="number"
+                        name="maintenance_charges"
+                        value={formData.maintenance_charges}
+                        onChange={handleInputChange}
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter maintenance charges"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Property Type Specific Fields */}
               <div>
@@ -969,89 +1273,199 @@ const UnifiedPropertyForm: React.FC<PropertyFormProps> = ({
                   </div>
                 )}
 
-                {/* Common Property Fields */}
+                {/* Common Property Fields - Conditional based on property type */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Bedrooms
-                    </label>
-                    <input
-                      type="number"
-                      name="bedrooms"
-                      value={formData.bedrooms}
-                      onChange={handleInputChange}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="Enter number of bedrooms"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Bathrooms
-                    </label>
-                    <input
-                      type="number"
-                      name="bathrooms"
-                      value={formData.bathrooms}
-                      onChange={handleInputChange}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="Enter number of bathrooms"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Area (Sq Ft) *
-                    </label>
-                    <input
-                      type="number"
-                      name="area_sqft"
-                      value={formData.area_sqft}
-                      onChange={handleInputChange}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="Enter area in square feet"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Area (Sq Yards)
-                    </label>
-                    <input
-                      type="number"
-                      name="area_sqyd"
-                      value={formData.area_sqyd}
-                      onChange={handleInputChange}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="Enter area in square yards"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Area (Acres)
-                    </label>
-                    <input
-                      type="number"
-                      name="area_acres"
-                      value={formData.area_acres}
-                      onChange={handleInputChange}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                      placeholder="Enter area in acres"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Furnishing Status
-                    </label>
-                    <select
-                      name="furnishing_status"
-                      value={formData.furnishing_status}
-                      onChange={handleInputChange}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="Unfurnished">Unfurnished</option>
-                      <option value="Semi-Furnished">Semi-Furnished</option>
-                      <option value="Fully-Furnished">Fully-Furnished</option>
-                    </select>
-                  </div>
+                  {/* Bedrooms - Hide for plot/land */}
+                  {formData.property_type !== 'plot' && formData.property_type !== 'land' && formData.property_type !== 'lot' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Bedrooms
+                      </label>
+                      <input
+                        type="number"
+                        name="bedrooms"
+                        value={formData.bedrooms}
+                        onChange={handleInputChange}
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter number of bedrooms"
+                      />
+                    </div>
+                  )}
+                  
+                  {/* Bathrooms - Hide for plot/land */}
+                  {formData.property_type !== 'plot' && formData.property_type !== 'land' && formData.property_type !== 'lot' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Bathrooms
+                      </label>
+                      <input
+                        type="number"
+                        name="bathrooms"
+                        value={formData.bathrooms}
+                        onChange={handleInputChange}
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        placeholder="Enter number of bathrooms"
+                      />
+                    </div>
+                  )}
+                  
+                  {/* Area Fields - Conditional based on property type */}
+                  {/* For land/plot/farm_house/lot: Show acres, plot_area_sqft, plot_area_sqyd */}
+                  {(formData.property_type === 'land' || formData.property_type === 'plot' || formData.property_type === 'farm_house' || formData.property_type === 'lot') ? (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Area (Acres) *
+                        </label>
+                        <input
+                          type="number"
+                          name="area_acres"
+                          value={formData.area_acres}
+                          onChange={handleInputChange}
+                          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          placeholder="Enter area in acres"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Plot Area (Sq Ft)
+                        </label>
+                        <input
+                          type="number"
+                          name="plot_area_sqft"
+                          value={formData.plot_area_sqft}
+                          onChange={handleInputChange}
+                          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          placeholder="Enter plot area in square feet"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Plot Area (Sq Yards)
+                        </label>
+                        <input
+                          type="number"
+                          name="plot_area_sqyd"
+                          value={formData.plot_area_sqyd}
+                          onChange={handleInputChange}
+                          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          placeholder="Enter plot area in square yards"
+                        />
+                      </div>
+                    </>
+                  ) : formData.property_type === 'commercial' ? (
+                    <>
+                      {/* For commercial: Show only area_sqft and area_sqyd */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Area (Sq Ft) *
+                        </label>
+                        <input
+                          type="number"
+                          name="area_sqft"
+                          value={formData.area_sqft}
+                          onChange={handleInputChange}
+                          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          placeholder="Enter area in square feet"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Area (Sq Yards)
+                        </label>
+                        <input
+                          type="number"
+                          name="area_sqyd"
+                          value={formData.area_sqyd}
+                          onChange={handleInputChange}
+                          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          placeholder="Enter area in square yards"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* For residential (house, villa, apartments): Show area_sqft, area_sqyd, carpet_area, built_up_area */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Area (Sq Ft) *
+                        </label>
+                        <input
+                          type="number"
+                          name="area_sqft"
+                          value={formData.area_sqft}
+                          onChange={handleInputChange}
+                          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          placeholder="Enter area in square feet"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Area (Sq Yards)
+                        </label>
+                        <input
+                          type="number"
+                          name="area_sqyd"
+                          value={formData.area_sqyd}
+                          onChange={handleInputChange}
+                          className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          placeholder="Enter area in square yards"
+                        />
+                      </div>
+                      {(formData.property_type === 'villa' || formData.property_type === 'independent_house' || formData.property_type === 'standalone_apartment' || formData.property_type === 'gated_apartment' || formData.property_type === 'new_apartment' || formData.property_type === 'new_property') && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Carpet Area (Sq Ft)
+                            </label>
+                            <input
+                              type="number"
+                              name="carpet_area_sqft"
+                              value={formData.carpet_area_sqft}
+                              onChange={handleInputChange}
+                              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                              placeholder="Enter carpet area in square feet"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Built-up Area (Sq Ft)
+                            </label>
+                            <input
+                              type="number"
+                              name="built_up_area_sqft"
+                              value={formData.built_up_area_sqft}
+                              onChange={handleInputChange}
+                              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                              placeholder="Enter built-up area in square feet"
+                            />
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+                  
+                  {/* Furnishing Status - Hide for plot/land */}
+                  {formData.property_type !== 'plot' && formData.property_type !== 'land' && formData.property_type !== 'lot' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Furnishing Status
+                      </label>
+                      <select
+                        name="furnishing_status"
+                        value={formData.furnishing_status}
+                        onChange={handleInputChange}
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="Unfurnished">Unfurnished</option>
+                        <option value="Semi-Furnished">Semi-Furnished</option>
+                        <option value="Fully-Furnished">Fully-Furnished</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
               </div>
 

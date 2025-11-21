@@ -19,9 +19,20 @@ import {
   Users,
   TrendingUp
 } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
 import { pyFetch } from '@/utils/backend';
 import { formatIndianCurrency } from '@/utils/currency';
 import toast from 'react-hot-toast';
+
+// Fix for default marker icons in React-Leaflet
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
 
 interface Booking {
   id: string;
@@ -118,12 +129,12 @@ const AgentBookings: React.FC = () => {
       const bookingsData = response.bookings || response || [];
       console.log('[AgentBookings] Bookings data:', bookingsData);
       
-      // Enhance bookings with property and user details
+      // Use property and user data from API response if available, otherwise fetch separately
       const enhancedBookings = await Promise.all(bookingsData.map(async (booking: any) => {
         try {
-          // Get property details
-          let property = null;
-          if (booking.property_id) {
+          // Use property from API response if available
+          let property = booking.property || null;
+          if (!property && booking.property_id) {
             try {
               property = await pyFetch(`/api/properties/${booking.property_id}`, {
                 method: 'GET',
@@ -134,9 +145,9 @@ const AgentBookings: React.FC = () => {
             }
           }
           
-          // Get user details
-          let user = null;
-          if (booking.user_id) {
+          // Use user from API response if available
+          let user = booking.user || null;
+          if (!user && booking.user_id) {
             try {
               user = await pyFetch(`/api/users/${booking.user_id}`, {
                 method: 'GET',
@@ -644,6 +655,29 @@ const AgentBookings: React.FC = () => {
                         <p className="text-gray-900">{selectedBooking.property.bathrooms || 'N/A'}</p>
                       </div>
                     </div>
+                    
+                    {/* Property Map */}
+                    {selectedBooking.property.latitude && selectedBooking.property.longitude && (
+                      <div className="mt-4">
+                        <label className="text-sm font-medium text-gray-600 mb-2 block">Property Location</label>
+                        <div className="h-64 rounded-lg overflow-hidden border border-gray-300">
+                          <MapContainer
+                            center={[parseFloat(String(selectedBooking.property.latitude)) || 17.3850, parseFloat(String(selectedBooking.property.longitude)) || 78.4867]}
+                            zoom={15}
+                            style={{ height: '100%', width: '100%' }}
+                            key={`${selectedBooking.property.latitude}-${selectedBooking.property.longitude}`}
+                          >
+                            <TileLayer 
+                              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                            />
+                            <Marker position={[parseFloat(String(selectedBooking.property.latitude)) || 17.3850, parseFloat(String(selectedBooking.property.longitude)) || 78.4867]}>
+                              <Popup>{selectedBooking.property.title || 'Property Location'}</Popup>
+                            </Marker>
+                          </MapContainer>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 

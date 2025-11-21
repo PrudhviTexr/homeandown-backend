@@ -115,7 +115,7 @@ const AddBookingModal: React.FC<AddBookingModalProps> = ({ isOpen, onClose, onBo
       const userName = `${selectedUser.first_name} ${selectedUser.last_name}`.trim();
       
       // Create booking via Python API
-      await pyFetch('/api/bookings', {
+      await pyFetch('/api/records/bookings', {
         method: 'POST',
         useApiKey: true,
         body: JSON.stringify({
