@@ -23,27 +23,32 @@ async def get_agent_dashboard_stats(request: Request):
         print(f"[AGENT] Fetching dashboard stats for user: {user_id}")
         print(f"[AGENT] Agent ID (user_id): {user_id}")
         
-        # Get agent's assigned properties using OR query
-        # Check all possible fields where agent might be assigned:
+        # Get agent's ASSIGNED properties only (not properties they just own)
+        # Agents should only see properties where they are assigned as the agent
         # 1. agent_id - legacy assignment field
         # 2. assigned_agent_id - current assignment field
-        # 3. owner_id - properties owned by agent
-        print(f"[AGENT] Querying properties with OR filter for stats")
-        print(f"[AGENT] OR conditions: agent_id={user_id} OR assigned_agent_id={user_id} OR owner_id={user_id}")
+        # NOTE: We do NOT include owner_id - agents should only see assigned properties
+        print(f"[AGENT] Querying ASSIGNED properties only for stats")
+        print(f"[AGENT] OR conditions: agent_id={user_id} OR assigned_agent_id={user_id}")
+        import asyncio
         try:
-            properties_list = await db.select(
-                "properties", 
-                filters={
-                    "or": [
-                        {"agent_id": user_id},
-                        {"assigned_agent_id": user_id},
-                        {"owner_id": user_id}
-                    ]
-                },
-                limit=1000
+            properties_list = await asyncio.wait_for(
+                db.select(
+                    "properties", 
+                    filters={
+                        "or": [
+                            {"agent_id": user_id},
+                            {"assigned_agent_id": user_id}
+                        ]
+                    },
+                    limit=100,  # Reduced from 1000 to 100 for performance
+                    order_by="created_at",
+                    ascending=False
+                ),
+                timeout=2.0  # 2 second timeout
             )
             properties_list = properties_list or []
-            print(f"[AGENT] OR query returned {len(properties_list)} properties for stats")
+            print(f"[AGENT] OR query returned {len(properties_list)} ASSIGNED properties for stats")
             
             # Log sample property IDs for debugging
             if properties_list:
@@ -51,16 +56,33 @@ async def get_agent_dashboard_stats(request: Request):
                 print(f"[AGENT] Sample property IDs: {sample_ids}")
                 # Log assignment details for first property
                 first_prop = properties_list[0]
-                print(f"[AGENT] First property assignment - agent_id: {first_prop.get('agent_id')}, assigned_agent_id: {first_prop.get('assigned_agent_id')}, owner_id: {first_prop.get('owner_id')}")
+                print(f"[AGENT] First property assignment - agent_id: {first_prop.get('agent_id')}, assigned_agent_id: {first_prop.get('assigned_agent_id')}")
+        except asyncio.TimeoutError:
+            print(f"[AGENT] Properties query timeout for user: {user_id}")
+            properties_list = []
         except Exception as or_error:
             print(f"[AGENT] OR query failed, using separate queries: {or_error}")
-            # Fallback to separate queries
-            properties_agent_id = await db.select("properties", filters={"agent_id": user_id}, limit=1000)
-            properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id}, limit=1000)
-            properties_owned = await db.select("properties", filters={"owner_id": user_id}, limit=1000)
+            # Fallback to separate queries - ONLY assigned properties
+            try:
+                properties_agent_id, properties_assigned_id = await asyncio.wait_for(
+                    asyncio.gather(
+                        db.select("properties", filters={"agent_id": user_id}, limit=100),
+                        db.select("properties", filters={"assigned_agent_id": user_id}, limit=100),
+                        return_exceptions=True
+                    ),
+                    timeout=2.0
+                )
+                if isinstance(properties_agent_id, Exception):
+                    properties_agent_id = []
+                if isinstance(properties_assigned_id, Exception):
+                    properties_assigned_id = []
+            except asyncio.TimeoutError:
+                print(f"[AGENT] Fallback queries timeout for user: {user_id}")
+                properties_agent_id = []
+                properties_assigned_id = []
             
-            # Combine all lists and remove duplicates
-            all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
+            # Combine only assigned properties (NOT owner_id)
+            all_properties = (properties_agent_id or []) + (properties_assigned_id or [])
             unique_properties = []
             seen_ids = set()
             
@@ -88,12 +110,25 @@ async def get_agent_dashboard_stats(request: Request):
         try:
             # Get inquiries by property
             if property_ids:
-                inquiries_by_property = await db.select("inquiries", filters={"property_id": {"in": property_ids}})
+                inquiries_by_property = await asyncio.wait_for(
+                    db.select("inquiries", filters={"property_id": {"in": property_ids}}, limit=200, order_by="created_at", ascending=False),
+                    timeout=2.0
+                )
             else:
                 inquiries_by_property = []
             
-            # Get inquiries by direct agent assignment (from inquiries.assigned_agent_id)
-            inquiries_by_agent = await db.select("inquiries", filters={"assigned_agent_id": user_id})
+            # Get inquiries by direct agent assignment (from inquiries.assigned_agent_id) with timeout
+            try:
+                inquiries_by_agent = await asyncio.wait_for(
+                    db.select("inquiries", filters={"assigned_agent_id": user_id}, limit=200, order_by="created_at", ascending=False),
+                    timeout=1.5  # 1.5 second timeout for faster response
+                )
+            except asyncio.TimeoutError:
+                print(f"[AGENT] Inquiries by agent query timeout")
+                inquiries_by_agent = []
+            except Exception as agent_inq_error:
+                print(f"[AGENT] Error fetching inquiries by agent: {agent_inq_error}")
+                inquiries_by_agent = []
             
             # Combine and deduplicate
             all_inquiries = (inquiries_by_property or []) + (inquiries_by_agent or [])
@@ -169,7 +204,11 @@ async def get_agent_dashboard_stats(request: Request):
             # Fallback to property-based only
             try:
                 if property_ids and len(property_ids) > 0:
-                    bookings = await db.select("bookings", filters={"property_id": {"in": property_ids}})
+                    import asyncio
+                    bookings = await asyncio.wait_for(
+                        db.select("bookings", filters={"property_id": {"in": property_ids}}, limit=200, order_by="created_at", ascending=False),
+                        timeout=2.0
+                    )
                     bookings_list = bookings or []
                     total_bookings = len(bookings_list)
                     pending_bookings = len([b for b in bookings_list if b.get("status") == "pending"])
@@ -333,33 +372,32 @@ async def get_agent_inquiries(
         # Get agent's property IDs using OR query
         # Check all possible fields where agent might be assigned
         print(f"[AGENT] Querying properties for inquiries with OR filter")
-        print(f"[AGENT] OR conditions: agent_id={user_id} OR assigned_agent_id={user_id} OR owner_id={user_id}")
+        # Get only ASSIGNED properties (not properties they just own)
+        print(f"[AGENT] OR conditions: agent_id={user_id} OR assigned_agent_id={user_id}")
         try:
             all_properties = await db.select(
                 "properties", 
                 filters={
                     "or": [
                         {"agent_id": user_id},
-                        {"assigned_agent_id": user_id},
-                        {"owner_id": user_id}
+                        {"assigned_agent_id": user_id}
                     ]
                 },
-                limit=1000
+                limit=100  # Reduced from 1000 to 100 for performance
             )
             all_properties = all_properties or []
             property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
-            print(f"[AGENT] OR query returned {len(property_ids)} property IDs for inquiries")
+            print(f"[AGENT] OR query returned {len(property_ids)} ASSIGNED property IDs for inquiries")
             if property_ids:
                 print(f"[AGENT] Sample property IDs: {[pid[:8] for pid in property_ids[:3]]}")
         except Exception as or_error:
             print(f"[AGENT] OR query failed, using separate queries: {or_error}")
-            # Fallback to separate queries
-            properties_agent_id = await db.select("properties", filters={"agent_id": user_id}, limit=1000)
-            properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id}, limit=1000)
-            properties_owned = await db.select("properties", filters={"owner_id": user_id}, limit=1000)
+            # Fallback to separate queries - ONLY assigned properties
+            properties_agent_id = await db.select("properties", filters={"agent_id": user_id}, limit=100)
+            properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id}, limit=100)
             
-            # Combine all lists and remove duplicates
-            all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
+            # Combine only assigned properties (NOT owner_id)
+            all_properties = (properties_agent_id or []) + (properties_assigned_id or [])
             property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
         
         print(f"[AGENT] Found {len(property_ids)} assigned properties for inquiries")
@@ -375,18 +413,17 @@ async def get_agent_inquiries(
             if property_ids and len(property_ids) > 0:
                 print(f"[AGENT] Fetching inquiries for {len(property_ids)} properties")
                 try:
-                    inquiries_by_property = await db.select("inquiries", filters={"property_id": {"in": property_ids}}, limit=limit or 100)
+                    inquiries_by_property = await asyncio.wait_for(
+                        db.select("inquiries", filters={"property_id": {"in": property_ids}}, limit=min(limit or 100, 200), order_by="created_at", ascending=False),
+                        timeout=1.5  # 1.5 second timeout for faster response
+                    )
                     print(f"[AGENT] Found {len(inquiries_by_property or [])} inquiries by property")
+                except asyncio.TimeoutError:
+                    print(f"[AGENT] Inquiries query timeout")
+                    inquiries_by_property = []
                 except Exception as in_error:
-                    print(f"[AGENT] 'in' filter failed for inquiries, using individual queries: {in_error}")
-                    # Fallback: query each property individually
-                    for prop_id in property_ids[:50]:  # Limit to 50 to avoid too many queries
-                        try:
-                            prop_inquiries = await db.select("inquiries", filters={"property_id": prop_id}, limit=limit or 100)
-                            if prop_inquiries:
-                                inquiries_by_property.extend(prop_inquiries)
-                        except Exception as prop_error:
-                            print(f"[AGENT] Error querying inquiries for property {prop_id}: {prop_error}")
+                    print(f"[AGENT] 'in' filter failed for inquiries: {in_error}")
+                    inquiries_by_property = []
                     # Deduplicate
                     seen_ids = set()
                     unique_inquiries = []
@@ -403,7 +440,18 @@ async def get_agent_inquiries(
             # Get inquiries by direct agent assignment (from inquiries.assigned_agent_id)
             # Also check if there's an agent_id field in inquiries table
             print(f"[AGENT] Fetching inquiries assigned directly to agent: {user_id}")
-            inquiries_by_agent = await db.select("inquiries", filters={"assigned_agent_id": user_id}, limit=limit or 100)
+            import asyncio
+            try:
+                inquiries_by_agent = await asyncio.wait_for(
+                    db.select("inquiries", filters={"assigned_agent_id": user_id}, limit=min(limit or 100, 200), order_by="created_at", ascending=False),
+                    timeout=1.5  # 1.5 second timeout for faster response
+                )
+            except asyncio.TimeoutError:
+                print(f"[AGENT] Inquiries by agent query timeout")
+                inquiries_by_agent = []
+            except Exception as agent_inq_error:
+                print(f"[AGENT] Error fetching inquiries by agent: {agent_inq_error}")
+                inquiries_by_agent = []
             print(f"[AGENT] Found {len(inquiries_by_agent or [])} inquiries by assigned_agent_id")
             
             # Also check agent_id field if it exists (for backward compatibility)
@@ -478,25 +526,53 @@ async def get_agent_inquiries(
                 print(f"[AGENT] Fallback query also failed: {fallback_error}")
                 inquiries_list = []
         
-        # Enhance inquiries with property and user details
+        # Enhance inquiries with property and user details - BATCH FETCH to avoid N+1 queries
         enhanced_inquiries = []
+        
+        # Collect all unique IDs for batch fetching
+        property_ids = list(set([inquiry.get("property_id") for inquiry in inquiries_list if inquiry.get("property_id")]))
+        user_ids = list(set([inquiry.get("user_id") for inquiry in inquiries_list if inquiry.get("user_id")]))
+        
+        # Batch fetch all properties and users in parallel with timeout
+        import asyncio
+        properties_map = {}
+        users_map = {}
+        
+        try:
+            tasks = []
+            if property_ids:
+                tasks.append(db.select("properties", filters={"id": {"in": property_ids}}, limit=len(property_ids)))
+            if user_ids:
+                tasks.append(db.select("users", filters={"id": {"in": user_ids}}, limit=len(user_ids)))
+            
+            if tasks:
+                results = await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=1.5  # 1.5 second timeout for faster response
+                )
+                
+                if property_ids:
+                    properties_all = results[0] if not isinstance(results[0], Exception) else []
+                    properties_map = {p.get("id"): p for p in properties_all if p.get("id")}
+                
+                if user_ids:
+                    users_all = results[1] if not isinstance(results[1], Exception) else []
+                    users_map = {u.get("id"): u for u in users_all if u.get("id")}
+        except asyncio.TimeoutError:
+            print(f"[AGENT] Batch fetch timeout for inquiries enhancement")
+        except Exception as batch_error:
+            print(f"[AGENT] Batch fetch error: {batch_error}")
+        
+        # Now enhance inquiries using the batch-fetched data
         for inquiry in inquiries_list:
             prop_id = inquiry.get("property_id")
             user_id_inquiry = inquiry.get("user_id")
             
-            # Get property details
-            property_data = await db.select("properties", filters={"id": prop_id})
-            property_info = property_data[0] if property_data else {}
+            # Get property details from map
+            property_info = properties_map.get(prop_id, {})
             
-            # Get user details from users table if user_id exists
-            user_info = {}
-            if user_id_inquiry:
-                try:
-                    user_data = await db.select("users", filters={"id": user_id_inquiry})
-                    if user_data:
-                        user_info = user_data[0]
-                except Exception as user_error:
-                    print(f"[AGENT] Error fetching user details: {user_error}")
+            # Get user details from map
+            user_info = users_map.get(user_id_inquiry, {}) if user_id_inquiry else {}
             
             # Always include customer details from inquiry fields (name, email, phone)
             # These are the primary customer contact details
@@ -573,33 +649,56 @@ async def get_agent_bookings(
         # Get agent's property IDs using OR query
         # Check all possible fields where agent might be assigned
         print(f"[AGENT] Querying properties for bookings with OR filter")
-        print(f"[AGENT] OR conditions: agent_id={user_id} OR assigned_agent_id={user_id} OR owner_id={user_id}")
+        # Get only ASSIGNED properties (not properties they just own)
+        print(f"[AGENT] OR conditions: agent_id={user_id} OR assigned_agent_id={user_id}")
+        import asyncio
         try:
-            all_properties = await db.select(
-                "properties", 
-                filters={
-                    "or": [
-                        {"agent_id": user_id},
-                        {"assigned_agent_id": user_id},
-                        {"owner_id": user_id}
-                    ]
-                },
-                limit=1000
+            all_properties = await asyncio.wait_for(
+                db.select(
+                    "properties", 
+                    filters={
+                        "or": [
+                            {"agent_id": user_id},
+                            {"assigned_agent_id": user_id}
+                        ]
+                    },
+                    limit=100,  # Reduced from 1000 to 100 for performance
+                    order_by="created_at",
+                    ascending=False
+                ),
+                timeout=2.0  # 2 second timeout
             )
             all_properties = all_properties or []
             property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
-            print(f"[AGENT] OR query returned {len(property_ids)} property IDs for bookings")
+            print(f"[AGENT] OR query returned {len(property_ids)} ASSIGNED property IDs for bookings")
             if property_ids:
                 print(f"[AGENT] Sample property IDs: {[pid[:8] for pid in property_ids[:3]]}")
+        except asyncio.TimeoutError:
+            print(f"[AGENT] Properties query timeout for bookings")
+            property_ids = []
         except Exception as or_error:
             print(f"[AGENT] OR query failed, using separate queries: {or_error}")
-            # Fallback to separate queries
-            properties_agent_id = await db.select("properties", filters={"agent_id": user_id}, limit=1000)
-            properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id}, limit=1000)
-            properties_owned = await db.select("properties", filters={"owner_id": user_id}, limit=1000)
+            # Fallback to separate queries - ONLY assigned properties with timeout
+            try:
+                properties_agent_id, properties_assigned_id = await asyncio.wait_for(
+                    asyncio.gather(
+                        db.select("properties", filters={"agent_id": user_id}, limit=100),
+                        db.select("properties", filters={"assigned_agent_id": user_id}, limit=100),
+                        return_exceptions=True
+                    ),
+                    timeout=2.0
+                )
+                if isinstance(properties_agent_id, Exception):
+                    properties_agent_id = []
+                if isinstance(properties_assigned_id, Exception):
+                    properties_assigned_id = []
+            except asyncio.TimeoutError:
+                print(f"[AGENT] Fallback queries timeout for bookings")
+                properties_agent_id = []
+                properties_assigned_id = []
             
-            # Combine all lists and remove duplicates
-            all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
+            # Combine only assigned properties (NOT owner_id)
+            all_properties = (properties_agent_id or []) + (properties_assigned_id or [])
             property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
         
         print(f"[AGENT] Found {len(property_ids)} assigned properties for bookings")
@@ -610,21 +709,20 @@ async def get_agent_bookings(
         # According to schema: bookings table has agent_id field
         booking_filters = []
         
-        # Bookings for agent's assigned properties - use individual queries if "in" filter fails
+        # Bookings for agent's assigned properties with timeout
         bookings_by_property = []
         if property_ids:
             try:
-                bookings_by_property = await db.select("bookings", filters={"property_id": {"in": property_ids}}, limit=limit or 100)
+                bookings_by_property = await asyncio.wait_for(
+                    db.select("bookings", filters={"property_id": {"in": property_ids}}, limit=min(limit or 100, 200), order_by="created_at", ascending=False),
+                    timeout=1.5  # 1.5 second timeout for faster response
+                )
+            except asyncio.TimeoutError:
+                print(f"[AGENT] Bookings query timeout")
+                bookings_by_property = []
             except Exception as in_error:
-                print(f"[AGENT] 'in' filter failed for bookings, using individual queries: {in_error}")
-                # Fallback: query each property individually
-                for prop_id in property_ids[:50]:  # Limit to 50 to avoid too many queries
-                    try:
-                        prop_bookings = await db.select("bookings", filters={"property_id": prop_id}, limit=limit or 100)
-                        if prop_bookings:
-                            bookings_by_property.extend(prop_bookings)
-                    except Exception as prop_error:
-                        print(f"[AGENT] Error querying bookings for property {prop_id}: {prop_error}")
+                print(f"[AGENT] 'in' filter failed for bookings: {in_error}")
+                bookings_by_property = []
                 # Deduplicate
                 seen_ids = set()
                 unique_bookings = []
@@ -635,9 +733,19 @@ async def get_agent_bookings(
                         unique_bookings.append(booking)
                 bookings_by_property = unique_bookings
         
-        # Bookings directly assigned to this agent (from bookings.agent_id)
+        # Bookings directly assigned to this agent (from bookings.agent_id) with timeout
         print(f"[AGENT] Fetching bookings assigned directly to agent: {user_id}")
-        bookings_by_agent = await db.select("bookings", filters={"agent_id": user_id}, limit=limit or 100)
+        try:
+            bookings_by_agent = await asyncio.wait_for(
+                db.select("bookings", filters={"agent_id": user_id}, limit=min(limit or 100, 200), order_by="created_at", ascending=False),
+                timeout=2.0  # 2 second timeout
+            )
+        except asyncio.TimeoutError:
+            print(f"[AGENT] Bookings by agent query timeout")
+            bookings_by_agent = []
+        except Exception as agent_book_error:
+            print(f"[AGENT] Error fetching bookings by agent: {agent_book_error}")
+            bookings_by_agent = []
         print(f"[AGENT] Found {len(bookings_by_agent or [])} bookings by agent_id")
         
         # Log sample booking IDs for debugging
@@ -666,20 +774,6 @@ async def get_agent_bookings(
         # Bookings are already fetched and filtered above, now enhance with property and user details
         try:
             # Apply limit if provided
-            if limit:
-                before_limit = len(bookings_list)
-                bookings_list = bookings_list[:limit]
-                print(f"[AGENT] After limit ({limit}): {len(bookings_list)} (was {before_limit})")
-                bookings_list = [b for b in bookings_list if b.get("status") == status]
-                print(f"[AGENT] After status filter ({status}): {len(bookings_list)} (was {before_status})")
-            
-            # Apply property_id filter if provided
-            if property_id:
-                before_prop = len(bookings_list)
-                bookings_list = [b for b in bookings_list if b.get("property_id") == property_id]
-                print(f"[AGENT] After property_id filter: {len(bookings_list)} (was {before_prop})")
-            
-            # Apply limit
             if limit and limit > 0:
                 before_limit = len(bookings_list)
                 bookings_list = bookings_list[:limit]
@@ -792,50 +886,71 @@ async def get_agent_properties(
         print(f"[AGENT] Fetching properties for user: {user_id}")
         print(f"[AGENT] Agent ID (user_id): {user_id}")
         
-        # Get agent's properties using OR query to check all assignment fields at once
+        # Get agent's ASSIGNED properties only (not properties they just own)
+        # Agents should only see properties where they are assigned as the agent
         # 1. agent_id - legacy field for assignment
-        # 2. assigned_agent_id - current field for assignment  
-        # 3. owner_id - properties owned/created by the agent
-        print(f"[AGENT] Querying properties with OR filter: agent_id={user_id} OR assigned_agent_id={user_id} OR owner_id={user_id}")
+        # 2. assigned_agent_id - current field for assignment
+        # NOTE: We do NOT include owner_id - agents should only see assigned properties, not properties they own
+        print(f"[AGENT] Querying ASSIGNED properties only: agent_id={user_id} OR assigned_agent_id={user_id}")
         
+        import asyncio
         try:
-            # Use OR query to get all properties in one call
-            unique_properties = await db.select(
-                "properties", 
-                filters={
-                    "or": [
-                        {"agent_id": user_id},
-                        {"assigned_agent_id": user_id},
-                        {"owner_id": user_id}
-                    ]
-                },
-                limit=limit or 1000
+            # Use OR query to get all assigned properties in one call with timeout
+            unique_properties = await asyncio.wait_for(
+                db.select(
+                    "properties", 
+                    filters={
+                        "or": [
+                            {"agent_id": user_id},
+                            {"assigned_agent_id": user_id}
+                        ]
+                    },
+                    limit=min(limit or 100, 200),  # Reduced limit for performance
+                    offset=offset,
+                    order_by="created_at",
+                    ascending=False
+                ),
+                timeout=2.0  # 2 second timeout
             )
             unique_properties = unique_properties or []
-            print(f"[AGENT] OR query returned {len(unique_properties)} properties")
+            print(f"[AGENT] OR query returned {len(unique_properties)} ASSIGNED properties")
             
             # Log assignment breakdown for debugging
             if unique_properties:
                 agent_id_count = len([p for p in unique_properties if p.get("agent_id") == user_id])
                 assigned_agent_id_count = len([p for p in unique_properties if p.get("assigned_agent_id") == user_id])
-                owner_id_count = len([p for p in unique_properties if p.get("owner_id") == user_id])
-                print(f"[AGENT] Property assignment breakdown - agent_id: {agent_id_count}, assigned_agent_id: {assigned_agent_id_count}, owner_id: {owner_id_count}")
+                print(f"[AGENT] Property assignment breakdown - agent_id: {agent_id_count}, assigned_agent_id: {assigned_agent_id_count}")
                 sample_ids = [p.get("id", "N/A")[:8] for p in unique_properties[:3]]
                 print(f"[AGENT] Sample property IDs: {sample_ids}")
+        except asyncio.TimeoutError:
+            print(f"[AGENT] Properties query timeout for user: {user_id}")
+            unique_properties = []
         except Exception as or_error:
             print(f"[AGENT] OR query failed, falling back to separate queries: {or_error}")
-            # Fallback to separate queries
-            properties_agent_id = await db.select("properties", filters={"agent_id": user_id}, limit=limit or 1000)
-            print(f"[AGENT] Properties with agent_id: {len(properties_agent_id or [])}")
+            # Fallback to separate queries - ONLY assigned properties with timeout
+            try:
+                properties_agent_id, properties_assigned_id = await asyncio.wait_for(
+                    asyncio.gather(
+                        db.select("properties", filters={"agent_id": user_id}, limit=min(limit or 100, 200), offset=offset, order_by="created_at", ascending=False),
+                        db.select("properties", filters={"assigned_agent_id": user_id}, limit=min(limit or 100, 200), offset=offset, order_by="created_at", ascending=False),
+                        return_exceptions=True
+                    ),
+                    timeout=2.0
+                )
+                if isinstance(properties_agent_id, Exception):
+                    properties_agent_id = []
+                if isinstance(properties_assigned_id, Exception):
+                    properties_assigned_id = []
+            except asyncio.TimeoutError:
+                print(f"[AGENT] Fallback queries timeout for user: {user_id}")
+                properties_agent_id = []
+                properties_assigned_id = []
             
-            properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id}, limit=limit or 1000)
+            print(f"[AGENT] Properties with agent_id: {len(properties_agent_id or [])}")
             print(f"[AGENT] Properties with assigned_agent_id: {len(properties_assigned_id or [])}")
             
-            properties_owned = await db.select("properties", filters={"owner_id": user_id}, limit=limit or 1000)
-            print(f"[AGENT] Properties with owner_id: {len(properties_owned or [])}")
-            
-            # Combine all lists and remove duplicates
-            all_properties = (properties_agent_id or []) + (properties_assigned_id or []) + (properties_owned or [])
+            # Combine only assigned properties (NOT owner_id)
+            all_properties = (properties_agent_id or []) + (properties_assigned_id or [])
             unique_properties = []
             seen_ids = set()
             
@@ -857,16 +972,19 @@ async def get_agent_properties(
             unique_properties = [p for p in unique_properties if p.get("status") == status]
         
         # Apply limit and offset
-        start_idx = offset or 0
-        end_idx = start_idx + (limit or 20)
-        paginated_properties = unique_properties[start_idx:end_idx]
-        
-        print(f"[AGENT] Returning {len(paginated_properties)} properties (paginated from {len(unique_properties)} total)")
+        # If limit is very high (>= 1000), return all properties without pagination
+        if limit and limit >= 1000:
+            paginated_properties = unique_properties
+            print(f"[AGENT] Returning all {len(paginated_properties)} properties (limit >= 1000, no pagination)")
+        else:
+            start_idx = offset or 0
+            end_idx = start_idx + (limit or 20)
+            paginated_properties = unique_properties[start_idx:end_idx]
+            print(f"[AGENT] Returning {len(paginated_properties)} properties (paginated from {len(unique_properties)} total)")
         if unique_properties:
             agent_id_count = len([p for p in unique_properties if p.get("agent_id") == user_id])
             assigned_agent_id_count = len([p for p in unique_properties if p.get("assigned_agent_id") == user_id])
-            owner_id_count = len([p for p in unique_properties if p.get("owner_id") == user_id])
-            print(f"[AGENT] Property assignment breakdown - agent_id: {agent_id_count}, assigned_agent_id: {assigned_agent_id_count}, owner_id: {owner_id_count}")
+            print(f"[AGENT] Property assignment breakdown - agent_id: {agent_id_count}, assigned_agent_id: {assigned_agent_id_count}")
         
         response = {"success": True, "properties": paginated_properties, "total": len(unique_properties)}
         print(f"[AGENT] Final response - success: {response['success']}, total: {response['total']}, properties array length: {len(response['properties'])}")

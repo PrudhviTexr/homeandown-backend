@@ -134,15 +134,26 @@ class SupabaseDBClient:
             return response.data
 
         try:
-            result = await self._run_sync(_execute_sync)
-            print(f"[DB] Supabase SELECT {table}: {len(result)} rows")
+            # Add timeout to database operations to prevent hanging
+            # Use shorter timeout for count queries (0.5s) vs regular queries (1.5s) for faster response
+            import asyncio
+            timeout_seconds = 0.5 if select == "count" else 1.5
+            result = await asyncio.wait_for(
+                self._run_sync(_execute_sync),
+                timeout=timeout_seconds
+            )
+            print(f"[DB] Supabase SELECT {table}: {len(result)} rows (timeout: {timeout_seconds}s)")
             return result
+        except asyncio.TimeoutError:
+            timeout_seconds = 0.5 if select == "count" else 1.5
+            print(f"[DB] Timeout error in Supabase select for table {table} (timeout: {timeout_seconds}s)")
+            return []
         except Exception as e:
             print(f"Error in Supabase select for table {table}: {e}")
             return []
 
-    async def admin_select(self, table: str, columns: str = "*", select: str = None, filters: Optional[Dict[str, Any]] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        return await self.select(table, columns=columns, select=select, filters=filters, limit=limit)
+    async def admin_select(self, table: str, columns: str = "*", select: str = None, filters: Optional[Dict[str, Any]] = None, limit: Optional[int] = None, offset: Optional[int] = None, order_by: Optional[str] = None, ascending: bool = True) -> List[Dict[str, Any]]:
+        return await self.select(table, columns=columns, select=select, filters=filters, limit=limit, offset=offset, order_by=order_by, ascending=ascending)
 
     async def insert(self, table: str, data: Dict[str, Any]) -> List[Dict[str, Any]]:
         def _execute_sync():

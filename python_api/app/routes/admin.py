@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Request, Query, File, UploadFile, Form
 from typing import Optional
-from ..core.security import require_api_key
+import traceback
+from ..core.security import require_admin_or_api_key
 from ..db.supabase_client import db
 from ..services.email import send_email
 
@@ -15,32 +16,107 @@ import datetime as dt
 router = APIRouter()
 
 @router.get("/stats")
-async def get_stats(_=Depends(require_api_key)):
+async def get_stats(request: Request, _=Depends(require_admin_or_api_key)):
+    """Get admin dashboard statistics - optimized with parallel queries and caching"""
     try:
-        users = await db.admin_select("users", select="count")
-        properties = await db.admin_select("properties", select="count")
-        bookings = await db.admin_select("bookings", select="count")
-        inquiries = await db.admin_select("inquiries", select="count")
+        import asyncio
+        import time
+        from ..core.cache import cache
+        
+        start_time = time.time()
+        
+        # Check cache first (30 second cache)
+        cache_key = "admin_stats"
+        cached_result = cache.get(cache_key)
+        if cached_result is not None:
+            elapsed = (time.time() - start_time) * 1000
+            print(f"[ADMIN] Stats cache hit ({elapsed:.0f}ms)")
+            return cached_result
+        
+        # Execute all count queries in parallel with timeout
+        # Note: Each query has a 0.5s timeout in the database client, so total should be < 1s
+        try:
+            users, properties, bookings, inquiries = await asyncio.wait_for(
+                asyncio.gather(
+                    db.admin_select("users", select="count"),
+                    db.admin_select("properties", select="count"),
+                    db.admin_select("bookings", select="count"),
+                    db.admin_select("inquiries", select="count"),
+                    return_exceptions=True
+                ),
+                timeout=1.0  # Reduced timeout since DB client has 0.5s timeout for count queries
+            )
+        except asyncio.TimeoutError:
+            print(f"[ADMIN] Stats query timeout")
+            # Return cached result if available, otherwise default values
+            if cached_result is not None:
+                return cached_result
+            return {
+                "total_users": 0,
+                "total_properties": 0,
+                "total_bookings": 0,
+                "total_inquiries": 0,
+            }
+        
+        # Handle exceptions in individual queries
+        users_count = users[0]['count'] if not isinstance(users, Exception) and users else 0
+        properties_count = properties[0]['count'] if not isinstance(properties, Exception) and properties else 0
+        bookings_count = bookings[0]['count'] if not isinstance(bookings, Exception) and bookings else 0
+        inquiries_count = inquiries[0]['count'] if not isinstance(inquiries, Exception) and inquiries else 0
         
         stats = {
-            "total_users": users[0]['count'] if users else 0,
-            "total_properties": properties[0]['count'] if properties else 0,
-            "total_bookings": bookings[0]['count'] if bookings else 0,
-            "total_inquiries": inquiries[0]['count'] if inquiries else 0,
+            "total_users": users_count,
+            "total_properties": properties_count,
+            "total_bookings": bookings_count,
+            "total_inquiries": inquiries_count,
         }
+        
+        # Cache result for 60 seconds (longer cache for faster repeated requests)
+        cache.set(cache_key, stats, ttl=60)
+        
+        elapsed = (time.time() - start_time) * 1000
+        print(f"[ADMIN] Stats fetched ({elapsed:.0f}ms)")
+        
         return stats
     except Exception as e:
+        print(f"[ADMIN] Stats error: {e}")
+        import traceback
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/users")
-async def list_users(_=Depends(require_api_key)):
+async def list_users(request: Request, _=Depends(require_admin_or_api_key), limit: int = 100, offset: int = 0):
+    """List users - optimized with timeout and pagination"""
     try:
-        return await db.admin_select("users") or []
+        import asyncio
+        import time
+        
+        start_time = time.time()
+        
+        # Add timeout to prevent hanging
+        try:
+            users = await asyncio.wait_for(
+                db.admin_select("users", limit=min(limit, 100), offset=offset),
+                    timeout=2.0  # 2 second timeout for faster response
+            )
+        except asyncio.TimeoutError:
+            print(f"[ADMIN] Users query timeout")
+            return []
+        
+        result = users or []
+        
+        elapsed = (time.time() - start_time) * 1000
+        print(f"[ADMIN] Users fetched ({elapsed:.0f}ms, {len(result)} users)")
+        
+        return result
     except Exception as e:
+        print(f"[ADMIN] List users error: {e}")
+        import traceback
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/users/{user_id}")
-async def get_user(user_id: str, _=Depends(require_api_key)):
+async def get_user(user_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Get a single user by ID"""
     try:
         user_data = await db.select("users", filters={"id": user_id})
@@ -53,7 +129,7 @@ async def get_user(user_id: str, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/users")
-async def create_user(payload: SignupRequest, _=Depends(require_api_key)):
+async def create_user(payload: SignupRequest, request: Request, _=Depends(require_admin_or_api_key)):
     try:
         user_data = {
             "id": str(uuid.uuid4()),
@@ -68,7 +144,7 @@ async def create_user(payload: SignupRequest, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.patch("/users/{user_id}")
-async def update_user(user_id: str, payload: UpdateProfileRequest, _=Depends(require_api_key)):
+async def update_user(user_id: str, payload: UpdateProfileRequest, request: Request, _=Depends(require_admin_or_api_key)):
     """Update user - PATCH method (handles status and verification_status changes)"""
     try:
         update_data = payload.dict(exclude_unset=True)
@@ -287,7 +363,7 @@ async def update_user(user_id: str, payload: UpdateProfileRequest, _=Depends(req
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/users/{user_id}")
-async def update_user_put(user_id: str, request: Request, _=Depends(require_api_key)):
+async def update_user_put(user_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Update a user - PUT method (handles status and verification_status changes)"""
     try:
         payload = await request.json()
@@ -532,7 +608,7 @@ async def update_user_put(user_id: str, request: Request, _=Depends(require_api_
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: str, _=Depends(require_api_key)):
+async def delete_user(user_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     try:
         await db.delete("users", {"id": user_id})
         return {"success": True, "message": "User deleted successfully"}
@@ -540,10 +616,41 @@ async def delete_user(user_id: str, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/properties")
-async def list_properties(_=Depends(require_api_key)):
+async def list_properties(request: Request, _=Depends(require_admin_or_api_key), limit: int = 100, offset: int = 0):
+    """List properties - optimized with timeout, pagination, and parallel queries"""
     try:
-        properties = await db.admin_select("properties")
-        users = await db.admin_select("users")
+        import asyncio
+        import time
+        
+        start_time = time.time()
+        
+        # Execute queries in parallel with timeout
+        # Note: Each query has a 2s timeout in the database client
+        try:
+            properties, users = await asyncio.wait_for(
+                asyncio.gather(
+                    db.admin_select("properties", limit=min(limit, 200), offset=offset, order_by="created_at", ascending=False),
+                    db.admin_select("users", limit=1000, order_by="created_at", ascending=False),  # Limit users to prevent huge fetch
+                    return_exceptions=True
+                ),
+                timeout=1.5  # Reduced timeout since DB client has 1s timeout for count queries
+            )
+        except asyncio.TimeoutError:
+            print(f"[ADMIN] Properties query timeout")
+            return []
+        
+        # Handle exceptions
+        if isinstance(properties, Exception):
+            print(f"[ADMIN] Properties query error: {properties}")
+            properties = []
+        if isinstance(users, Exception):
+            print(f"[ADMIN] Users query error: {users}")
+            users = []
+        
+        if not properties:
+            properties = []
+        if not users:
+            users = []
         
         # Build user map with full names (not IDs)
         user_map = {}
@@ -585,9 +692,36 @@ async def list_properties(_=Depends(require_api_key)):
                 
                 prop['agent_name'] = agent_name
                 
+                # Process images field - handle JSON strings and arrays
+                import json
+                images = prop.get('images')
+                if images is None:
+                    prop['images'] = []
+                elif isinstance(images, str):
+                    try:
+                        parsed = json.loads(images)
+                        prop['images'] = parsed if isinstance(parsed, list) else []
+                    except (json.JSONDecodeError, TypeError):
+                        prop['images'] = []
+                elif not isinstance(images, list):
+                    prop['images'] = []
+                
+                # Process amenities field similarly
+                amenities = prop.get('amenities')
+                if amenities is None:
+                    prop['amenities'] = []
+                elif isinstance(amenities, str):
+                    try:
+                        parsed = json.loads(amenities)
+                        prop['amenities'] = parsed if isinstance(parsed, list) else []
+                    except (json.JSONDecodeError, TypeError):
+                        prop['amenities'] = []
+                elif not isinstance(amenities, list):
+                    prop['amenities'] = []
+                
                 # Debug logging for first property
                 if properties.index(prop) == 0:
-                    print(f"[ADMIN] Property {prop.get('id')[:8]}: owner_id={owner_id}, owner_name={owner_name}, agent_id={agent_id}, agent_name={agent_name}")
+                    print(f"[ADMIN] Property {prop.get('id')[:8]}: owner_id={owner_id}, owner_name={owner_name}, agent_id={agent_id}, agent_name={agent_name}, images_count={len(prop.get('images', []))}")
         
         print(f"[ADMIN] Returning {len(properties) if properties else 0} properties with owner/agent names")
         return properties or []
@@ -596,7 +730,7 @@ async def list_properties(_=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/properties")
-async def create_property(payload: PropertyRequest, _=Depends(require_api_key)):
+async def create_property(payload: PropertyRequest, request: Request, _=Depends(require_admin_or_api_key)):
     try:
         property_data = payload.dict()
         property_data["id"] = str(uuid.uuid4())
@@ -612,7 +746,7 @@ async def create_property(payload: PropertyRequest, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.patch("/properties/{property_id}")
-async def update_property(property_id: str, payload: PropertyRequest, _=Depends(require_api_key)):
+async def update_property(property_id: str, payload: PropertyRequest, request: Request, _=Depends(require_admin_or_api_key)):
     try:
         update_data = payload.dict(exclude_unset=True)
         if update_data:
@@ -623,7 +757,7 @@ async def update_property(property_id: str, payload: PropertyRequest, _=Depends(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/properties/{property_id}")
-async def delete_property(property_id: str, _=Depends(require_api_key)):
+async def delete_property(property_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     try:
         await db.delete("properties", {"id": property_id})
         return {"success": True, "message": "Property deleted successfully"}
@@ -631,7 +765,7 @@ async def delete_property(property_id: str, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/properties/{property_id}/approve")
-async def approve_property(property_id: str, _=Depends(require_api_key)):
+async def approve_property(property_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     try:
         update_data = {
             "verified": True, 
@@ -703,15 +837,33 @@ async def approve_property(property_id: str, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.post("/properties/{property_id}/reject")
-async def reject_property(property_id: str, request: Request, _=Depends(require_api_key)):
+async def reject_property(property_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     try:
-        payload = await request.json()
+        payload = await request.json() if request else {}
         reason = payload.get("reason", "Rejected by admin")
+        
+        # Note: properties table doesn't have rejection_reason column
+        # We'll just update status and verified fields, and store reason in description or notes if available
         update_data = {
-            "verified": False, "status": "rejected", "rejection_reason": reason,
+            "verified": False,
+            "status": "rejected",
             "updated_at": dt.datetime.utcnow().isoformat()
         }
+        
+        # Try to append rejection reason to description if it exists
+        # First, get current property to check if description exists
+        try:
+            current_property = await db.select("properties", filters={"id": property_id})
+            if current_property and current_property[0].get("description"):
+                current_desc = current_property[0].get("description", "")
+                update_data["description"] = f"{current_desc}\n\n[REJECTED: {reason}]"
+            # If description doesn't exist or is empty, we'll just update status
+        except Exception as desc_error:
+            print(f"[ADMIN] Could not update description with rejection reason: {desc_error}")
+        
+        print(f"[ADMIN] Rejecting property {property_id} with reason: {reason}")
         result = await db.update("properties", update_data, {"id": property_id})
+        print(f"[ADMIN] Property rejection result: {result}")
         
         # Send rejection email
         try:
@@ -744,16 +896,29 @@ async def reject_property(property_id: str, request: Request, _=Depends(require_
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
         
 @router.post("/properties/{property_id}/resubmit")
-async def resubmit_property(property_id: str, request: Request, _=Depends(require_api_key)):
+async def resubmit_property(property_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     try:
-        payload = await request.json()
+        payload = await request.json() if request else {}
         reason = payload.get("reason", "Resubmission requested")
+        
+        # Note: properties table doesn't have rejection_reason column
         update_data = {
-            "status": "resubmit",
-            "rejection_reason": reason,
+            "status": "pending",  # Change status to pending for resubmission
             "updated_at": dt.datetime.utcnow().isoformat()
         }
+        
+        # Try to append resubmission reason to description if it exists
+        try:
+            current_property = await db.select("properties", filters={"id": property_id})
+            if current_property and current_property[0].get("description"):
+                current_desc = current_property[0].get("description", "")
+                update_data["description"] = f"{current_desc}\n\n[RESUBMITTED: {reason}]"
+        except Exception as desc_error:
+            print(f"[ADMIN] Could not update description with resubmission reason: {desc_error}")
+        
+        print(f"[ADMIN] Resubmitting property {property_id} with reason: {reason}")
         result = await db.update("properties", update_data, {"id": property_id})
+        print(f"[ADMIN] Property resubmission result: {result}")
 
         # Send resubmission request email
         try:
@@ -786,7 +951,7 @@ async def resubmit_property(property_id: str, request: Request, _=Depends(requir
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.post("/properties/{property_id}/assign-agent")
-async def assign_agent(property_id: str, payload: dict, _=Depends(require_api_key)):
+async def assign_agent(property_id: str, payload: dict, request: Request, _=Depends(require_admin_or_api_key)):
     try:
         agent_id = payload.get("agent_id")
         
@@ -992,14 +1157,53 @@ async def assign_agent(property_id: str, payload: dict, _=Depends(require_api_ke
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.get("/bookings")
-async def list_bookings(_=Depends(require_api_key)):
+async def list_bookings(request: Request, _=Depends(require_admin_or_api_key), limit: int = 100, offset: int = 0):
+    """List bookings - optimized with timeout, pagination, and parallel queries"""
     try:
-        bookings = await db.admin_select("bookings") or []
-        properties = await db.admin_select("properties") or []
-        users = await db.admin_select("users") or []
+        import asyncio
+        import time
+        
+        start_time = time.time()
+        
+        # Execute queries in parallel with timeout
+        # Note: Each query has a 2s timeout in the database client
+        try:
+            bookings, properties, users = await asyncio.wait_for(
+                asyncio.gather(
+                    db.admin_select("bookings", limit=min(limit, 200), offset=offset, order_by="created_at", ascending=False),
+                    db.admin_select("properties", limit=500, order_by="created_at", ascending=False),  # Limit to prevent huge fetch
+                    db.admin_select("users", limit=1000, order_by="created_at", ascending=False),  # Limit to prevent huge fetch
+                    return_exceptions=True
+                ),
+                timeout=1.5  # Reduced timeout since DB client has 1s timeout for count queries
+            )
+        except asyncio.TimeoutError:
+            print(f"[ADMIN] Bookings query timeout")
+            return []
+        
+        # Handle exceptions
+        if isinstance(bookings, Exception):
+            print(f"[ADMIN] Bookings query error: {bookings}")
+            bookings = []
+        if isinstance(properties, Exception):
+            print(f"[ADMIN] Properties query error: {properties}")
+            properties = []
+        if isinstance(users, Exception):
+            print(f"[ADMIN] Users query error: {users}")
+            users = []
+        
+        if not bookings:
+            bookings = []
+        if not properties:
+            properties = []
+        if not users:
+            users = []
 
         user_map = {user['id']: f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() for user in users}
         property_map = {prop['id']: prop for prop in properties}
+        
+        elapsed = (time.time() - start_time) * 1000
+        print(f"[ADMIN] Bookings data fetched ({elapsed:.0f}ms)")
 
         for booking in bookings:
             # Get customer name from user_id or booking fields
@@ -1031,14 +1235,39 @@ async def list_bookings(_=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.get("/inquiries")
-async def list_inquiries(_=Depends(require_api_key)):
+async def list_inquiries(request: Request, _=Depends(require_admin_or_api_key), limit: int = 100, offset: int = 0):
+    """List inquiries - optimized with timeout and pagination"""
     try:
-        return await db.admin_select("inquiries") or []
+        import asyncio
+        import time
+        
+        start_time = time.time()
+        
+        # Add timeout to prevent hanging
+        # Note: Query has a 2s timeout in the database client
+        try:
+            inquiries = await asyncio.wait_for(
+                db.admin_select("inquiries", limit=min(limit, 200), offset=offset, order_by="created_at", ascending=False),
+                timeout=2.0  # Reduced timeout since DB client has 1.5s timeout
+            )
+        except asyncio.TimeoutError:
+            print(f"[ADMIN] Inquiries query timeout")
+            return []
+        
+        result = inquiries or []
+        
+        elapsed = (time.time() - start_time) * 1000
+        print(f"[ADMIN] Inquiries fetched ({elapsed:.0f}ms, {len(result)} inquiries)")
+        
+        return result
     except Exception as e:
+        print(f"[ADMIN] List inquiries error: {e}")
+        import traceback
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/users/fix-status-mismatch")
-async def fix_status_mismatch(_=Depends(require_api_key)):
+async def fix_status_mismatch(request: Request, _=Depends(require_admin_or_api_key)):
     """Fix users who have verification_status='verified' but status='pending'"""
     try:
         # Find all users with mismatch
@@ -1070,7 +1299,7 @@ async def fix_status_mismatch(_=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=f"Failed to fix status mismatch: {str(e)}")
 
 @router.post("/users/{user_id}/approve")
-async def approve_user(user_id: str, _=Depends(require_api_key)):
+async def approve_user(user_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     try:
         # Get user data first to check user type
         user_data = await db.select("users", filters={"id": user_id})
@@ -1217,7 +1446,7 @@ async def approve_user(user_id: str, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.post("/users/{user_id}/reject")
-async def reject_user(user_id: str, request: Request, _=Depends(require_api_key)):
+async def reject_user(user_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     try:
         payload = await request.json()
         reason = payload.get("reason", "Rejected by admin")
@@ -1254,9 +1483,10 @@ async def reject_user(user_id: str, request: Request, _=Depends(require_api_key)
 
 @router.get("/documents")
 async def list_documents(
+    request: Request,
     entity_type: Optional[str] = Query(None),
     entity_id: Optional[str] = Query(None),
-    _=Depends(require_api_key)
+    _=Depends(require_admin_or_api_key)
 ):
     """List documents with optional filtering"""
     try:
@@ -1289,6 +1519,8 @@ async def list_documents(
         # Add the full public URL to each document
         for doc in documents:
             file_path = doc.get("file_path")
+            entity_type = doc.get("entity_type", "")
+            
             if file_path:
                 try:
                     # Check if file_path is already a full URL (starts with http)
@@ -1296,12 +1528,29 @@ async def list_documents(
                         # It's already a full URL, use it directly
                         doc['public_url'] = file_path
                     else:
-                        # It's just a path, generate the public URL
-                        public_url = db.supabase_client.storage.from_("documents").get_public_url(file_path)
-                        doc['public_url'] = public_url
+                        # Determine the correct bucket based on entity_type
+                        # Property images go to 'property-images', user documents go to 'documents'
+                        bucket_name = "property-images" if entity_type == "property" else "documents"
+                        
+                        # It's just a path, generate the public URL from the correct bucket
+                        try:
+                            public_url = db.supabase_client.storage.from_(bucket_name).get_public_url(file_path)
+                            doc['public_url'] = public_url
+                        except Exception as bucket_error:
+                            # Fallback: try documents bucket if property-images fails
+                            if bucket_name == "property-images":
+                                try:
+                                    public_url = db.supabase_client.storage.from_("documents").get_public_url(file_path)
+                                    doc['public_url'] = public_url
+                                except:
+                                    # Last resort: use file_path as-is if it looks like a URL
+                                    doc['public_url'] = file_path if '/' in file_path else None
+                            else:
+                                doc['public_url'] = None
+                            print(f"Warning: Using fallback bucket for {file_path}: {bucket_error}")
                 except Exception as e:
                     print(f"Error generating public url for {file_path}: {e}")
-                    doc['public_url'] = None
+                    doc['public_url'] = file_path if file_path.startswith('http') else None
 
         return documents
     except Exception as e:
@@ -1312,7 +1561,7 @@ async def list_documents(
 
 @router.post("/documents/upload")
 async def admin_upload_document(
-    _=Depends(require_api_key),
+    request: Request, _=Depends(require_admin_or_api_key),
     file: UploadFile = File(...),
     entity_id: str = Form(...),
     entity_type: str = Form("user_documents"),
@@ -1353,7 +1602,7 @@ async def admin_upload_document(
 
 # Agent-specific routes
 @router.get("/agents/{agent_id}/profile")
-async def get_agent_profile(agent_id: str, _=Depends(require_api_key)):
+async def get_agent_profile(agent_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Get agent profile with documents and application info"""
     try:
         # Get agent user data
@@ -1395,7 +1644,7 @@ async def get_agent_profile(agent_id: str, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.post("/agents/{agent_id}/approve")
-async def approve_agent(agent_id: str, request: Request, _=Depends(require_api_key)):
+async def approve_agent(agent_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Approve an agent and ensure license number is set"""
     try:
         payload = await request.json() if request else {}
@@ -1521,7 +1770,7 @@ async def approve_agent(agent_id: str, request: Request, _=Depends(require_api_k
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.post("/agents/{agent_id}/reject")
-async def reject_agent(agent_id: str, request: Request, _=Depends(require_api_key)):
+async def reject_agent(agent_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Reject an agent"""
     try:
         payload = await request.json() if request else {}
@@ -1554,7 +1803,7 @@ async def reject_agent(agent_id: str, request: Request, _=Depends(require_api_ke
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.get("/agents/earnings")
-async def get_agent_earnings(_=Depends(require_api_key)):
+async def get_agent_earnings(request: Request, _=Depends(require_admin_or_api_key)):
     """Get agent earnings summary"""
     try:
         # Get all agents
@@ -1589,7 +1838,7 @@ async def get_agent_earnings(_=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.get("/agents/commissions")
-async def get_agent_commissions(_=Depends(require_api_key)):
+async def get_agent_commissions(request: Request, _=Depends(require_admin_or_api_key)):
     """Get all agent commissions"""
     try:
         commissions = await db.select("commissions") or []
@@ -1611,7 +1860,7 @@ async def get_agent_commissions(_=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.get("/agents/{agent_id}/commissions")
-async def get_agent_commissions_detail(agent_id: str, _=Depends(require_api_key)):
+async def get_agent_commissions_detail(agent_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Get commissions for a specific agent"""
     try:
         commissions = await db.select("commissions", filters={"agent_id": agent_id}) or []
@@ -1623,7 +1872,7 @@ async def get_agent_commissions_detail(agent_id: str, _=Depends(require_api_key)
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.post("/agents/{agent_id}/commission/set-rate")
-async def set_agent_commission_rate(agent_id: str, request: Request, _=Depends(require_api_key)):
+async def set_agent_commission_rate(agent_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Set commission rate for an agent"""
     try:
         payload = await request.json()
@@ -1649,7 +1898,7 @@ async def set_agent_commission_rate(agent_id: str, request: Request, _=Depends(r
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.post("/bookings/{booking_id}/commission/pay")
-async def pay_commission(booking_id: str, request: Request, _=Depends(require_api_key)):
+async def pay_commission(booking_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Mark a commission as paid for a booking"""
     try:
         payload = await request.json() if request else {}
@@ -1673,7 +1922,7 @@ async def pay_commission(booking_id: str, request: Request, _=Depends(require_ap
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.get("/commissions/summary")
-async def get_commissions_summary(_=Depends(require_api_key)):
+async def get_commissions_summary(request: Request, _=Depends(require_admin_or_api_key)):
     """Get commission summary statistics"""
     try:
         # Get all bookings with commissions
@@ -1732,7 +1981,7 @@ async def get_commissions_summary(_=Depends(require_api_key)):
         }
 
 @router.get("/commission-payments")
-async def get_commission_payments(_=Depends(require_api_key)):
+async def get_commission_payments(request: Request, _=Depends(require_admin_or_api_key)):
     """Get all commission payments"""
     try:
         # Try to get from commission_payments table
@@ -1770,7 +2019,7 @@ async def get_commission_payments(_=Depends(require_api_key)):
         return {"success": True, "payments": []}
 
 @router.post("/inquiries/{inquiry_id}/agent-response")
-async def agent_response_to_inquiry(inquiry_id: str, request: Request, _=Depends(require_api_key)):
+async def agent_response_to_inquiry(inquiry_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Add agent response to an inquiry"""
     try:
         payload = await request.json()
@@ -1798,7 +2047,7 @@ async def agent_response_to_inquiry(inquiry_id: str, request: Request, _=Depends
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 @router.get("/analytics")
-async def get_analytics(_=Depends(require_api_key), range: str = "7d"):
+async def get_analytics(request: Request, _=Depends(require_admin_or_api_key), range: str = "7d"):
     """Get analytics data"""
     try:
         # Parse range
@@ -1853,7 +2102,7 @@ async def get_analytics(_=Depends(require_api_key), range: str = "7d"):
 
 # Additional missing routes
 @router.post("/users/{user_id}/profile")
-async def update_user_profile(user_id: str, request: Request, _=Depends(require_api_key)):
+async def update_user_profile(user_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Update user profile data"""
     try:
         payload = await request.json()
@@ -1863,7 +2112,7 @@ async def update_user_profile(user_id: str, request: Request, _=Depends(require_
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/roles/approve")
-async def approve_role_request(request: Request, _=Depends(require_api_key)):
+async def approve_role_request(request: Request, _=Depends(require_admin_or_api_key)):
     """Approve a user's role request"""
     try:
         from ..services.user_role_service import UserRoleService
@@ -1988,7 +2237,7 @@ async def approve_role_request(request: Request, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/roles/reject")
-async def reject_role_request(request: Request, _=Depends(require_api_key)):
+async def reject_role_request(request: Request, _=Depends(require_admin_or_api_key)):
     """Reject a user's role request"""
     try:
         from ..services.user_role_service import UserRoleService
@@ -2108,7 +2357,7 @@ async def reject_role_request(request: Request, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/users/{user_id}/bank")
-async def update_user_bank(user_id: str, request: Request, _=Depends(require_api_key)):
+async def update_user_bank(user_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Update user bank details"""
     try:
         payload = await request.json()
@@ -2122,7 +2371,7 @@ async def update_user_bank(user_id: str, request: Request, _=Depends(require_api
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/users/{user_id}/verify-bank")
-async def verify_user_bank(user_id: str, _=Depends(require_api_key)):
+async def verify_user_bank(user_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Verify user bank account"""
     try:
         update_data = {
@@ -2134,7 +2383,7 @@ async def verify_user_bank(user_id: str, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/users/{user_id}/verify-status")
-async def update_verification_status(user_id: str, request: Request, _=Depends(require_api_key)):
+async def update_verification_status(user_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Update user verification status"""
     try:
         payload = await request.json()
@@ -2162,7 +2411,7 @@ async def update_verification_status(user_id: str, request: Request, _=Depends(r
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/inquiries/{inquiry_id}/assign-agent")
-async def assign_agent_to_inquiry(inquiry_id: str, request: Request, _=Depends(require_api_key)):
+async def assign_agent_to_inquiry(inquiry_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Assign an agent to an inquiry"""
     try:
         payload = await request.json()
@@ -2185,7 +2434,7 @@ async def assign_agent_to_inquiry(inquiry_id: str, request: Request, _=Depends(r
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/documents/{document_id}/approve")
-async def approve_document(document_id: str, _=Depends(require_api_key)):
+async def approve_document(document_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Approve a document"""
     try:
         print(f"[ADMIN] Approving document {document_id}")
@@ -2217,7 +2466,7 @@ async def approve_document(document_id: str, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=f"Failed to approve document: {str(e)}")
 
 @router.post("/documents/{document_id}/reject")
-async def reject_document(document_id: str, request: Request, _=Depends(require_api_key)):
+async def reject_document(document_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Reject a document"""
     try:
         payload = await request.json() if request else {}
@@ -2368,17 +2617,55 @@ async def reject_document(document_id: str, request: Request, _=Depends(require_
         raise HTTPException(status_code=500, detail=f"Failed to reject document: {str(e)}")
 
 @router.get("/notifications")
-async def get_notifications(_=Depends(require_api_key), user_id: str = None):
-    """Get notifications for a user"""
+async def get_notifications(request: Request, _=Depends(require_admin_or_api_key), user_id: str = None, limit: int = 50):
+    """Get notifications for a user - optimized with timeout and limit"""
     try:
+        import asyncio
+        import time
+        from ..core.cache import cache
+        
+        start_time = time.time()
+        
+        # Check cache first (30 second cache)
+        cache_key = f"admin_notifications:{user_id or 'all'}:{limit}"
+        cached_result = cache.get(cache_key)
+        if cached_result is not None:
+            elapsed = (time.time() - start_time) * 1000
+            print(f"[ADMIN] Notifications cache hit ({elapsed:.0f}ms)")
+            return cached_result
+        
         filters = {"user_id": user_id} if user_id else {}
-        notifications = await db.select("notifications", filters=filters) or []
-        return notifications
+        
+        # Add timeout to prevent hanging
+        try:
+            notifications = await asyncio.wait_for(
+                db.select("notifications", filters=filters, limit=min(limit, 100), order_by="created_at", ascending=False),
+                    timeout=1.5  # 1.5 second timeout for faster response
+            )
+        except asyncio.TimeoutError:
+            print(f"[ADMIN] Notifications query timeout")
+            # Return cached result if available, otherwise empty
+            if cached_result is not None:
+                return cached_result
+            return []
+        
+        result = notifications or []
+        
+        # Cache result for 30 seconds
+        cache.set(cache_key, result, ttl=60)  # Longer cache for faster repeated requests
+        
+        elapsed = (time.time() - start_time) * 1000
+        print(f"[ADMIN] Notifications fetched ({elapsed:.0f}ms, {len(result)} notifications)")
+        
+        return result
     except Exception as e:
+        print(f"[ADMIN] Notifications error: {e}")
+        import traceback
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/property-assignments/{property_id}/tracking")
-async def get_property_assignment_tracking(property_id: str, _=Depends(require_api_key)):
+async def get_property_assignment_tracking(property_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Get complete tracking information for a property's agent assignment process"""
     try:
         from ..services.sequential_agent_notification import SequentialAgentNotificationService
@@ -2401,7 +2688,7 @@ async def get_property_assignment_tracking(property_id: str, _=Depends(require_a
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/property-assignments/queue")
-async def get_all_assignment_queues(_=Depends(require_api_key), status: Optional[str] = None):
+async def get_all_assignment_queues(request: Request, _=Depends(require_admin_or_api_key), status: Optional[str] = None):
     """Get all property assignment queues (for admin dashboard)"""
     try:
         filters = {}
@@ -2446,7 +2733,7 @@ async def get_all_assignment_queues(_=Depends(require_api_key), status: Optional
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/property-assignments/unassigned")
-async def get_unassigned_properties(_=Depends(require_api_key)):
+async def get_unassigned_properties(request: Request, _=Depends(require_admin_or_api_key)):
     """Get all properties that are unassigned (no agent assigned)"""
     try:
         # Get properties with no agent assigned
@@ -2480,7 +2767,7 @@ async def get_unassigned_properties(_=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/properties/{property_id}/comprehensive-stats")
-async def get_property_comprehensive_stats(property_id: str, _=Depends(require_api_key)):
+async def get_property_comprehensive_stats(property_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Get comprehensive statistics for a property including inquiries, bookings, agent, views"""
     try:
         # Get property
@@ -2579,12 +2866,11 @@ async def get_property_comprehensive_stats(property_id: str, _=Depends(require_a
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/notifications/{notification_id}/mark-read")
-async def mark_notification_read(notification_id: str, _=Depends(require_api_key)):
+async def mark_notification_read(notification_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Mark a notification as read"""
     try:
         update_data = {
             "read": True,
-            "read_at": dt.datetime.utcnow().isoformat(),
             "updated_at": dt.datetime.utcnow().isoformat()
         }
         return await db.update("notifications", update_data, {"id": notification_id})
@@ -2592,7 +2878,7 @@ async def mark_notification_read(notification_id: str, _=Depends(require_api_key
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/properties/{property_id}/retry-assignment")
-async def retry_property_assignment(property_id: str, _=Depends(require_api_key)):
+async def retry_property_assignment(property_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Resets and retries the agent assignment process for a property."""
     try:
         print(f"[ADMIN] Retrying agent assignment for property: {property_id}")
@@ -2625,7 +2911,7 @@ async def retry_property_assignment(property_id: str, _=Depends(require_api_key)
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
         
 @router.get("/debug/agents-by-zipcode/{zipcode}")
-async def debug_agents_by_zipcode(zipcode: str, _=Depends(require_api_key)):
+async def debug_agents_by_zipcode(zipcode: str, request: Request, _=Depends(require_admin_or_api_key)):
     """Debug endpoint to check which agents match a zipcode"""
     try:
         # Get all verified active agents
@@ -2679,7 +2965,7 @@ async def debug_agents_by_zipcode(zipcode: str, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/email-config-status")
-async def check_email_configuration(_=Depends(require_api_key)):
+async def check_email_configuration(request: Request, _=Depends(require_admin_or_api_key)):
     """Check which email providers are configured"""
     import os
     from ..core.config import settings
@@ -2734,7 +3020,7 @@ async def check_email_configuration(_=Depends(require_api_key)):
     }
 
 @router.post("/test-email")
-async def test_email_service(request: Request, _=Depends(require_api_key)):
+async def test_email_service(request: Request, _=Depends(require_admin_or_api_key)):
     """Test endpoint to verify email service is working"""
     try:
         payload = await request.json()
@@ -2780,5 +3066,5 @@ async def test_email_service(request: Request, _=Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/users/all")
-async def list_all_users(_=Depends(require_api_key)):
+async def list_all_users(request: Request, _=Depends(require_admin_or_api_key)):
     """List all users across all roles"""

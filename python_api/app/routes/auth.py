@@ -180,8 +180,14 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
         # Admin notifications are handled by admin dashboard
         print(f"[AUTH] User registration complete for {payload.email}")
         
-        # NOTE: OTP will be sent by the frontend OTPVerification component
-        # Do not send OTP here to avoid duplicate emails
+        # Send OTP email automatically during signup
+        try:
+            from ..services.otp_service import send_email_otp
+            otp_token = await send_email_otp(payload.email.lower(), "email_verification")
+            print(f"[AUTH] OTP sent to {payload.email.lower()} during signup")
+        except Exception as otp_error:
+            print(f"[AUTH] Failed to send OTP during signup: {otp_error}")
+            # Don't fail signup if OTP sending fails - user can request OTP again
         
         # Return success with user ID
         return {
@@ -212,18 +218,21 @@ async def login(payload: LoginRequest, response: Response, role: Optional[str] =
         print(f"\n[AUTH] Login attempt for: {payload.email} (requested role: {role})")
         
         try:
-            users: List[Dict[str, Any]] = await db.select("users", filters={"email": payload.email.lower()})
+            # Add timeout to prevent hanging on slow database
+            import asyncio
+            users: List[Dict[str, Any]] = await asyncio.wait_for(
+                db.select("users", filters={"email": payload.email.lower()}, limit=1),
+                timeout=1.5  # Reduced to 1.5 seconds for faster failure
+            )
             if not users:
-                print(f"[AUTH] User not found: {payload.email}")
                 raise HTTPException(status_code=401, detail="Invalid email or password")
             
             user: Dict[str, Any] = users[0]
-            print(f"[AUTH] User found: {user['id']} (registered as: {user.get('user_type', 'buyer')})")
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Database timeout - please try again")
         except HTTPException:
             raise
         except Exception as db_error:
-            print(f"[AUTH] Database error during login: {db_error}")
-            print(f"[AUTH] Full traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail="Login failed due to database error")
         
         try:
@@ -317,6 +326,18 @@ async def login(payload: LoginRequest, response: Response, role: Optional[str] =
                 max_age=60 * 60 * 24 * refresh_expires_days,
                 path="/api"
             )
+            
+            # Also set auth_token cookie for session-based authentication
+            # This allows the backend to authenticate requests via cookie
+            response.set_cookie(
+                "auth_token",
+                auth_token,
+                httponly=True,
+                secure=settings.SITE_URL.startswith("https") if settings.SITE_URL else False,
+                samesite="lax",
+                max_age=60 * 60 * 24,  # 1 day for auth token
+                path="/api"
+            )
 
             return {
                 "success": True,
@@ -346,37 +367,56 @@ async def login(payload: LoginRequest, response: Response, role: Optional[str] =
 
 @router.get("/me")
 async def get_profile(request: Request) -> Dict[str, Any]:
-    """Get current user profile from JWT token with ALL fields."""
+    """Get current user profile from JWT token with ALL fields - optimized for speed."""
     try:
-        print(f"[AUTH] Profile request received")
+        # Extract token from request (for returning to frontend)
+        token = None
+        auth = request.headers.get("Authorization")
+        if auth and auth.lower().startswith("bearer "):
+            token = auth.split(None, 1)[1].strip()
+        if not token:
+            token = request.cookies.get("auth_token")
         
-        # Get user claims from JWT token
+        # Get user claims from JWT token (fast - no DB query)
         user_claims = get_current_user_claims(request)
         user_id = user_claims.get("sub")  # JWT standard uses 'sub' for subject (user_id)
         
         if not user_id:
-            print(f"[AUTH] User not found in database: {user_id}")
             raise HTTPException(status_code=401, detail="Authentication required")
         
-        # Fetch user data from database
-        users = await db.select("users", filters={"id": user_id})
+        # Check cache first (30 second cache for auth endpoint - very short for security)
+        from ..core.cache import cache
+        cache_key = f"auth_profile:{user_id}"
+        cached_result = cache.get(cache_key)
+        if cached_result is not None:
+            # Update token in cached result if we have a new one
+            if token:
+                cached_result["token"] = token
+            return cached_result
+        
+        # Fetch user data from database (with aggressive timeout)
+        import asyncio
+        try:
+            users = await asyncio.wait_for(
+                db.select("users", filters={"id": user_id}, limit=1),
+                timeout=1.5  # Reduced to 1.5 seconds for faster failure
+            )
+        except asyncio.TimeoutError:
+            # If database is slow, return cached profile if available, otherwise error
+            raise HTTPException(status_code=504, detail="Database timeout - please try again")
+        
         if not users:
-            print(f"[AUTH] User not found in database: {user_id}")
             raise HTTPException(status_code=404, detail="User not found")
         
         user = users[0]
-        print(f"[AUTH] Profile data retrieved for: {user['email']}")
         
-        # Get user's active roles
-        try:
-            from ..services.user_role_service import UserRoleService
-            active_roles = await UserRoleService.get_active_user_roles(user_id)
-        except Exception as role_error:
-            print(f"[AUTH] Failed to get user roles: {role_error}")
-            active_roles = [user.get("user_type", "buyer")]
+        # Get user's active roles (skip if slow - use default immediately)
+        active_roles = [user.get("user_type", "buyer")]  # Default to user_type immediately
+        # Skip role service call for speed - just use user_type
+        # Role service can be slow and is not critical for basic auth
         
-        # Return ALL fields from the database
-        return {
+        # Build response with ALL fields from the database
+        response_data = {
             "id": user["id"],
             "email": user["email"],
             "first_name": user.get("first_name", ""),
@@ -415,6 +455,18 @@ async def get_profile(request: Request) -> Dict[str, Any]:
             "updated_at": user.get("updated_at"),
             "email_verified_at": user.get("email_verified_at")
         }
+        
+        # Include token in response so frontend can store it
+        # This is needed because httponly cookies can't be read by JavaScript
+        if token:
+            response_data["token"] = token
+        
+        # Cache result for 60 seconds (longer cache to reduce database load)
+        from ..core.cache import cache
+        cache_key = f"auth_profile:{user_id}"
+        cache.set(cache_key, response_data, ttl=60)  # Increased to 60s to reduce DB queries
+        
+        return response_data
         
     except HTTPException:
         raise
@@ -782,32 +834,52 @@ async def resend_verification_email(request: Request) -> Dict[str, Any]:
 
 @router.post("/logout")
 async def logout(request: Request, response: Response) -> Dict[str, Any]:
-    """Logout user by revoking refresh token."""
+    """Logout user by revoking refresh token - optimized for speed."""
     try:
-        # Get refresh token from cookie
+        # Clear the cookie immediately (don't wait for database)
+        response.delete_cookie("refresh_token", path="/api")
+        
+        # Get refresh token from cookie (before clearing)
         refresh_token = request.cookies.get("refresh_token")
         
+        # Revoke token in background (non-blocking) - don't wait for it
         if refresh_token:
+            import asyncio
             # Hash the token to find it in database
             refresh_hash = hash_refresh_token(refresh_token)
             
-            # Find and revoke the token
-            try:
-                tokens = await db.select("refresh_tokens", filters={"token_hash": refresh_hash})
-                for t in tokens:
-                    await db.delete("refresh_tokens", {"id": t["id"]})
-                    print(f"[AUTH] Revoked refresh token: {t['id']}")
-            except Exception as revoke_error:
-                print(f"[AUTH] Logout revoke failed: {revoke_error}")
+            # Delete token in background with timeout - don't block response
+            async def revoke_token_background():
+                try:
+                    import asyncio
+                    tokens = await asyncio.wait_for(
+                        db.select("refresh_tokens", filters={"token_hash": refresh_hash}, limit=10),
+                        timeout=2.0  # 2 second timeout
+                    )
+                    for t in tokens:
+                        try:
+                            await asyncio.wait_for(
+                                db.delete("refresh_tokens", {"id": t["id"]}),
+                                timeout=2.0  # 2 second timeout
+                            )
+                        except asyncio.TimeoutError:
+                            pass  # Ignore timeout - token will expire anyway
+                        except Exception:
+                            pass  # Ignore errors - token will expire anyway
+                except asyncio.TimeoutError:
+                    pass  # Ignore timeout - token will expire anyway
+                except Exception:
+                    pass  # Ignore errors - token will expire anyway
+            
+            # Fire and forget - don't wait for completion
+            asyncio.create_task(revoke_token_background())
         
-        # Clear the cookie
-        response.delete_cookie("refresh_token", path="/api")
-        
+        # Return immediately - don't wait for token deletion
         return {"success": True, "message": "Logged out successfully"}
         
     except Exception as e:
-        print(f"[AUTH] Logout error: {e}")
-        raise HTTPException(status_code=500, detail=f"Logout failed: {str(e)}")
+        # Even on error, return success - logout should always succeed
+        return {"success": True, "message": "Logged out successfully"}
 
 
 @router.get("/me")

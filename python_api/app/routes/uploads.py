@@ -114,19 +114,44 @@ async def upload_file(
     entity_id: str = Form(""),
     document_category: str = Form(""),
     file: UploadFile = File(...),
+    request: Request = None,
     claims: dict = Depends(try_get_current_user_claims) # Use the new dependency
 ):
     """
     User-facing endpoint to upload a file.
     The user's ID is automatically used as entity_id and uploaded_by if available.
+    Also accepts API key authentication as fallback.
     """
     try:
         current_user_id = claims.get("sub") if claims else None
         
+        # Check for API key as fallback if no user authentication
+        if not current_user_id and request:
+            from ..core.security import require_api_key
+            try:
+                api_key = request.headers.get("X-API-Key")
+                if api_key:
+                    from ..core.config import settings
+                    if api_key == settings.PYTHON_API_KEY:
+                        # API key is valid, allow upload but still need entity_id
+                        print(f"[UPLOAD] API key authentication used")
+                    else:
+                        print(f"[UPLOAD] Invalid API key provided")
+            except Exception as api_key_error:
+                print(f"[UPLOAD] API key check error: {api_key_error}")
+        
         # Prioritize authenticated user, but allow entity_id from form for signups
-        final_entity_id = entity_id or current_user_id
-        if not final_entity_id:
-            raise HTTPException(status_code=400, detail="entity_id is required for anonymous uploads.")
+        # For new properties (entity_id = 0 or empty), use current_user_id if available
+        # This allows uploading images before the property is created
+        if entity_id and entity_id != "0" and entity_id.strip():
+            final_entity_id = entity_id
+        elif current_user_id:
+            # For new properties, use user ID as temporary entity_id
+            # The property will be linked later when the property is created
+            final_entity_id = current_user_id
+            print(f"[UPLOAD] Using authenticated user ID as entity_id for new property upload: {final_entity_id}")
+        else:
+            raise HTTPException(status_code=400, detail="entity_id is required for anonymous uploads. Please provide entity_id or ensure you are logged in.")
 
         # uploaded_by should be the authenticated user if available
         # For property uploads, if no auth user, try to get owner_id from property

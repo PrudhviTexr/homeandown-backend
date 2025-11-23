@@ -328,16 +328,11 @@ async def create_booking(booking_data: dict, request: Request):
         # Try to get user_id from authentication if available
         user_id = None
         try:
-            # Check if there's an Authorization header
-            auth_header = request.headers.get("Authorization")
-            if auth_header and auth_header.startswith("Bearer "):
-                token = auth_header.split(" ")[1]
-                # Decode JWT token to get user_id
-                from ..core.security import decode_jwt_token
-                payload = decode_jwt_token(token)
-                if payload and "user_id" in payload:
-                    user_id = payload["user_id"]
-                    print(f"[RECORDS] Found authenticated user: {user_id}")
+            from ..core.security import try_get_current_user_claims
+            claims = try_get_current_user_claims(request)
+            if claims:
+                user_id = claims.get("sub")  # JWT uses "sub" for user ID
+                print(f"[RECORDS] Found authenticated user: {user_id}")
         except Exception as auth_error:
             print(f"[RECORDS] No authentication found, creating anonymous booking: {auth_error}")
         
@@ -369,8 +364,41 @@ async def create_booking(booking_data: dict, request: Request):
                     print(f"[RECORDS] Created temporary user for anonymous booking: {user_id}")
             except Exception as user_error:
                 print(f"[RECORDS] Failed to handle user creation/lookup: {user_error}")
-                # Fallback: use a default UUID
-                user_id = "00000000-0000-0000-0000-000000000000"
+                import traceback
+                print(f"[RECORDS] User error traceback: {traceback.format_exc()}")
+                # Fallback: set user_id to None (database allows NULL for user_id)
+                user_id = None
+        
+        # Format booking_date and booking_time properly
+        booking_date_str = booking_data['booking_date']
+        booking_time_str = booking_data['booking_time']
+        
+        # Ensure booking_date is in YYYY-MM-DD format
+        try:
+            # Parse and reformat date to ensure it's correct
+            if isinstance(booking_date_str, str):
+                # Try to parse the date to validate it
+                parsed_date = dt.datetime.strptime(booking_date_str, "%Y-%m-%d").date()
+                booking_date_formatted = parsed_date.isoformat()  # Returns YYYY-MM-DD
+            else:
+                booking_date_formatted = str(booking_date_str)
+        except Exception as date_error:
+            print(f"[RECORDS] Error parsing booking_date '{booking_date_str}': {date_error}")
+            booking_date_formatted = booking_date_str  # Use as-is if parsing fails
+        
+        # Ensure booking_time is in HH:MM:SS format (or HH:MM)
+        try:
+            if isinstance(booking_time_str, str):
+                # If time is in HH:MM format, add :00 for seconds
+                if len(booking_time_str.split(':')) == 2:
+                    booking_time_formatted = booking_time_str + ":00"
+                else:
+                    booking_time_formatted = booking_time_str
+            else:
+                booking_time_formatted = str(booking_time_str)
+        except Exception as time_error:
+            print(f"[RECORDS] Error parsing booking_time '{booking_time_str}': {time_error}")
+            booking_time_formatted = booking_time_str  # Use as-is if parsing fails
         
         booking_record = {
             "id": str(uuid.uuid4()),
@@ -378,28 +406,50 @@ async def create_booking(booking_data: dict, request: Request):
             "user_id": user_id,
             "name": booking_data['name'],
             "email": booking_data['email'],
-            "phone": booking_data.get('phone', ''),
-            "booking_date": booking_data['booking_date'],
-            "booking_time": booking_data['booking_time'],
-            "notes": booking_data.get('notes', ''),
+            "phone": booking_data.get('phone') or None,  # Use None instead of empty string
+            "booking_date": booking_date_formatted,
+            "booking_time": booking_time_formatted,
+            "notes": booking_data.get('notes') or None,  # Use None instead of empty string
             "status": "pending",
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()
         }
         
-        created = await db.insert("bookings", booking_record)
+        print(f"[RECORDS] Attempting to insert booking with data: {booking_record}")
+        try:
+            created = await db.insert("bookings", booking_record)
+            print(f"[RECORDS] Booking inserted successfully: {created}")
+        except Exception as insert_error:
+            print(f"[RECORDS] Database insert error: {insert_error}")
+            import traceback
+            print(f"[RECORDS] Insert error traceback: {traceback.format_exc()}")
+            raise  # Re-raise to be caught by outer exception handler
+        
+        # db.insert returns a list, so get the first element and extract booking_id immediately
+        created_booking = created[0] if created and isinstance(created, list) and len(created) > 0 else None
+        booking_id = created_booking.get("id") if created_booking else booking_record.get("id")
+        print(f"[RECORDS] Booking ID: {booking_id}")
         
         # Get property details to find the owner/agent
         property_details = None
+        agent_id = None
         try:
             properties = await db.select("properties", filters={"id": booking_data['property_id']})
             if properties:
                 property_details = properties[0]
-                # Assign agent to booking if property has an agent
-                if property_details.get("agent_id"):
-                    booking_record["agent_id"] = property_details["agent_id"]
+                # Assign agent to booking if property has an agent (check both agent_id and assigned_agent_id)
+                agent_id = property_details.get("assigned_agent_id") or property_details.get("agent_id")
+                if agent_id:
+                    # Update the booking with agent_id
+                    try:
+                        await db.update("bookings", {"agent_id": agent_id}, {"id": booking_id})
+                        print(f"[RECORDS] Assigned agent {agent_id} to booking {booking_id}")
+                    except Exception as update_error:
+                        print(f"[RECORDS] Error updating booking with agent_id: {update_error}")
         except Exception as prop_error:
             print(f"[RECORDS] Error fetching property details: {prop_error}")
+            import traceback
+            print(f"[RECORDS] Property error traceback: {traceback.format_exc()}")
         
         # Send email notifications
         try:
@@ -430,9 +480,10 @@ async def create_booking(booking_data: dict, request: Request):
                 print(f"[RECORDS] Confirmation email sent to: {booker_email}")
                 
                 # Send notification email to assigned agent (primary contact for inquiries/bookings)
-                if property_details.get("agent_id"):
+                # agent_id is already set from property_details above
+                if agent_id:
                     try:
-                        agent_data = await db.select("users", filters={"id": property_details["agent_id"]})
+                        agent_data = await db.select("users", filters={"id": agent_id})
                         if agent_data:
                             agent_info = agent_data[0]
                             agent_name = f"{agent_info.get('first_name', '')} {agent_info.get('last_name', '')}".strip()
@@ -454,10 +505,16 @@ async def create_booking(booking_data: dict, request: Request):
                                     html=notification_html
                                 )
                                 print(f"[RECORDS] ✅ Sent booking notification to agent {agent_name}: {agent_email}")
-                                # Also update booking with agent_id
-                                await db.update("bookings", {"agent_id": property_details["agent_id"]}, {"id": booking_record["id"]})
+                                # Agent_id should already be set, but ensure it's updated if needed
+                                if agent_id:
+                                    try:
+                                        await db.update("bookings", {"agent_id": agent_id}, {"id": booking_id})
+                                    except Exception as update_error:
+                                        print(f"[RECORDS] Error updating booking with agent_id: {update_error}")
                     except Exception as agent_error:
                         print(f"[RECORDS] Error sending email to agent: {agent_error}")
+                        import traceback
+                        print(f"[RECORDS] Agent error traceback: {traceback.format_exc()}")
                 
                 # Also send notification email to property owner (as secondary contact)
                 if property_details.get('owner_id'):
@@ -492,28 +549,34 @@ async def create_booking(booking_data: dict, request: Request):
         
         # Send admin notification for new booking
         try:
-            from ..services.admin_notification_service import AdminNotificationService
-            # Fetch user data for notification
-            user_data_for_notification = None
-            if user_id:
-                try:
-                    user_records = await db.select("users", filters={"id": user_id})
-                    if user_records:
-                        user_data_for_notification = user_records[0]
-                except Exception as user_fetch_error:
-                    print(f"[RECORDS] Error fetching user data for notification: {user_fetch_error}")
-            
-            await AdminNotificationService.notify_booking_submission(booking_record, property_details, user_data_for_notification)
-            print(f"[RECORDS] Admin notification sent for new booking: {booking_data.get('name')}")
+            # Try to import AdminNotificationService if it exists
+            try:
+                from ..services.admin_notification_service import AdminNotificationService
+                # Fetch user data for notification
+                user_data_for_notification = None
+                if user_id:
+                    try:
+                        user_records = await db.select("users", filters={"id": user_id})
+                        if user_records:
+                            user_data_for_notification = user_records[0]
+                    except Exception as user_fetch_error:
+                        print(f"[RECORDS] Error fetching user data for notification: {user_fetch_error}")
+                
+                await AdminNotificationService.notify_booking_submission(booking_record, property_details, user_data_for_notification)
+                print(f"[RECORDS] Admin notification sent for new booking: {booking_data.get('name')}")
+            except ImportError:
+                print(f"[RECORDS] AdminNotificationService not available, skipping admin notification")
         except Exception as notify_error:
             print(f"[RECORDS] Failed to send admin notification: {notify_error}")
+            import traceback
+            print(f"[RECORDS] Notification error traceback: {traceback.format_exc()}")
             # Don't fail booking creation if notification fails
         
         # Get additional details for response
         response_data = {
             "success": True,
             "message": f"Tour booking confirmed for {property_details.get('title', 'property') if property_details else 'property'} on {booking_data['booking_date']} at {booking_data['booking_time']}",
-            "id": created["id"] if created else booking_record["id"],
+            "id": booking_id,
             "property_name": property_details.get("title", f"Property #{booking_data['property_id']}") if property_details else f"Property #{booking_data['property_id']}",
             "booking_date": booking_data['booking_date'],
             "booking_time": booking_data['booking_time'],
@@ -521,10 +584,11 @@ async def create_booking(booking_data: dict, request: Request):
             "agent_email": None
         }
         
-        # Get agent details if assigned
-        if booking_record.get("agent_id"):
+        # Get agent details if assigned (use agent_id from property or booking)
+        final_agent_id = agent_id or booking_record.get("agent_id")
+        if final_agent_id:
             try:
-                agent_users = await db.select("users", filters={"id": booking_record["agent_id"]})
+                agent_users = await db.select("users", filters={"id": final_agent_id})
                 if agent_users:
                     agent = agent_users[0]
                     response_data["agent_name"] = f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip()
@@ -535,9 +599,13 @@ async def create_booking(booking_data: dict, request: Request):
         print("[RECORDS] Booking created successfully")
         return response_data
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[RECORDS] Create booking error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create booking")
+        import traceback
+        print(f"[RECORDS] Full traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to create booking: {str(e)}")
 
 @router.post("/properties")
 async def create_property(prop: dict, _=Depends(require_api_key)):
@@ -760,14 +828,22 @@ async def update_booking(booking_id: str, update: BookingUpdateRequest):
                 customer_email = booking.get("email")
                 customer_name = booking.get("name") or booking.get("email", "Customer")
             
+            # Check if agent was just assigned (before we send any emails to avoid duplicates)
+            agent_just_assigned = "agent_id" in update_data and update_data["agent_id"] and update_data["agent_id"] != booking.get("agent_id")
+            
             if customer_email:
-                subject, html = booking_status_email(
-                    booking, property_details, update.status, update.agent_notes
-                )
-                await send_email(customer_email, subject, html)
-                print(f"[RECORDS] ✅ Sent booking status update email to customer: {customer_email}")
+                try:
+                    subject, html = booking_status_email(
+                        booking, property_details, update.status, update.agent_notes
+                    )
+                    await send_email(customer_email, subject, html)
+                    print(f"[RECORDS] ✅ Sent booking status update email to customer: {customer_email}")
+                except Exception as customer_email_error:
+                    print(f"[RECORDS] Error sending email to customer: {customer_email_error}")
+                    import traceback
+                    print(f"[RECORDS] Customer email error traceback: {traceback.format_exc()}")
 
-            # Send notification to agent if status changed or agent was assigned
+            # Send notification to agent if status changed (but NOT if agent was just assigned - that gets a separate assignment email)
             # Use updated agent_id if it was changed, otherwise use existing
             agent_id_to_notify = update_data.get("agent_id") if "agent_id" in update_data else booking.get("agent_id")
             
@@ -775,19 +851,63 @@ async def update_booking(booking_id: str, update: BookingUpdateRequest):
             if not agent_id_to_notify and property_details:
                 agent_id_to_notify = property_details.get("agent_id") or property_details.get("assigned_agent_id")
             
-            if agent_id_to_notify:
-                agent_users = await db.select("users", filters={"id": agent_id_to_notify})
-                if agent_users and agent_users[0].get("email"):
-                    agent_email = agent_users[0]["email"]
-                    agent_name = f"{agent_users[0].get('first_name', '')} {agent_users[0].get('last_name', '')}".strip() or "Agent"
-                    agent_subject, agent_html = booking_status_email(
-                        booking, property_details, update.status, update.agent_notes, is_agent=True
-                    )
-                    await send_email(agent_email, agent_subject, agent_html)
-                    print(f"[RECORDS] ✅ Sent booking status update email to agent {agent_name}: {agent_email}")
+            # Only send status update email to agent if agent exists and was NOT just assigned (to avoid duplicate)
+            if agent_id_to_notify and not agent_just_assigned:
+                try:
+                    agent_users = await db.select("users", filters={"id": agent_id_to_notify})
+                    if agent_users and agent_users[0].get("email"):
+                        agent_email = agent_users[0]["email"]
+                        agent_name = f"{agent_users[0].get('first_name', '')} {agent_users[0].get('last_name', '')}".strip() or "Agent"
+                        agent_subject, agent_html = booking_status_email(
+                            booking, property_details, update.status, update.agent_notes, is_agent=True
+                        )
+                        await send_email(agent_email, agent_subject, agent_html)
+                        print(f"[RECORDS] ✅ Sent booking status update email to agent {agent_name}: {agent_email}")
+                except Exception as agent_email_error:
+                    print(f"[RECORDS] Error sending email to agent: {agent_email_error}")
+                    import traceback
+                    print(f"[RECORDS] Agent email error traceback: {traceback.format_exc()}")
             
-            # If agent was just assigned, send assignment notification email
-            if "agent_id" in update_data and update_data["agent_id"] and update_data["agent_id"] != booking.get("agent_id"):
+            # Send notification to property owner/seller if status changed
+            # Only send if owner is different from agent (to avoid duplicate emails)
+            owner_id = property_details.get('owner_id') if property_details else None
+            if owner_id:
+                # Check if owner is also the agent (to avoid duplicate emails)
+                agent_id_to_check = update_data.get("agent_id") if "agent_id" in update_data else booking.get("agent_id")
+                if owner_id != agent_id_to_check:
+                    try:
+                        owner_data = await db.select("users", filters={"id": owner_id})
+                        if owner_data:
+                            owner_info = owner_data[0]
+                            owner_name = f"{owner_info.get('first_name', '')} {owner_info.get('last_name', '')}".strip()
+                            owner_email = owner_info.get("email")
+                            
+                            if owner_email:
+                                # Use booking notification email template for owner
+                                from ..services.templates import booking_notification_email
+                                customer_phone = booking.get("phone") or (customer.get("phone_number") if customer else None)
+                                owner_notification_html = booking_notification_email(
+                                    owner_name,
+                                    customer_name or booking.get("name", "Customer"),
+                                    customer_email or booking.get("email", "N/A"),
+                                    property_details.get("title", "Property") if property_details else "Property",
+                                    booking.get("booking_date", "TBD"),
+                                    booking.get("booking_time", "TBD"),
+                                    customer_phone
+                                )
+                                await send_email(
+                                    to=owner_email,
+                                    subject=f"Booking Status Update - {property_details.get('title', 'Property') if property_details else 'Property'}",
+                                    html=owner_notification_html
+                                )
+                                print(f"[RECORDS] ✅ Sent booking status update email to owner/seller {owner_name}: {owner_email}")
+                    except Exception as owner_email_error:
+                        print(f"[RECORDS] Error sending email to owner: {owner_email_error}")
+                        import traceback
+                        print(f"[RECORDS] Owner email error traceback: {traceback.format_exc()}")
+            
+            # If agent was just assigned, send assignment notification email (instead of status update)
+            if agent_just_assigned:
                 try:
                     new_agent_users = await db.select("users", filters={"id": update_data["agent_id"]})
                     if new_agent_users and new_agent_users[0].get("email"):
@@ -920,7 +1040,17 @@ async def update_inquiry(inquiry_id: str, update: InquiryUpdateRequest):
         if update.agent_notes:
             update_data["agent_notes"] = update.agent_notes
 
-        await db.update("inquiries", update_data, filters={"id": inquiry_id})
+        print(f"[RECORDS] Updating inquiry with data: {update_data}")
+        print(f"[RECORDS] Using filter: id={inquiry_id}")
+        
+        try:
+            update_result = await db.update("inquiries", update_data, filters={"id": inquiry_id})
+            print(f"[RECORDS] Update result: {update_result}")
+        except Exception as update_error:
+            print(f"[RECORDS] Database update error: {update_error}")
+            import traceback
+            print(f"[RECORDS] Update error traceback: {traceback.format_exc()}")
+            raise HTTPException(status_code=500, detail=f"Database update failed: {str(update_error)}")
 
         # Send email notifications
         property_details = None
@@ -929,32 +1059,53 @@ async def update_inquiry(inquiry_id: str, update: InquiryUpdateRequest):
             properties = await db.select("properties", filters={"id": inquiry.get("property_id")})
             property_details = properties[0] if properties else None
 
-            # Send status update email to customer
-            subject, html = inquiry_status_email(
-                inquiry, property_details, update.status, update.agent_notes
-            )
-            await send_email(inquiry.get("email"), subject, html)
+            # Send status update email to customer (only if email exists)
+            inquiry_email = inquiry.get("email")
+            if inquiry_email:
+                try:
+                    subject, html = inquiry_status_email(
+                        inquiry, property_details, update.status, update.agent_notes
+                    )
+                    await send_email(inquiry_email, subject, html)
+                    print(f"[RECORDS] ✅ Sent status update email to customer: {inquiry_email}")
+                except Exception as customer_email_error:
+                    print(f"[RECORDS] Error sending email to customer: {customer_email_error}")
+                    import traceback
+                    print(f"[RECORDS] Customer email error traceback: {traceback.format_exc()}")
 
             # Send notification to agent if status changed
             if inquiry.get("assigned_agent_id"):
-                agent_users = await db.select("users", filters={"id": inquiry.get("assigned_agent_id")})
-                if agent_users and agent_users[0].get("email"):
-                    agent_email = agent_users[0]["email"]
-                    agent_subject, agent_html = inquiry_status_email(
-                        inquiry, property_details, update.status, update.agent_notes, is_agent=True
-                    )
-                    await send_email(agent_email, agent_subject, agent_html)
+                try:
+                    agent_users = await db.select("users", filters={"id": inquiry.get("assigned_agent_id")})
+                    if agent_users and agent_users[0].get("email"):
+                        agent_email = agent_users[0]["email"]
+                        agent_subject, agent_html = inquiry_status_email(
+                            inquiry, property_details, update.status, update.agent_notes, is_agent=True
+                        )
+                        await send_email(agent_email, agent_subject, agent_html)
+                        print(f"[RECORDS] ✅ Sent status update email to agent: {agent_email}")
+                except Exception as agent_email_error:
+                    print(f"[RECORDS] Error sending email to agent: {agent_email_error}")
+                    import traceback
+                    print(f"[RECORDS] Agent email error traceback: {traceback.format_exc()}")
 
         except Exception as email_error:
             print(f"[RECORDS] Email notification error: {email_error}")
+            import traceback
+            print(f"[RECORDS] Email error traceback: {traceback.format_exc()}")
+            # Don't fail the update if email fails
 
         # Enhanced response with names
+        property_name = f"Property #{inquiry.get('property_id')}"
+        if property_details:
+            property_name = property_details.get("title", property_name)
+        
         response_data = {
             "success": True,
             "message": f"Inquiry {update.status}",
             "inquiry_id": inquiry_id,
             "customer_name": inquiry.get("name", "Unknown"),
-            "property_name": property_details.get("title", f"Property #{inquiry.get('property_id')}") if property_details else f"Property #{inquiry.get('property_id')}",
+            "property_name": property_name,
             "agent_name": None
         }
         
@@ -968,10 +1119,18 @@ async def update_inquiry(inquiry_id: str, update: InquiryUpdateRequest):
             except Exception as agent_error:
                 print(f"[RECORDS] Error fetching agent details: {agent_error}")
         
+        print(f"[RECORDS] ✅ Inquiry {inquiry_id} updated successfully to status: {update.status}")
         return response_data
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"[RECORDS] Update inquiry error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update inquiry")
+        print(f"[RECORDS] ❌ Update inquiry error: {e}")
+        import traceback
+        print(f"[RECORDS] Update inquiry error traceback: {traceback.format_exc()}")
+        # Return a more detailed error message
+        error_detail = f"Failed to update inquiry: {str(e)}"
+        print(f"[RECORDS] Raising HTTPException with detail: {error_detail}")
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @router.delete("/bookings/{booking_id}")
@@ -1023,22 +1182,51 @@ async def delete_inquiry(inquiry_id: str, _=Depends(require_api_key)):
 
 
 @router.get("/notifications")
-async def get_user_notifications(user_id: str, read: bool | None = None):
-    """Get notifications for a specific user"""
+async def get_user_notifications(user_id: str, read: bool | None = None, limit: int = 50):
+    """Get notifications for a specific user - optimized for speed"""
+    import time
+    start_time = time.time()
+    
     try:
-        print(f"[RECORDS] Fetching notifications for user: {user_id}")
+        # Check cache first (30 second cache)
+        from ..core.cache import cache
+        cache_key = f"notifications:{user_id}:{read}:{limit}"
+        cached_result = cache.get(cache_key)
+        if cached_result is not None:
+            elapsed = (time.time() - start_time) * 1000
+            print(f"[RECORDS] Notifications cache hit for user {user_id} ({elapsed:.0f}ms)")
+            return cached_result
+        
+        print(f"[RECORDS] Fetching notifications for user: {user_id}, limit: {limit}")
         
         filters = {"user_id": user_id}
         if read is not None:
             filters["read"] = read
         
-        notifications = await db.select("notifications", filters=filters)
+        # Add timeout to prevent hanging
+        import asyncio
+        try:
+            # Add limit to prevent fetching all notifications (performance optimization)
+            notifications = await asyncio.wait_for(
+                db.select("notifications", filters=filters, limit=min(limit, 50), order_by="created_at", ascending=False),
+                    timeout=1.5  # 1.5 second timeout for faster response
+            )
+        except asyncio.TimeoutError:
+            print(f"[RECORDS] Notifications query timeout for user {user_id}")
+            # Return cached result if available, otherwise empty
+            if cached_result is not None:
+                return cached_result
+            return []
         
-        # Sort by created_at descending (newest first)
-        if notifications:
-            notifications.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        result = notifications or []
         
-        return notifications or []
+        # Cache result for 60 seconds (longer cache for faster repeated requests)
+        cache.set(cache_key, result, ttl=60)
+        
+        elapsed = (time.time() - start_time) * 1000
+        print(f"[RECORDS] Notifications fetched for user {user_id} ({elapsed:.0f}ms, {len(result)} notifications)")
+        
+        return result
         
     except Exception as e:
         print(f"[RECORDS] Get notifications error: {e}")

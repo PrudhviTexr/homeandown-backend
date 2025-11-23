@@ -1,13 +1,14 @@
 from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from typing import Optional, Any
 from ..db.supabase_client import db
-from ..core.security import require_api_key
+from ..core.security import require_admin_or_api_key, require_api_key
 from ..core.cache import cache
 import traceback
 import uuid
 import datetime as dt
 import hashlib
 import json
+from fastapi import Request
 
 router = APIRouter()
 
@@ -179,29 +180,18 @@ async def get_properties(
     facing: Optional[str] = Query(None),
     owner_id: Optional[str] = Query(None),
     added_by: Optional[str] = Query(None),
-    limit: Optional[int] = Query(50, ge=1, le=100),
+    limit: Optional[int] = Query(50, ge=1, le=1000),  # Default 50 for faster initial load, max 1000 for buyers
     offset: Optional[int] = Query(0, ge=0)
 ):
+    import time
+    start_time = time.time()
+    
     try:
         print(f"\n[PROPERTIES] GET /properties request received")
-        print(f"[PROPERTIES] Query parameters:")
-        print(f"  - city: {city}")
-        print(f"  - state: {state}")
-        print(f"  - mandal: {mandal}")
-        print(f"  - property_type: {property_type}")
-        print(f"  - listing_type: {listing_type}")
-        print(f"  - commercial_subtype: {commercial_subtype}")
-        print(f"  - land_type: {land_type}")
-        print(f"  - featured: {featured}")
-        print(f"  - status: {status}")
-        print(f"  - min_price: {min_price}")
-        print(f"  - max_price: {max_price}")
-        print(f"  - bedrooms: {bedrooms}")
-        print(f"  - bathrooms: {bathrooms}")
-        print(f"  - furnishing_status: {furnishing_status}")
-        print(f"  - facing: {facing}")
-        print(f"  - owner_id: {owner_id}")
-        print(f"  - added_by: {added_by}")
+        if owner_id:
+            print(f"[PROPERTIES] Owner ID query: {owner_id}")
+        if added_by:
+            print(f"[PROPERTIES] Added by query: {added_by}")
 
         # Build base filters for server-side query
         # Only show approved (verified=true) and active properties to public
@@ -221,8 +211,14 @@ async def get_properties(
             base_filters['featured'] = featured
         if owner_id:
             base_filters['owner_id'] = owner_id
+            # For owner_id queries, reduce limit to improve performance
+            if limit > 100:
+                limit = 100
         if added_by:
             base_filters['added_by'] = added_by
+            # For added_by queries, reduce limit to improve performance
+            if limit > 100:
+                limit = 100
         if mandal:
             base_filters['mandal'] = mandal
         if property_type:
@@ -276,14 +272,36 @@ async def get_properties(
             cache_key = None
 
         # Fetch properties from database with pagination - filter at DB level for performance
-        properties = await db.select(
-            "properties", 
-            filters=base_filters,
-            limit=limit,
-            offset=offset,
-            order_by="created_at",
-            ascending=False
-        )
+        # Add timeout to prevent hanging
+        import asyncio
+        db_start = time.time()
+        try:
+            properties = await asyncio.wait_for(
+                db.select(
+                    "properties", 
+                    filters=base_filters,
+                    limit=limit,
+                    offset=offset,
+                    order_by="created_at",
+                    ascending=False
+                ),
+                timeout=1.5  # Reduced to 1.5 seconds for faster failure
+            )
+        except asyncio.TimeoutError:
+            db_elapsed = (time.time() - db_start) * 1000
+            print(f"[PROPERTIES] Database timeout after {db_elapsed:.0f}ms - returning cached or empty result")
+            # Return cached result if available, otherwise empty
+            if cache_key and offset == 0:
+                cached_result = cache.get(cache_key)
+                if cached_result is not None:
+                    total_elapsed = (time.time() - start_time) * 1000
+                    print(f"[PROPERTIES] Returning cached result ({total_elapsed:.0f}ms)")
+                    return cached_result
+            return []
+        
+        db_elapsed = (time.time() - db_start) * 1000
+        print(f"[PROPERTIES] Database query completed in {db_elapsed:.0f}ms")
+        
         if not properties:
             print("[PROPERTIES] No properties found in database with filters:", base_filters)
             return []
@@ -428,32 +446,41 @@ async def get_properties(
             # Property passed all filters
             filtered_properties.append(enhanced_prop)
 
-        # Fetch images for all properties that don't have them and ensure coordinates
-        for prop in filtered_properties:
-            # Handle images
-            if not prop.get('images') or len(prop.get('images', [])) == 0:
-                try:
-                    image_docs = await db.select("documents", filters={
-                        "entity_type": "property",
-                        "entity_id": prop.get('id')
-                    })
-                    
-                    if image_docs:
-                        image_urls = []
-                        for doc in image_docs:
-                            file_type = doc.get('file_type', '')
-                            if file_type.startswith('image/'):
-                                image_urls.append(doc.get('url'))
-                        
-                        if image_urls:
-                            prop['images'] = image_urls
-                except Exception as img_err:
-                    print(f"[PROPERTIES] Failed to fetch images for property {prop.get('id')}: {img_err}")
-            
-            # DO NOT set default coordinates - coordinates come from map picker only
-            # If coordinates are None, map will handle gracefully (show default center)
-
-        # Add formatted pricing display to each property
+        # Batch fetch all images for properties that don't have them (optimize N+1 query problem)
+        property_ids_needing_images = [prop.get('id') for prop in filtered_properties 
+                                      if not prop.get('images') or len(prop.get('images', [])) == 0]
+        
+        if property_ids_needing_images:
+            try:
+                # Fetch all images in one query instead of per-property
+                all_image_docs = await db.select("documents", filters={
+                    "entity_type": "property",
+                    "entity_id": {"in": property_ids_needing_images}
+                })
+                
+                # Group images by property_id
+                images_by_property = {}
+                for doc in all_image_docs or []:
+                    prop_id = doc.get('entity_id')
+                    file_type = doc.get('file_type', '')
+                    if prop_id and file_type.startswith('image/'):
+                        if prop_id not in images_by_property:
+                            images_by_property[prop_id] = []
+                        # Use 'url' if available, otherwise fallback to 'file_path'
+                        image_url = doc.get('url') or doc.get('file_path')
+                        if image_url:
+                            images_by_property[prop_id].append(image_url)
+                
+                # Assign images to properties
+                for prop in filtered_properties:
+                    if not prop.get('images') or len(prop.get('images', [])) == 0:
+                        prop_id = prop.get('id')
+                        if prop_id in images_by_property:
+                            prop['images'] = images_by_property[prop_id]
+            except Exception as img_err:
+                print(f"[PROPERTIES] Failed to batch fetch images: {img_err}")
+        
+        # Add formatted pricing display to each property (single loop)
         for prop in filtered_properties:
             prop['formatted_pricing'] = _format_property_pricing(prop)
 
@@ -465,6 +492,9 @@ async def get_properties(
                 cache.set(cache_key, filtered_properties, ttl=300)  # Cache for 5 minutes
         except Exception as cache_error:
             print(f"[PROPERTIES] ⚠️ Cache set failed (continuing): {cache_error}")
+        
+        total_elapsed = (time.time() - start_time) * 1000
+        print(f"[PROPERTIES] Total request time: {total_elapsed:.0f}ms ({len(filtered_properties)} properties)")
         
         return filtered_properties
 
@@ -484,6 +514,7 @@ async def create_property(property_data: dict, request: Request = None):
         # Try to get user_id from authentication if available
         # Whoever creates the property is the owner (owner_id and added_by)
         user_id = None
+        user_type = None
         if request:
             try:
                 from ..core.security import get_current_user_claims
@@ -492,10 +523,35 @@ async def create_property(property_data: dict, request: Request = None):
                     user_id = claims.get("sub")
                     print(f"[PROPERTIES] Found authenticated user creating property: {user_id}")
                     
-                    # Set owner_id and added_by to the logged-in user
-                    # This ensures admin can see who uploaded/owns the property
-                    if not property_data.get('owner_id'):
-                        property_data['owner_id'] = user_id
+                    # Get user type to determine if agent is creating property
+                    try:
+                        users = await db.select("users", filters={"id": user_id})
+                        if users:
+                            user_type = users[0].get("user_type", "").lower()
+                            print(f"[PROPERTIES] User type: {user_type}")
+                    except Exception as user_error:
+                        print(f"[PROPERTIES] Could not fetch user type: {user_error}")
+                    
+                    # For agents: set assigned_agent_id to the logged-in agent
+                    # Owner details (owner_name, owner_email, owner_phone) are provided in property_data
+                    if user_type == 'agent':
+                        property_data['assigned_agent_id'] = user_id
+                        property_data['agent_id'] = user_id  # Also set legacy agent_id field
+                        print(f"[PROPERTIES] Agent creating property - set assigned_agent_id={user_id}")
+                        
+                        # Store owner details if provided (for properties created on behalf of owners)
+                        # These will be stored in the property metadata or as separate fields
+                        if property_data.get('owner_name') or property_data.get('owner_email') or property_data.get('owner_phone'):
+                            print(f"[PROPERTIES] Owner details provided: name={property_data.get('owner_name')}, email={property_data.get('owner_email')}, phone={property_data.get('owner_phone')}")
+                            # Store owner details in property metadata or as separate fields
+                            # Note: These fields may need to be added to the database schema
+                    
+                    # Set owner_id and added_by
+                    # For agents: owner_id can be null if owner details are provided separately
+                    # For others: owner_id and added_by are set to the logged-in user
+                    if user_type != 'agent' or not (property_data.get('owner_name') or property_data.get('owner_email')):
+                        if not property_data.get('owner_id'):
+                            property_data['owner_id'] = user_id
                     if not property_data.get('added_by'):
                         property_data['added_by'] = user_id
                     print(f"[PROPERTIES] Set owner_id={property_data.get('owner_id')}, added_by={property_data.get('added_by')}")
@@ -852,6 +908,8 @@ async def create_property(property_data: dict, request: Request = None):
                 print(f"[PROPERTIES] Mapped field {ui_field} -> {db_field}")
         
         # Remove fields that don't exist in the database
+        # Note: owner_name, owner_email, owner_phone are kept for agent-created properties
+        # They will be stored if the database supports them, or can be stored in metadata
         fields_to_remove = [
             'country', 'lift_available', 'power_backup', 'washrooms', 'management_type',
             'parking_spaces', 'total_floors_building', 'floor_number', 'balconies_count',
@@ -936,8 +994,8 @@ async def create_property(property_data: dict, request: Request = None):
                 print(f"[PROPERTIES] ❌ WARNING: Property not found after creation!")
         except Exception as verify_error:
             print(f"[PROPERTIES] ❌ Error verifying saved property: {verify_error}")
-        
-        # Auto-assign agent if property doesn't have one
+            
+            # Auto-assign agent if property doesn't have one
             if not property_data.get('agent_id'):
                 try:
                     from ..services.agent_assignment import AgentAssignmentService
@@ -1209,8 +1267,32 @@ async def _process_single_property(property_data: dict, show_agent_info: bool = 
             except (json.JSONDecodeError, TypeError):
                 property_data[field] = []
 
-    # Owner information removed - only showing agent information on details page
-    # Owner details are still available in the database but not exposed in the public API response
+    # Fetch owner details if available (for agent-created properties)
+    # Owner details (owner_name, owner_email, owner_phone) are stored when agent creates property
+    if property_data.get('owner_name') or property_data.get('owner_email') or property_data.get('owner_phone'):
+        property_data['owner'] = {
+            'name': property_data.get('owner_name', ''),
+            'email': property_data.get('owner_email', ''),
+            'phone': property_data.get('owner_phone', '')
+        }
+    else:
+        # Try to fetch owner from owner_id or added_by
+        owner_id = property_data.get('owner_id') or property_data.get('added_by')
+        if owner_id:
+            try:
+                owners = await db.select("users", filters={"id": owner_id})
+                if owners:
+                    owner = dict(owners[0])
+                    property_data['owner'] = {
+                        'id': owner.get('id'),
+                        'first_name': owner.get('first_name'),
+                        'last_name': owner.get('last_name'),
+                        'email': owner.get('email'),
+                        'phone_number': owner.get('phone_number') or owner.get('phone')
+                    }
+            except Exception as e:
+                print(f"[PROPERTIES] Error fetching owner details: {e}")
+                pass
 
     # Fetch assigned agent details if available - ONLY for logged-in buyers
     agent_id = property_data.get("agent_id") or property_data.get("assigned_agent_id")
@@ -1534,7 +1616,10 @@ async def update_property(property_id: str, update_data: dict):
                             for doc in image_docs:
                                 file_type = doc.get('file_type', '')
                                 if file_type.startswith('image/'):
-                                    image_urls.append(doc.get('url'))
+                                    # Use 'file_path' if available, otherwise fallback to 'url'
+                                    image_url = doc.get('file_path') or doc.get('url')
+                                    if image_url:
+                                        image_urls.append(image_url)
                             
                             if image_urls:
                                 property_data['images'] = image_urls
@@ -1605,9 +1690,9 @@ async def toggle_featured_property(property_id: str, data: dict, _=Depends(requi
         raise HTTPException(status_code=500, detail=f"Error toggling featured status: {str(e)}")
 
 @router.delete("/{property_id}")
-async def delete_property(property_id: str, _=Depends(require_api_key)):
+async def delete_property(property_id: str, request: Request, _=Depends(require_admin_or_api_key)):
     """
-    Delete a property - REQUIRES API KEY AUTHENTICATION
+    Delete a property - REQUIRES API KEY AUTHENTICATION OR JWT AUTHENTICATION (admin only)
     This endpoint should only be called by admin users or authorized services.
     """
     try:
@@ -1643,10 +1728,17 @@ async def delete_property(property_id: str, _=Depends(require_api_key)):
         
         # 2. Delete documents/images related to property
         try:
-            await db.delete("documents", {"entity_type": "property", "entity_id": property_id})
-            print(f"[PROPERTIES] ✓ Deleted property documents/images")
+            # Delete with both filters - entity_type and entity_id
+            docs_result = await db.delete("documents", {"entity_type": "property", "entity_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted property documents/images: {docs_result}")
         except Exception as e:
-            print(f"[PROPERTIES] ⚠️ Error deleting documents: {e}")
+            print(f"[PROPERTIES] ⚠️ Error deleting documents (may not exist or table doesn't support multi-filter): {e}")
+            # Try with just entity_id if multi-filter fails
+            try:
+                docs_result = await db.delete("documents", {"entity_id": property_id})
+                print(f"[PROPERTIES] ✓ Deleted property documents/images (fallback): {docs_result}")
+            except Exception as e2:
+                print(f"[PROPERTIES] ⚠️ Fallback delete also failed: {e2}")
         
         # 3. Delete saved properties (favorites)
         try:
@@ -1655,19 +1747,23 @@ async def delete_property(property_id: str, _=Depends(require_api_key)):
         except Exception as e:
             print(f"[PROPERTIES] ⚠️ Error deleting saved properties: {e}")
         
-        # 4. Delete inquiries
+        # 4. Delete inquiries (must be deleted before property due to foreign key)
         try:
-            await db.delete("inquiries", {"property_id": property_id})
-            print(f"[PROPERTIES] ✓ Deleted inquiries")
+            inquiries_result = await db.delete("inquiries", {"property_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted inquiries: {inquiries_result}")
         except Exception as e:
-            print(f"[PROPERTIES] ⚠️ Error deleting inquiries: {e}")
+            print(f"[PROPERTIES] ⚠️ Error deleting inquiries (may not exist): {e}")
+            import traceback
+            print(f"[PROPERTIES] Inquiries delete traceback: {traceback.format_exc()}")
         
-        # 5. Delete bookings
+        # 5. Delete bookings (must be deleted before property due to foreign key)
         try:
-            await db.delete("bookings", {"property_id": property_id})
-            print(f"[PROPERTIES] ✓ Deleted bookings")
+            bookings_result = await db.delete("bookings", {"property_id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted bookings: {bookings_result}")
         except Exception as e:
-            print(f"[PROPERTIES] ⚠️ Error deleting bookings: {e}")
+            print(f"[PROPERTIES] ⚠️ Error deleting bookings (may not exist): {e}")
+            import traceback
+            print(f"[PROPERTIES] Bookings delete traceback: {traceback.format_exc()}")
         
         # 6. Delete property views
         try:
@@ -1707,14 +1803,49 @@ async def delete_property(property_id: str, _=Depends(require_api_key)):
         # 12. Clear cache for this property
         try:
             # Clear all property-related cache entries
-            cache.clear()  # Clear entire cache to ensure property is removed
-            print(f"[PROPERTIES] ✓ Cleared cache")
+            if cache:
+                cache.clear()  # Clear entire cache to ensure property is removed
+                print(f"[PROPERTIES] ✓ Cleared cache")
+            else:
+                print(f"[PROPERTIES] ⚠️ Cache not available, skipping")
         except Exception as e:
-            print(f"[PROPERTIES] ⚠️ Error clearing cache: {e}")
+            print(f"[PROPERTIES] ⚠️ Error clearing cache (non-critical): {e}")
+            # Don't fail deletion if cache clearing fails
         
         # 13. Finally, delete the property itself
-        await db.delete("properties", {"id": property_id})
-        print(f"[PROPERTIES] ✓ Deleted property record")
+        try:
+            delete_result = await db.delete("properties", {"id": property_id})
+            print(f"[PROPERTIES] ✓ Deleted property record: {delete_result}")
+            if not delete_result or (isinstance(delete_result, list) and len(delete_result) == 0):
+                print(f"[PROPERTIES] ⚠️ Delete returned empty result - property may not exist or already deleted")
+                # Don't fail if property doesn't exist - it's already deleted
+        except Exception as prop_delete_error:
+            error_msg = str(prop_delete_error)
+            print(f"[PROPERTIES] ❌ Error deleting property record: {error_msg}")
+            print(f"[PROPERTIES] Property delete error traceback: {traceback.format_exc()}")
+            
+            # Check if it's a foreign key constraint error
+            error_lower = error_msg.lower()
+            if "foreign key" in error_lower or "constraint" in error_lower:
+                # Try to get more info about what's blocking deletion
+                print(f"[PROPERTIES] Foreign key constraint detected. Checking related records...")
+                try:
+                    remaining_inquiries = await db.select("inquiries", filters={"property_id": property_id}, limit=1)
+                    remaining_bookings = await db.select("bookings", filters={"property_id": property_id}, limit=1)
+                    if remaining_inquiries:
+                        print(f"[PROPERTIES] ⚠️ Still have {len(remaining_inquiries)} inquiries")
+                    if remaining_bookings:
+                        print(f"[PROPERTIES] ⚠️ Still have {len(remaining_bookings)} bookings")
+                except Exception as check_error:
+                    print(f"[PROPERTIES] Could not check remaining records: {check_error}")
+                
+                detail = "Cannot delete property: it has related records that must be deleted first. Please try again."
+            elif "not found" in error_lower or "does not exist" in error_lower:
+                detail = "Property not found or already deleted"
+            else:
+                detail = f"Failed to delete property: {error_msg}"
+            
+            raise HTTPException(status_code=500, detail=detail)
         
         print(f"[PROPERTIES] ⚠️ PROPERTY COMPLETELY DELETED FROM WEBSITE: {property_id} ({property_title})")
         return {
@@ -1735,13 +1866,28 @@ async def delete_property(property_id: str, _=Depends(require_api_key)):
             ]
         }
         
-    except HTTPException:
+    except HTTPException as http_exc:
+        # Re-raise HTTPExceptions (they already have proper status codes)
+        print(f"[PROPERTIES] HTTPException during delete: {http_exc.status_code} - {http_exc.detail}")
         raise
     except Exception as e:
-        print(f"[PROPERTIES] Delete property error: {e}")
+        # Catch all other exceptions and return proper error response
+        error_msg = str(e)
+        print(f"[PROPERTIES] ❌ Delete property error: {error_msg}")
         print(f"[PROPERTIES] Full traceback:")
         print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Error deleting property: {str(e)}")
+        
+        # Check for common database errors
+        error_lower = error_msg.lower()
+        if "foreign key" in error_lower or "constraint" in error_lower:
+            detail = "Cannot delete property: it has related records that must be deleted first"
+        elif "not found" in error_lower or "does not exist" in error_lower:
+            detail = "Property not found or already deleted"
+        else:
+            detail = f"Error deleting property: {error_msg}"
+        
+        print(f"[PROPERTIES] Raising HTTPException with detail: {detail}")
+        raise HTTPException(status_code=500, detail=detail)
 
 @router.get("/{property_id}/images")
 async def get_property_images(property_id: str):
@@ -1765,14 +1911,17 @@ async def get_property_images(property_id: str):
             for doc in image_docs:
                 file_type = doc.get('file_type', '')
                 if file_type.startswith('image/'):
-                    images.append({
-                        "id": doc.get('id'),
-                        "url": doc.get('url'),
-                        "name": doc.get('name'),
-                        "file_type": doc.get('file_type'),
-                        "file_size": doc.get('file_size'),
-                        "created_at": doc.get('created_at')
-                    })
+                    # Use 'file_path' if available, otherwise fallback to 'url'
+                    image_url = doc.get('file_path') or doc.get('url')
+                    if image_url:
+                        images.append({
+                            "id": doc.get('id'),
+                            "url": image_url,
+                            "name": doc.get('name'),
+                            "file_type": doc.get('file_type'),
+                            "file_size": doc.get('file_size'),
+                            "created_at": doc.get('created_at')
+                        })
         
         print(f"[PROPERTIES] Found {len(images)} images for property {property_id}")
         return {"images": images}

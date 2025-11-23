@@ -1,6 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 import datetime as dt
+import traceback
 
 from .core.config import settings
 
@@ -19,23 +22,39 @@ except Exception:
     cors_origins = []
 
 # Add sensible local defaults if not already included
+# IMPORTANT: When allow_credentials=True, we CANNOT use wildcard "*"
+# We must explicitly list all allowed origins
 local_defaults = [
-    "http://localhost:8080", "http://127.0.0.1:8080",
-    "http://localhost:5173", "http://127.0.0.1:5173",
-    "http://localhost:8082", "http://127.0.0.1:8082",
-    "http://localhost:8081", "http://127.0.0.1:8081",
-    "http://localhost:8083", "http://127.0.0.1:8000",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8082",  # Main frontend port
+    "http://127.0.0.1:8082",
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+    "http://localhost:8083",
+    "http://127.0.0.1:8083",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
 ]
 for d in local_defaults:
     if d not in cors_origins:
         cors_origins.append(d)
 
+# If no origins specified, use localhost defaults for development
+if not cors_origins:
+    cors_origins = local_defaults
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=cors_origins,  # Explicit list (required when allow_credentials=True)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Import routes after app initialization to avoid circular dependencies
@@ -131,6 +150,17 @@ app.include_router(locations.router, prefix="/api/locations", tags=["locations"]
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(advanced_analytics.router, prefix="/api", tags=["advanced-analytics"])
 app.include_router(push_notifications.router, prefix="/api", tags=["push-notifications"])
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler to ensure errors are properly handled"""
+    print(f"[ERROR] Unhandled exception: {exc}")
+    print(f"[ERROR] Traceback: {traceback.format_exc()}")
+    # Let FastAPI handle the response - CORS middleware will add headers
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": f"Internal server error: {str(exc)}"}
+    )
 
 @app.get("/api", tags=["Root"])
 async def read_root():

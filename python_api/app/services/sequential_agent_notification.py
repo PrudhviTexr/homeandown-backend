@@ -458,6 +458,63 @@ class SequentialAgentNotificationService:
 
             print(f"[SEQUENTIAL_NOTIFICATION] Agent {agent_id} accepted property {property_id}")
             
+            # Send email notification to seller about agent assignment
+            try:
+                property_data = prop_res[0] if prop_res else {}
+                owner_id = property_data.get("owner_id") or property_data.get("added_by")
+                
+                if owner_id:
+                    # Get seller details
+                    sellers = await db.select("users", filters={"id": owner_id})
+                    if sellers:
+                        seller = sellers[0]
+                        seller_email = seller.get("email")
+                        seller_name = f"{seller.get('first_name', '')} {seller.get('last_name', '')}".strip() or "Seller"
+                        
+                        # Get agent details
+                        agents = await db.select("users", filters={"id": agent_id})
+                        if agents:
+                            agent = agents[0]
+                            agent_name = f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip()
+                            agent_email = agent.get("email")
+                            agent_phone = agent.get("phone_number", "N/A")
+                            
+                            # Send email to seller
+                            from ..services.email import send_email
+                            property_title = property_data.get("title", "your property")
+                            
+                            email_subject = f"Agent Assigned to Your Property: {property_title}"
+                            email_body = f"""
+                            <html>
+                            <body>
+                                <h2>Agent Assigned to Your Property</h2>
+                                <p>Dear {seller_name},</p>
+                                <p>Great news! An agent has been assigned to your property: <strong>{property_title}</strong></p>
+                                
+                                <h3>Agent Details:</h3>
+                                <ul>
+                                    <li><strong>Name:</strong> {agent_name}</li>
+                                    <li><strong>Email:</strong> {agent_email}</li>
+                                    <li><strong>Phone:</strong> {agent_phone}</li>
+                                </ul>
+                                
+                                <p>You can now contact the agent directly or view their details in your dashboard.</p>
+                                
+                                <p>Thank you for using Home & Own!</p>
+                            </body>
+                            </html>
+                            """
+                            
+                            await send_email(
+                                to_email=seller_email,
+                                subject=email_subject,
+                                body=email_body
+                            )
+                            print(f"[SEQUENTIAL_NOTIFICATION] Email sent to seller {seller_email} about agent assignment")
+            except Exception as email_error:
+                print(f"[SEQUENTIAL_NOTIFICATION] Error sending email to seller: {email_error}")
+                # Don't fail the assignment if email fails
+            
             return {
                 "success": True,
                 "message": "Property assignment accepted",

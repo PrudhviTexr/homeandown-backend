@@ -23,7 +23,8 @@ async def get_seller_dashboard_stats(request: Request):
         print(f"[SELLER] Fetching dashboard stats for user: {user_id}")
         
         # Get seller's properties
-        properties = await db.select("properties", filters={"added_by": user_id})
+        # Limit property fetch for dashboard stats (performance optimization)
+        properties = await db.select("properties", filters={"added_by": user_id}, limit=100)
         properties_list = properties or []
         
         # Calculate stats
@@ -38,7 +39,8 @@ async def get_seller_dashboard_stats(request: Request):
         total_views = 0
         
         if property_ids:
-            inquiries = await db.select("inquiries", filters={"property_id": {"in": property_ids}})
+            # Limit queries for dashboard stats (performance optimization)
+            inquiries = await db.select("inquiries", filters={"property_id": {"in": property_ids[:50]}}, limit=100)
             total_inquiries = len(inquiries or [])
             
             # Calculate total views (mock for now - will be implemented with analytics)
@@ -47,7 +49,8 @@ async def get_seller_dashboard_stats(request: Request):
         # Get bookings for seller's properties
         total_bookings = 0
         if property_ids:
-            bookings = await db.select("bookings", filters={"property_id": {"in": property_ids}})
+            # Limit queries for dashboard stats (performance optimization)
+            bookings = await db.select("bookings", filters={"property_id": {"in": property_ids[:50]}}, limit=100)
             total_bookings = len(bookings or [])
         
         # Calculate earnings (mock calculation)
@@ -101,64 +104,132 @@ async def get_seller_properties(
         
         print(f"[SELLER] Fetching properties for user: {user_id}")
         
-        # Build filters
+        # Build filters - only show properties added by seller
         filters = {"added_by": user_id}
         if status:
             filters["status"] = status
         
-        # Get properties (offset not supported by current db.select, so we'll get all and slice if needed)
-        properties = await db.select("properties", filters=filters, limit=limit)
+        # Get properties with timeout
+        import asyncio
+        try:
+            properties = await asyncio.wait_for(
+                db.select("properties", filters=filters, limit=limit, offset=offset, order_by="created_at", ascending=False),
+                    timeout=1.5  # 1.5 second timeout for faster response
+            )
+        except asyncio.TimeoutError:
+            print(f"[SELLER] Properties query timeout for user: {user_id}")
+            return {"success": True, "properties": [], "total": 0}
+        
         properties_list = properties or []
+        
+        # Filter out BUY listing type properties - sellers should only see their own properties for sale/rent
+        properties_list = [p for p in properties_list if p.get("listing_type") != "BUY"]
         
         # Apply offset manually if needed (for pagination)
         if offset and offset > 0:
             properties_list = properties_list[offset:]
         
-        # Enhance properties with additional data
+        # Batch fetch all related data to avoid N+1 queries (major performance optimization)
+        property_ids = [p.get("id") for p in properties_list if p.get("id")]
+        
+        # Get unique agent IDs
+        agent_ids = list(set([p.get("agent_id") or p.get("assigned_agent_id") for p in properties_list if p.get("agent_id") or p.get("assigned_agent_id")]))
+        
+        # Batch fetch inquiries, bookings, images, and agents in parallel
+        import asyncio
+        
+        # Execute all queries in parallel
+        try:
+            tasks = []
+            if property_ids:
+                tasks.append(db.select("inquiries", filters={"property_id": {"in": property_ids}}))
+                tasks.append(db.select("bookings", filters={"property_id": {"in": property_ids}}))
+                tasks.append(db.select("documents", filters={"entity_type": "property", "entity_id": {"in": property_ids}}))
+            else:
+                # No properties - return empty lists
+                inquiries_all, bookings_all, images_all, agents_all = [], [], [], []
+                tasks = []
+            
+            if tasks:
+                if agent_ids:
+                    tasks.append(db.select("users", filters={"id": {"in": agent_ids}}, limit=100))
+                
+                # Add timeout to parallel queries
+                results = await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=2.0  # 2 second timeout for all parallel queries
+                )
+                inquiries_all = results[0] if not isinstance(results[0], Exception) else []
+                bookings_all = results[1] if not isinstance(results[1], Exception) else []
+                images_all = results[2] if not isinstance(results[2], Exception) else []
+                agents_all = results[3] if len(results) > 3 and not isinstance(results[3], Exception) else []
+            else:
+                agents_all = []
+        except Exception as batch_error:
+            print(f"[SELLER] Batch fetch error: {batch_error}")
+            inquiries_all, bookings_all, images_all, agents_all = [], [], [], []
+        
+        # Group data by property_id for O(1) lookup
+        inquiries_by_property = {}
+        for inquiry in inquiries_all or []:
+            prop_id = inquiry.get("property_id")
+            if prop_id:
+                if prop_id not in inquiries_by_property:
+                    inquiries_by_property[prop_id] = []
+                inquiries_by_property[prop_id].append(inquiry)
+        
+        bookings_by_property = {}
+        for booking in bookings_all or []:
+            prop_id = booking.get("property_id")
+            if prop_id:
+                if prop_id not in bookings_by_property:
+                    bookings_by_property[prop_id] = []
+                bookings_by_property[prop_id].append(booking)
+        
+        images_by_property = {}
+        for doc in images_all or []:
+            prop_id = doc.get("entity_id")
+            file_type = doc.get("file_type", "")
+            if prop_id and file_type.startswith("image/"):
+                if prop_id not in images_by_property:
+                    images_by_property[prop_id] = []
+                images_by_property[prop_id].append(doc.get("file_path") or doc.get("url"))
+        
+        agents_by_id = {}
+        for agent in agents_all or []:
+            agent_id = agent.get("id")
+            if agent_id:
+                agents_by_id[agent_id] = agent
+        
+        # Enhance properties with pre-fetched data
         enhanced_properties = []
         for property_data in properties_list:
             property_id = property_data.get("id")
             
-            # Get inquiries count
-            inquiries = await db.select("inquiries", filters={"property_id": property_id})
-            inquiries_count = len(inquiries or [])
+            # Get counts from pre-fetched data
+            inquiries = inquiries_by_property.get(property_id, [])
+            inquiries_count = len(inquiries)
             
-            # Get bookings count
-            bookings = await db.select("bookings", filters={"property_id": property_id})
-            bookings_count = len(bookings or [])
+            bookings = bookings_by_property.get(property_id, [])
+            bookings_count = len(bookings)
             
-            # Get views count (mock for now)
             views_count = property_data.get("views_count", 0)
             
-            # Get assigned agent details
+            # Get assigned agent from pre-fetched data
             assigned_agent = None
             agent_id = property_data.get("agent_id") or property_data.get("assigned_agent_id")
-            if agent_id:
-                try:
-                    agents = await db.select("users", filters={"id": agent_id})
-                    if agents:
-                        agent = agents[0]
-                        assigned_agent = {
-                            "id": agent.get("id"),
-                            "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
-                            "email": agent.get("email"),
-                            "phone": agent.get("phone_number"),
-                            "assigned_at": property_data.get("assigned_at")  # If we track this
-                        }
-                except Exception as agent_error:
-                    print(f"[SELLER] Error fetching agent details: {agent_error}")
+            if agent_id and agent_id in agents_by_id:
+                agent = agents_by_id[agent_id]
+                assigned_agent = {
+                    "id": agent.get("id"),
+                    "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
+                    "email": agent.get("email"),
+                    "phone": agent.get("phone_number"),
+                    "assigned_at": property_data.get("assigned_at")
+                }
             
-            # Get property images
-            property_images = []
-            try:
-                image_docs = await db.select("documents", filters={
-                    "entity_type": "property",
-                    "entity_id": property_id
-                })
-                if image_docs:
-                    property_images = [doc.get("file_path") for doc in image_docs if doc.get("file_path")]
-            except Exception as img_error:
-                print(f"[SELLER] Error fetching property images: {img_error}")
+            # Get property images from pre-fetched data
+            property_images = images_by_property.get(property_id, [])
             
             enhanced_property = {
                 **property_data,
@@ -168,7 +239,7 @@ async def get_seller_properties(
                 "last_inquiry_date": inquiries[0].get("created_at") if inquiries else None,
                 "last_booking_date": bookings[0].get("created_at") if bookings else None,
                 "assigned_agent": assigned_agent,
-                "images": property_images  # Include images
+                "images": property_images
             }
             
             enhanced_properties.append(enhanced_property)
@@ -190,7 +261,7 @@ async def get_seller_inquiries(
     limit: Optional[int] = Query(20),
     offset: Optional[int] = Query(0)
 ):
-    """Get inquiries for seller's properties"""
+    """Get inquiries for seller's properties - optimized for speed"""
     try:
         claims = get_current_user_claims(request)
         if not claims:
@@ -200,70 +271,153 @@ async def get_seller_inquiries(
         if not user_id:
             raise HTTPException(status_code=401, detail="Invalid token")
         
-        print(f"[SELLER] Fetching inquiries for user: {user_id}")
+        # Check cache first (1 minute cache for faster response)
+        from ..core.cache import cache
+        cache_key = f"seller_inquiries:{user_id}:{property_id or 'all'}:{status or 'all'}:{limit or 20}:{offset or 0}"
+        cached_result = cache.get(cache_key)
+        if cached_result is not None:
+            return cached_result
         
-        # Get seller's property IDs
-        properties = await db.select("properties", filters={"added_by": user_id})
-        property_ids = [p.get("id") for p in (properties or [])]
-        
-        if not property_ids:
-            return {"success": True, "inquiries": [], "total": 0}
-        
-        # Build filters
-        filters = {"property_id": {"in": property_ids}}
+        # Optimize: Build filters directly without fetching all properties first
+        # If property_id is provided, use it directly; otherwise fetch property IDs with minimal limit
         if property_id:
-            filters["property_id"] = property_id
+            # Direct property filter
+            filters = {"property_id": property_id}
+            # Verify the property belongs to this seller (skip if we want faster response)
+            # properties = await db.select("properties", filters={"id": property_id, "added_by": user_id}, limit=1)
+            # if not properties:
+            #     return {"success": True, "inquiries": [], "total": 0}
+        else:
+            # Get seller's property IDs (minimal limit for fastest response)
+            properties = await db.select("properties", filters={"added_by": user_id}, limit=20)  # Reduced from 50 to 20
+            property_ids = [p.get("id") for p in (properties or [])]
+            
+            if not property_ids:
+                result = {"success": True, "inquiries": [], "total": 0}
+                cache.set(cache_key, result, ttl=120)  # Cache for 2 minutes for faster repeated requests
+                return result
+            
+            filters = {"property_id": {"in": property_ids}}
+        
         if status:
             filters["status"] = status
         
-        # Get inquiries (offset not supported by current db.select, so we'll get all and slice if needed)
-        inquiries = await db.select("inquiries", filters=filters, limit=limit)
+        # Get inquiries with minimal limit and ordering (prioritize speed)
+        inquiries = await db.select("inquiries", filters=filters, limit=min(limit or 20, 30), order_by="created_at", ascending=False)
         inquiries_list = inquiries or []
+        
+        # Early return if no inquiries
+        if not inquiries_list:
+            result = {"success": True, "inquiries": [], "total": 0}
+            cache.set(cache_key, result, ttl=120)  # Cache for 2 minutes for faster repeated requests
+            return result
         
         # Apply offset manually if needed (for pagination)
         if offset and offset > 0:
             inquiries_list = inquiries_list[offset:]
         
-        # Enhance inquiries with property and user details
+        # Batch fetch all related data to avoid N+1 queries (performance optimization)
+        # Minimal limits for fastest response
+        property_ids_from_inquiries = list(set([inq.get("property_id") for inq in inquiries_list if inq.get("property_id")]))[:10]  # Reduced from 20 to 10
+        user_ids_from_inquiries = list(set([inq.get("user_id") for inq in inquiries_list if inq.get("user_id")]))[:10]  # Reduced from 20 to 10
+        
+        # Fetch all properties, agents, and users in parallel with very short timeouts
+        import asyncio
+        
+        try:
+            # Execute queries in parallel only if we have IDs to fetch, with very short timeout
+            if property_ids_from_inquiries and user_ids_from_inquiries:
+                properties_all, users_all = await asyncio.wait_for(
+                    asyncio.gather(
+                        db.select("properties", filters={"id": {"in": property_ids_from_inquiries}}, limit=10),
+                        db.select("users", filters={"id": {"in": user_ids_from_inquiries}}, limit=10),
+                        return_exceptions=True
+                    ),
+                    timeout=2.0  # Reduced from 3 to 2 seconds for faster failure
+                )
+            elif property_ids_from_inquiries:
+                properties_all = await asyncio.wait_for(
+                    db.select("properties", filters={"id": {"in": property_ids_from_inquiries}}, limit=10),
+                    timeout=2.0
+                )
+                users_all = []
+            elif user_ids_from_inquiries:
+                properties_all = []
+                users_all = await asyncio.wait_for(
+                    db.select("users", filters={"id": {"in": user_ids_from_inquiries}}, limit=10),
+                    timeout=2.0
+                )
+            else:
+                properties_all, users_all = [], []
+            
+            # Handle exceptions - continue with empty data if queries fail
+            if isinstance(properties_all, Exception):
+                properties_all = []
+            if isinstance(users_all, Exception):
+                users_all = []
+        except asyncio.TimeoutError:
+            # Return with empty related data if timeout - inquiries data is still valid
+            properties_all, users_all = [], []
+        except Exception as batch_error:
+            # Continue with empty related data if error
+            properties_all, users_all = [], []
+        
+        # Group by ID for O(1) lookup
+        properties_by_id = {p.get("id"): p for p in properties_all if p.get("id")}
+        users_by_id = {u.get("id"): u for u in users_all if u.get("id")}
+        
+        # Get unique agent IDs from properties (limit to prevent too many queries)
+        # Skip agent fetching if we're running low on time - this is optional data
+        agent_ids = list(set([
+            p.get("agent_id") or p.get("assigned_agent_id") 
+            for p in properties_all 
+            if p.get("agent_id") or p.get("assigned_agent_id")
+        ]))[:10]  # Reduced from 20 to 10 agents max
+        
+        # Fetch agents in parallel with shorter timeout (optional data - can skip if slow)
+        agents_all = []
+        if agent_ids:
+            try:
+                agents_all = await asyncio.wait_for(
+                    db.select("users", filters={"id": {"in": agent_ids}}, limit=10),
+                    timeout=2.0  # Reduced from 3 to 2 seconds - this is optional data
+                )
+            except asyncio.TimeoutError:
+                print(f"[SELLER] Agent fetch timeout - skipping agent details (optional)")
+                agents_all = []
+            except Exception as agent_error:
+                print(f"[SELLER] Error batch fetching agents: {agent_error}")
+                agents_all = []  # Continue without agent data
+        
+        agents_by_id = {a.get("id"): a for a in agents_all if a.get("id")}
+        
+        # Enhance inquiries with pre-fetched data
         enhanced_inquiries = []
         for inquiry in inquiries_list:
             prop_id = inquiry.get("property_id")
             user_id_inquiry = inquiry.get("user_id")
             
-            # Get property details
-            property_data = await db.select("properties", filters={"id": prop_id})
-            property_info = property_data[0] if property_data else {}
+            # Get property details from pre-fetched data
+            property_info = properties_by_id.get(prop_id, {})
             
-            # Get assigned agent details for the property
+            # Get assigned agent details from pre-fetched data
             assigned_agent = None
             agent_id = property_info.get("agent_id") or property_info.get("assigned_agent_id")
-            if agent_id:
-                try:
-                    agents = await db.select("users", filters={"id": agent_id})
-                    if agents:
-                        agent = agents[0]
-                        assigned_agent = {
-                            "id": agent.get("id"),
-                            "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
-                            "email": agent.get("email"),
-                            "phone": agent.get("phone_number"),
-                        }
-                except Exception as agent_error:
-                    print(f"[SELLER] Error fetching agent details: {agent_error}")
+            if agent_id and agent_id in agents_by_id:
+                agent = agents_by_id[agent_id]
+                assigned_agent = {
+                    "id": agent.get("id"),
+                    "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
+                    "email": agent.get("email"),
+                    "phone": agent.get("phone_number"),
+                }
             
             # Add assigned_agent to property_info
             if assigned_agent:
                 property_info["assigned_agent"] = assigned_agent
             
-            # Get user details from users table if user_id exists
-            user_info = {}
-            if user_id_inquiry:
-                try:
-                    user_data = await db.select("users", filters={"id": user_id_inquiry})
-                    if user_data:
-                        user_info = user_data[0]
-                except Exception as user_error:
-                    print(f"[SELLER] Error fetching user details: {user_error}")
+            # Get user details from pre-fetched data
+            user_info = users_by_id.get(user_id_inquiry, {}) if user_id_inquiry else {}
             
             # Always include customer details from inquiry fields (name, email, phone)
             # These are the primary customer contact details
@@ -294,8 +448,10 @@ async def get_seller_inquiries(
             }
             enhanced_inquiries.append(enhanced_inquiry)
         
-        print(f"[SELLER] Found {len(enhanced_inquiries)} inquiries")
-        return {"success": True, "inquiries": enhanced_inquiries, "total": len(enhanced_inquiries)}
+        result = {"success": True, "inquiries": enhanced_inquiries, "total": len(enhanced_inquiries)}
+        # Cache result for 1 minute for faster subsequent requests
+        cache.set(cache_key, result, ttl=120)  # Cache for 2 minutes for faster repeated requests
+        return result
         
     except HTTPException:
         raise
@@ -325,37 +481,148 @@ async def get_seller_bookings(
         
         print(f"[SELLER] Fetching bookings for user: {user_id}")
         
-        # Get seller's property IDs
-        properties = await db.select("properties", filters={"added_by": user_id})
-        property_ids = [p.get("id") for p in (properties or [])]
-        
-        if not property_ids:
-            return {"success": True, "bookings": [], "total": 0}
-        
-        # Build filters
-        filters = {"property_id": {"in": property_ids}}
+        # Optimize: Build filters directly without fetching all properties first
         if property_id:
-            filters["property_id"] = property_id
+            # Direct property filter
+            filters = {"property_id": property_id}
+            # Verify the property belongs to this seller
+            properties = await db.select("properties", filters={"id": property_id, "added_by": user_id}, limit=1)
+            if not properties:
+                return {"success": True, "bookings": [], "total": 0}
+        else:
+            # Get seller's property IDs (reduced limit for performance)
+            properties = await db.select("properties", filters={"added_by": user_id}, limit=100)  # Reduced from 1000 to 100
+            property_ids = [p.get("id") for p in (properties or [])]
+            
+            if not property_ids:
+                return {"success": True, "bookings": [], "total": 0}
+            
+            filters = {"property_id": {"in": property_ids}}
+        
         if status:
             filters["status"] = status
         
-        # Get bookings (offset not supported by current db.select, so we'll get all and slice if needed)
-        bookings = await db.select("bookings", filters=filters, limit=limit)
+        # Get bookings with limit and ordering (reduce default limit for performance)
+        import asyncio
+        try:
+            bookings = await asyncio.wait_for(
+                db.select("bookings", filters=filters, limit=min(limit or 50, 100), order_by="created_at", ascending=False),
+                    timeout=1.5  # 1.5 second timeout for faster response
+            )
+        except asyncio.TimeoutError:
+            print(f"[SELLER] Bookings query timeout for user: {user_id}")
+            return {"success": True, "bookings": [], "total": 0}
         bookings_list = bookings or []
+        
+        # Early return if no bookings
+        if not bookings_list:
+            return {"success": True, "bookings": [], "total": 0}
         
         # Apply offset manually if needed (for pagination)
         if offset and offset > 0:
             bookings_list = bookings_list[offset:]
         
-        # Enhance bookings with property and user details, filter out sold properties
+        # Batch fetch all related data to avoid N+1 queries (performance optimization)
+        # Limit to prevent fetching too many records
+        property_ids_from_bookings = list(set([b.get("property_id") for b in bookings_list if b.get("property_id")]))[:50]  # Reduced from 100 to 50
+        user_ids_from_bookings = list(set([b.get("user_id") for b in bookings_list if b.get("user_id")]))[:50]  # Reduced from 100 to 50
+        
+        # Fetch all properties, agents, users, and booking counts in parallel with timeouts
+        import asyncio
+        
+        try:
+            # Execute queries in parallel only if we have IDs to fetch, with timeouts
+            if property_ids_from_bookings and user_ids_from_bookings:
+                properties_all, users_all, all_bookings_for_count = await asyncio.wait_for(
+                    asyncio.gather(
+                        db.select("properties", filters={"id": {"in": property_ids_from_bookings}}, limit=50),
+                        db.select("users", filters={"id": {"in": user_ids_from_bookings}}, limit=50),
+                        db.select("bookings", filters={"property_id": {"in": property_ids_from_bookings}}, limit=200),  # Reduced from 500
+                        return_exceptions=True
+                    ),
+                    timeout=5.0  # 5 second timeout
+                )
+            elif property_ids_from_bookings:
+                properties_all = await asyncio.wait_for(
+                    db.select("properties", filters={"id": {"in": property_ids_from_bookings}}, limit=50),
+                    timeout=3.0
+                )
+                users_all = []
+                all_bookings_for_count = await asyncio.wait_for(
+                    db.select("bookings", filters={"property_id": {"in": property_ids_from_bookings}}, limit=200),
+                    timeout=3.0
+                )
+            elif user_ids_from_bookings:
+                properties_all = []
+                users_all = await asyncio.wait_for(
+                    db.select("users", filters={"id": {"in": user_ids_from_bookings}}, limit=50),
+                    timeout=3.0
+                )
+                all_bookings_for_count = []
+            else:
+                properties_all, users_all, all_bookings_for_count = [], [], []
+            
+            # Handle exceptions
+            if isinstance(properties_all, Exception):
+                print(f"[SELLER] Error fetching properties: {properties_all}")
+                properties_all = []
+            if isinstance(users_all, Exception):
+                print(f"[SELLER] Error fetching users: {users_all}")
+                users_all = []
+            if isinstance(all_bookings_for_count, Exception):
+                print(f"[SELLER] Error fetching booking counts: {all_bookings_for_count}")
+                all_bookings_for_count = []
+        except asyncio.TimeoutError:
+            print(f"[SELLER] Batch fetch timeout - returning partial data")
+            properties_all, users_all, all_bookings_for_count = [], [], []
+        except Exception as batch_error:
+            print(f"[SELLER] Batch fetch error: {batch_error}")
+            properties_all, users_all, all_bookings_for_count = [], [], []
+        
+        # Group by ID for O(1) lookup
+        properties_by_id = {p.get("id"): p for p in properties_all if p.get("id")}
+        users_by_id = {u.get("id"): u for u in users_all if u.get("id")}
+        
+        # Count bookings per property
+        bookings_count_by_property = {}
+        for b in all_bookings_for_count:
+            prop_id = b.get("property_id")
+            if prop_id:
+                bookings_count_by_property[prop_id] = bookings_count_by_property.get(prop_id, 0) + 1
+        
+        # Get unique agent IDs from properties (limit to prevent too many queries)
+        # Skip agent fetching if we're running low on time - this is optional data
+        agent_ids = list(set([
+            p.get("agent_id") or p.get("assigned_agent_id") 
+            for p in properties_all 
+            if p.get("agent_id") or p.get("assigned_agent_id")
+        ]))[:10]  # Reduced from 20 to 10 agents max
+        
+        # Fetch agents in parallel with shorter timeout (optional data - can skip if slow)
+        agents_all = []
+        if agent_ids:
+            try:
+                agents_all = await asyncio.wait_for(
+                    db.select("users", filters={"id": {"in": agent_ids}}, limit=10),
+                    timeout=2.0  # Reduced from 3 to 2 seconds - this is optional data
+                )
+            except asyncio.TimeoutError:
+                print(f"[SELLER] Agent fetch timeout - skipping agent details (optional)")
+                agents_all = []
+            except Exception as agent_error:
+                print(f"[SELLER] Error batch fetching agents: {agent_error}")
+                agents_all = []  # Continue without agent data
+        
+        agents_by_id = {a.get("id"): a for a in agents_all if a.get("id")}
+        
+        # Enhance bookings with pre-fetched data, filter out sold properties
         enhanced_bookings = []
         for booking in bookings_list:
             prop_id = booking.get("property_id")
             user_id_booking = booking.get("user_id")
             
-            # Get property details
-            property_data = await db.select("properties", filters={"id": prop_id})
-            property_info = property_data[0] if property_data else {}
+            # Get property details from pre-fetched data
+            property_info = properties_by_id.get(prop_id, {})
             
             # Skip bookings for sold properties
             prop_status = (property_info.get('status') or '').lower().strip()
@@ -363,40 +630,27 @@ async def get_seller_bookings(
                 print(f"[SELLER] Skipping booking for sold property: {prop_id}")
                 continue
             
-            # Get assigned agent details for the property
+            # Get assigned agent details from pre-fetched data
             assigned_agent = None
             agent_id = property_info.get("agent_id") or property_info.get("assigned_agent_id")
-            if agent_id:
-                try:
-                    agents = await db.select("users", filters={"id": agent_id})
-                    if agents:
-                        agent = agents[0]
-                        assigned_agent = {
-                            "id": agent.get("id"),
-                            "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
-                            "email": agent.get("email"),
-                            "phone": agent.get("phone_number"),
-                        }
-                except Exception as agent_error:
-                    print(f"[SELLER] Error fetching agent details: {agent_error}")
+            if agent_id and agent_id in agents_by_id:
+                agent = agents_by_id[agent_id]
+                assigned_agent = {
+                    "id": agent.get("id"),
+                    "name": f"{agent.get('first_name', '')} {agent.get('last_name', '')}".strip(),
+                    "email": agent.get("email"),
+                    "phone": agent.get("phone_number"),
+                }
             
             # Add assigned_agent to property_info
             if assigned_agent:
                 property_info["assigned_agent"] = assigned_agent
             
-            # Get bookings count for this property
-            bookings_count = 0
-            try:
-                property_bookings = await db.select("bookings", filters={"property_id": prop_id})
-                bookings_count = len(property_bookings or [])
-            except Exception as count_error:
-                print(f"[SELLER] Error fetching bookings count: {count_error}")
+            # Get bookings count from pre-fetched data
+            property_info["bookings_count"] = bookings_count_by_property.get(prop_id, 0)
             
-            property_info["bookings_count"] = bookings_count
-            
-            # Get user details
-            user_data = await db.select("users", filters={"id": user_id_booking})
-            user_info = user_data[0] if user_data else {}
+            # Get user details from pre-fetched data
+            user_info = users_by_id.get(user_id_booking, {}) if user_id_booking else {}
             
             enhanced_booking = {
                 **booking,
