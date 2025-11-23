@@ -5,6 +5,7 @@ from ..core.security import get_current_user_claims
 import datetime as dt
 import traceback
 import uuid
+import asyncio
 
 router = APIRouter()
 
@@ -374,27 +375,51 @@ async def get_agent_inquiries(
         print(f"[AGENT] Querying properties for inquiries with OR filter")
         # Get only ASSIGNED properties (not properties they just own)
         print(f"[AGENT] OR conditions: agent_id={user_id} OR assigned_agent_id={user_id}")
+        import asyncio
         try:
-            all_properties = await db.select(
-                "properties", 
-                filters={
-                    "or": [
-                        {"agent_id": user_id},
-                        {"assigned_agent_id": user_id}
-                    ]
-                },
-                limit=100  # Reduced from 1000 to 100 for performance
+            all_properties = await asyncio.wait_for(
+                db.select(
+                    "properties", 
+                    filters={
+                        "or": [
+                            {"agent_id": user_id},
+                            {"assigned_agent_id": user_id}
+                        ]
+                    },
+                    limit=100,  # Reduced from 1000 to 100 for performance
+                    order_by="created_at",
+                    ascending=False
+                ),
+                timeout=1.5  # 1.5 second timeout for faster response
             )
             all_properties = all_properties or []
             property_ids = list(set([p.get("id") for p in all_properties if p.get("id")]))
             print(f"[AGENT] OR query returned {len(property_ids)} ASSIGNED property IDs for inquiries")
             if property_ids:
                 print(f"[AGENT] Sample property IDs: {[pid[:8] for pid in property_ids[:3]]}")
+        except asyncio.TimeoutError:
+            print(f"[AGENT] Properties query timeout for inquiries")
+            property_ids = []
         except Exception as or_error:
             print(f"[AGENT] OR query failed, using separate queries: {or_error}")
-            # Fallback to separate queries - ONLY assigned properties
-            properties_agent_id = await db.select("properties", filters={"agent_id": user_id}, limit=100)
-            properties_assigned_id = await db.select("properties", filters={"assigned_agent_id": user_id}, limit=100)
+            # Fallback to separate queries - ONLY assigned properties with timeout
+            try:
+                properties_agent_id, properties_assigned_id = await asyncio.wait_for(
+                    asyncio.gather(
+                        db.select("properties", filters={"agent_id": user_id}, limit=100),
+                        db.select("properties", filters={"assigned_agent_id": user_id}, limit=100),
+                        return_exceptions=True
+                    ),
+                    timeout=1.5
+                )
+                if isinstance(properties_agent_id, Exception):
+                    properties_agent_id = []
+                if isinstance(properties_assigned_id, Exception):
+                    properties_assigned_id = []
+            except asyncio.TimeoutError:
+                print(f"[AGENT] Fallback queries timeout for inquiries")
+                properties_agent_id = []
+                properties_assigned_id = []
             
             # Combine only assigned properties (NOT owner_id)
             all_properties = (properties_agent_id or []) + (properties_assigned_id or [])
@@ -407,9 +432,10 @@ async def get_agent_inquiries(
         # Build filters - check both property assignments AND direct agent assignments in inquiries table
         # According to schema: inquiries table has assigned_agent_id field
         inquiries_list = []
+        inquiries_by_property = []  # Initialize to avoid undefined variable errors
+        inquiries_by_agent = []  # Initialize to avoid undefined variable errors
         try:
             # Get inquiries by property - use individual queries if "in" filter fails
-            inquiries_by_property = []
             if property_ids and len(property_ids) > 0:
                 print(f"[AGENT] Fetching inquiries for {len(property_ids)} properties")
                 try:
@@ -514,12 +540,18 @@ async def get_agent_inquiries(
                         filters["property_id"] = property_id
                     if status:
                         filters["status"] = status
-                    inquiries = await db.select("inquiries", filters=filters, limit=limit or 100)
+                    inquiries = await asyncio.wait_for(
+                        db.select("inquiries", filters=filters, limit=min(limit or 100, 200), order_by="created_at", ascending=False),
+                        timeout=1.5
+                    )
                     inquiries_list = inquiries or []
                     print(f"[AGENT] Fallback query returned {len(inquiries_list)} inquiries")
                 else:
                     # Try direct agent assignment only
-                    inquiries = await db.select("inquiries", filters={"assigned_agent_id": user_id}, limit=limit or 100)
+                    inquiries = await asyncio.wait_for(
+                        db.select("inquiries", filters={"assigned_agent_id": user_id}, limit=min(limit or 100, 200), order_by="created_at", ascending=False),
+                        timeout=1.5
+                    )
                     inquiries_list = inquiries or []
                     print(f"[AGENT] Fallback direct assignment query returned {len(inquiries_list)} inquiries")
             except Exception as fallback_error:
@@ -604,7 +636,6 @@ async def get_agent_inquiries(
             enhanced_inquiries.append(enhanced_inquiry)
         
         print(f"[AGENT] Returning {len(enhanced_inquiries)} inquiries")
-        print(f"[AGENT] Inquiry breakdown - by property: {len(inquiries_by_property or [])}, by agent assignment: {len(inquiries_by_agent or [])}")
         
         # Ensure response format matches frontend expectations
         response = {
