@@ -532,29 +532,61 @@ async def create_property(property_data: dict, request: Request = None):
                     except Exception as user_error:
                         print(f"[PROPERTIES] Could not fetch user type: {user_error}")
                     
-                    # For agents: set assigned_agent_id to the logged-in agent
-                    # Owner details (owner_name, owner_email, owner_phone) are provided in property_data
-                    if user_type == 'agent':
-                        property_data['assigned_agent_id'] = user_id
-                        property_data['agent_id'] = user_id  # Also set legacy agent_id field
-                        print(f"[PROPERTIES] Agent creating property - set assigned_agent_id={user_id}")
-                        
-                        # Store owner details if provided (for properties created on behalf of owners)
-                        # These will be stored in the property metadata or as separate fields
-                        if property_data.get('owner_name') or property_data.get('owner_email') or property_data.get('owner_phone'):
-                            print(f"[PROPERTIES] Owner details provided: name={property_data.get('owner_name')}, email={property_data.get('owner_email')}, phone={property_data.get('owner_phone')}")
-                            # Store owner details in property metadata or as separate fields
-                            # Note: These fields may need to be added to the database schema
+                    # Set owner_id, seller_id, and added_by based on user type
+                    # CRITICAL: 
+                    # - Seller uploads: seller becomes owner (owner_id = seller_id = user_id)
+                    # - Agent uploads: agent becomes owner by default (owner_id = user_id), unless owner details provided
+                    # - Admin uploads: can assign owner_id and assigned_agent_id from form
                     
-                    # Set owner_id and added_by
-                    # For agents: owner_id can be null if owner details are provided separately
-                    # For others: owner_id and added_by are set to the logged-in user
-                    if user_type != 'agent' or not (property_data.get('owner_name') or property_data.get('owner_email')):
+                    if user_type == 'seller':
+                        # Seller creates property: seller is the owner
                         if not property_data.get('owner_id'):
                             property_data['owner_id'] = user_id
-                    if not property_data.get('added_by'):
-                        property_data['added_by'] = user_id
-                    print(f"[PROPERTIES] Set owner_id={property_data.get('owner_id')}, added_by={property_data.get('added_by')}")
+                        property_data['seller_id'] = user_id  # Set seller_id for seller-created properties
+                        if not property_data.get('added_by'):
+                            property_data['added_by'] = user_id
+                        print(f"[PROPERTIES] Seller creating property - set owner_id={property_data.get('owner_id')}, seller_id={user_id}")
+                    
+                    elif user_type == 'agent':
+                        # Agent creates property: agent is the owner by default
+                        # Only if owner details (name, email, phone) are provided, use those instead
+                        if property_data.get('owner_name') or property_data.get('owner_email') or property_data.get('owner_phone'):
+                            # Agent is creating property on behalf of someone else
+                            # owner_id will be set to null or provided owner_id, owner details stored in nested object
+                            print(f"[PROPERTIES] Agent creating property on behalf of owner: name={property_data.get('owner_name')}, email={property_data.get('owner_email')}, phone={property_data.get('owner_phone')}")
+                            # Don't set owner_id here - let it be null or use provided owner_id
+                        else:
+                            # Agent is creating property for themselves - agent is the owner
+                            if not property_data.get('owner_id'):
+                                property_data['owner_id'] = user_id
+                            print(f"[PROPERTIES] Agent creating property for themselves - set owner_id={user_id}")
+                        
+                        # Always set assigned_agent_id to the logged-in agent
+                        property_data['assigned_agent_id'] = user_id
+                        property_data['agent_id'] = user_id  # Also set legacy agent_id field
+                        if not property_data.get('added_by'):
+                            property_data['added_by'] = user_id
+                        print(f"[PROPERTIES] Agent creating property - set assigned_agent_id={user_id}")
+                    
+                    elif user_type == 'admin':
+                        # Admin creates property: can assign owner_id and assigned_agent_id from form
+                        # If owner_id not provided, admin becomes the owner
+                        if not property_data.get('owner_id'):
+                            property_data['owner_id'] = user_id
+                        if not property_data.get('added_by'):
+                            property_data['added_by'] = user_id
+                        # assigned_agent_id can be set from form by admin
+                        if property_data.get('assigned_agent_id'):
+                            property_data['agent_id'] = property_data.get('assigned_agent_id')
+                        print(f"[PROPERTIES] Admin creating property - owner_id={property_data.get('owner_id')}, assigned_agent_id={property_data.get('assigned_agent_id')}")
+                    
+                    else:
+                        # Buyer or other user types: user becomes owner
+                        if not property_data.get('owner_id'):
+                            property_data['owner_id'] = user_id
+                        if not property_data.get('added_by'):
+                            property_data['added_by'] = user_id
+                        print(f"[PROPERTIES] {user_type} creating property - set owner_id={property_data.get('owner_id')}, added_by={user_id}")
             except Exception as auth_error:
                 print(f"[PROPERTIES] Could not extract user from request: {auth_error}")
                 # Continue without user_id if auth fails
@@ -908,8 +940,9 @@ async def create_property(property_data: dict, request: Request = None):
                 print(f"[PROPERTIES] Mapped field {ui_field} -> {db_field}")
         
         # Remove fields that don't exist in the database
-        # Note: owner_name, owner_email, owner_phone are kept for agent-created properties
-        # They will be stored if the database supports them, or can be stored in metadata
+        # CRITICAL: owner_name, owner_email, owner_phone don't exist in properties table
+        # These are stored in the nested 'owner' object for reference, but must be removed before insert
+        # The owner's email should be fetched from the users table via owner_id relationship
         fields_to_remove = [
             'country', 'lift_available', 'power_backup', 'washrooms', 'management_type',
             'parking_spaces', 'total_floors_building', 'floor_number', 'balconies_count',
@@ -920,7 +953,10 @@ async def create_property(property_data: dict, request: Request = None):
             'available_floor_number', 'parking_slots_count', 'floor_count_value', 'floor_value',
             'form_data', 'images_data', 'sections_data', 'ui_fields', 'db_fields',
             # CRITICAL: Remove city_id as it doesn't exist in the database schema
-            'city_id'
+            'city_id',
+            # CRITICAL: Remove owner_email, owner_name, owner_phone - these don't exist in properties table
+            # Owner details are stored in nested 'owner' object for reference only, not in database
+            'owner_email', 'owner_name', 'owner_phone'
         ]
         
         for field in fields_to_remove:
@@ -1269,12 +1305,25 @@ async def _process_single_property(property_data: dict, show_agent_info: bool = 
 
     # Fetch owner details if available (for agent-created properties)
     # Owner details (owner_name, owner_email, owner_phone) are stored when agent creates property
+    # CRITICAL: owner_email, owner_name, owner_phone are NOT database columns - they're stored in nested 'owner' object
+    # If owner_email is not provided, use the registered user's email from owner_id
     if property_data.get('owner_name') or property_data.get('owner_email') or property_data.get('owner_phone'):
+        # Use provided owner details
         property_data['owner'] = {
             'name': property_data.get('owner_name', ''),
             'email': property_data.get('owner_email', ''),
             'phone': property_data.get('owner_phone', '')
         }
+        # If owner_email is empty but we have owner_id, fetch email from users table
+        if not property_data.get('owner_email') and property_data.get('owner_id'):
+            try:
+                owners = await db.select("users", filters={"id": property_data.get('owner_id')})
+                if owners:
+                    owner = dict(owners[0])
+                    property_data['owner']['email'] = owner.get('email', '')
+                    print(f"[PROPERTIES] Using registered user's email for owner: {owner.get('email')}")
+            except Exception as e:
+                print(f"[PROPERTIES] Error fetching owner email: {e}")
     else:
         # Try to fetch owner from owner_id or added_by
         owner_id = property_data.get('owner_id') or property_data.get('added_by')
@@ -1287,12 +1336,34 @@ async def _process_single_property(property_data: dict, show_agent_info: bool = 
                         'id': owner.get('id'),
                         'first_name': owner.get('first_name'),
                         'last_name': owner.get('last_name'),
-                        'email': owner.get('email'),
+                        'name': f"{owner.get('first_name', '')} {owner.get('last_name', '')}".strip(),
+                        'email': owner.get('email', ''),  # Use registered user's email
                         'phone_number': owner.get('phone_number') or owner.get('phone')
                     }
+                    print(f"[PROPERTIES] Fetched owner details from registered user: {owner.get('email')}")
             except Exception as e:
                 print(f"[PROPERTIES] Error fetching owner details: {e}")
                 pass
+
+    # Fetch seller details if seller_id is set (for seller-created properties)
+    seller_id = property_data.get('seller_id')
+    if seller_id:
+        try:
+            sellers = await db.select("users", filters={"id": seller_id})
+            if sellers:
+                seller = dict(sellers[0])
+                property_data['seller'] = {
+                    'id': seller.get('id'),
+                    'first_name': seller.get('first_name'),
+                    'last_name': seller.get('last_name'),
+                    'name': f"{seller.get('first_name', '')} {seller.get('last_name', '')}".strip(),
+                    'email': seller.get('email', ''),  # Use registered seller's email
+                    'phone_number': seller.get('phone_number') or seller.get('phone')
+                }
+                print(f"[PROPERTIES] Seller info added: {property_data['seller']['name']} ({property_data['seller']['email']})")
+        except Exception as e:
+            print(f"[PROPERTIES] Error fetching seller details: {e}")
+            pass
 
     # Fetch assigned agent details if available - ONLY for logged-in buyers
     agent_id = property_data.get("agent_id") or property_data.get("assigned_agent_id")
