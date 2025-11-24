@@ -680,15 +680,24 @@ async def list_properties(request: Request, _=Depends(require_admin_or_api_key),
         user_map = {}
         for user in users:
             user_id = user.get('id')
+            if not user_id:
+                continue
+                
             first_name = user.get('first_name', '').strip()
             last_name = user.get('last_name', '').strip()
             full_name = f"{first_name} {last_name}".strip()
-            # Only add if we have a valid name
-            if user_id and full_name:
+            
+            # Prefer full name, fallback to first name only, then email, then custom_id
+            if full_name:
                 user_map[user_id] = full_name
-            elif user_id:
-                # Fallback to email if no name
+            elif first_name:
+                user_map[user_id] = first_name
+            elif user.get('email'):
                 user_map[user_id] = user.get('email', 'Unknown User')
+            elif user.get('custom_id'):
+                user_map[user_id] = f"User {user.get('custom_id')}"
+            else:
+                user_map[user_id] = 'Unknown User'
         
         if properties:
             for prop in properties:
@@ -703,6 +712,17 @@ async def list_properties(request: Request, _=Depends(require_admin_or_api_key),
                     owner_name = 'N/A'
                 
                 prop['owner_name'] = owner_name
+                
+                # Get seller name - check seller_id separately
+                seller_id = prop.get('seller_id')
+                if seller_id and seller_id in user_map:
+                    seller_name = user_map[seller_id]
+                elif seller_id:
+                    seller_name = f"Seller {seller_id[:8]}..."
+                else:
+                    seller_name = 'N/A'
+                
+                prop['seller_name'] = seller_name
                 
                 # Get agent name - check assigned_agent_id first, then agent_id
                 agent_id = prop.get('assigned_agent_id') or prop.get('agent_id')
