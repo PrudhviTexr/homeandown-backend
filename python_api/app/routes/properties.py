@@ -1744,6 +1744,33 @@ async def update_property(property_id: str, update_data: dict):
             del update_data['city_id']
             print(f"[PROPERTIES] Removed city_id from update_data (doesn't exist in database schema)")
         
+        # Ensure agent_id and assigned_agent_id are kept in sync
+        # This ensures both fields are always updated together for consistency
+        if 'agent_id' in update_data:
+            agent_id_value = update_data['agent_id']
+            # Handle empty string, None, or invalid values
+            if agent_id_value and agent_id_value not in ['', 'null', 'undefined', 'NA']:
+                # If agent_id is being set, also set assigned_agent_id
+                update_data['assigned_agent_id'] = agent_id_value
+                print(f"[PROPERTIES] Syncing assigned_agent_id with agent_id: {agent_id_value}")
+            else:
+                # If agent_id is being cleared, also clear assigned_agent_id
+                update_data['assigned_agent_id'] = None
+                update_data['agent_id'] = None
+                print(f"[PROPERTIES] Clearing both agent_id and assigned_agent_id")
+        elif 'assigned_agent_id' in update_data:
+            assigned_agent_id_value = update_data['assigned_agent_id']
+            # Handle empty string, None, or invalid values
+            if assigned_agent_id_value and assigned_agent_id_value not in ['', 'null', 'undefined', 'NA']:
+                # If assigned_agent_id is being set, also set agent_id
+                update_data['agent_id'] = assigned_agent_id_value
+                print(f"[PROPERTIES] Syncing agent_id with assigned_agent_id: {assigned_agent_id_value}")
+            else:
+                # If assigned_agent_id is being cleared, also clear agent_id
+                update_data['agent_id'] = None
+                update_data['assigned_agent_id'] = None
+                print(f"[PROPERTIES] Clearing both agent_id and assigned_agent_id")
+        
         # Filter update_data to only include valid database columns
         filtered_update_data = {}
         for key, value in update_data.items():
@@ -1802,8 +1829,14 @@ async def update_property(property_id: str, update_data: dict):
                 if field in filtered_update_data:
                     print(f"[PROPERTIES] DB {field}: {filtered_update_data[field]} (type: {type(filtered_update_data[field])})")
             
-            # Remove None values to avoid database issues
-            clean_update_data = {k: v for k, v in filtered_update_data.items() if v is not None}
+            # Remove None values to avoid database issues, but allow None for agent_id/assigned_agent_id to clear assignments
+            clean_update_data = {}
+            for k, v in filtered_update_data.items():
+                # For agent_id and assigned_agent_id, allow None to clear the assignment
+                if k in ['agent_id', 'assigned_agent_id']:
+                    clean_update_data[k] = v  # Include even if None to clear assignment
+                elif v is not None:
+                    clean_update_data[k] = v
             
             result = await db.update("properties", clean_update_data, {"id": property_id})
             print(f"[PROPERTIES] Updating fields: {list(clean_update_data.keys())}")
