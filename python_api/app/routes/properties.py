@@ -466,9 +466,24 @@ async def get_properties(
                     if prop_id and file_type.startswith('image/'):
                         if prop_id not in images_by_property:
                             images_by_property[prop_id] = []
-                        # Use 'url' if available, otherwise fallback to 'file_path'
+                        # Get image URL - convert file_path to public URL if needed
                         image_url = doc.get('url') or doc.get('file_path')
                         if image_url:
+                            # If it's not already a full URL, convert file_path to public URL
+                            if not (image_url.startswith('http://') or image_url.startswith('https://')):
+                                try:
+                                    # Property images are in 'property-images' bucket
+                                    public_url = db.supabase_client.storage.from_('property-images').get_public_url(image_url)
+                                    image_url = public_url
+                                except Exception as url_error:
+                                    print(f"[PROPERTIES] Failed to get public URL for {image_url}: {url_error}")
+                                    # Try documents bucket as fallback
+                                    try:
+                                        public_url = db.supabase_client.storage.from_('documents').get_public_url(image_url)
+                                        image_url = public_url
+                                    except:
+                                        # Use file_path as-is if conversion fails
+                                        pass
                             images_by_property[prop_id].append(image_url)
                 
                 # Assign images to properties
@@ -1537,9 +1552,34 @@ async def _process_single_property(property_data: dict, show_agent_info: bool = 
         try:
             image_docs = await db.select("documents", filters={"entity_type": "property", "entity_id": property_data.get('id')})
             if image_docs:
-                property_data['images'] = [doc.get('file_path') for doc in image_docs if doc.get('file_type', '').startswith('image/')]
-        except Exception:
-            pass # Ignore image fetch errors
+                image_urls = []
+                for doc in image_docs:
+                    file_type = doc.get('file_type', '')
+                    if file_type.startswith('image/'):
+                        image_url = doc.get('url') or doc.get('file_path')
+                        if image_url:
+                            # If it's not already a full URL, convert file_path to public URL
+                            if not (image_url.startswith('http://') or image_url.startswith('https://')):
+                                try:
+                                    # Property images are in 'property-images' bucket
+                                    public_url = db.supabase_client.storage.from_('property-images').get_public_url(image_url)
+                                    image_url = public_url
+                                except Exception as url_error:
+                                    print(f"[PROPERTIES] Failed to get public URL for {image_url}: {url_error}")
+                                    # Try documents bucket as fallback
+                                    try:
+                                        public_url = db.supabase_client.storage.from_('documents').get_public_url(image_url)
+                                        image_url = public_url
+                                    except:
+                                        # Use file_path as-is if conversion fails
+                                        pass
+                            image_urls.append(image_url)
+                property_data['images'] = image_urls
+        except Exception as img_err:
+            print(f"[PROPERTIES] Error fetching images: {img_err}")
+            import traceback
+            print(traceback.format_exc())
+            # Ignore image fetch errors but log them
 
     # Ensure coordinates
     if property_data.get('latitude') is None or property_data.get('longitude') is None:
@@ -1823,6 +1863,21 @@ async def update_property(property_id: str, update_data: dict):
                                     # Use 'file_path' if available, otherwise fallback to 'url'
                                     image_url = doc.get('file_path') or doc.get('url')
                                     if image_url:
+                                        # If it's not already a full URL, convert file_path to public URL
+                                        if not (image_url.startswith('http://') or image_url.startswith('https://')):
+                                            try:
+                                                # Property images are in 'property-images' bucket
+                                                public_url = db.supabase_client.storage.from_('property-images').get_public_url(image_url)
+                                                image_url = public_url
+                                            except Exception as url_error:
+                                                print(f"[PROPERTIES] Failed to get public URL for {image_url}: {url_error}")
+                                                # Try documents bucket as fallback
+                                                try:
+                                                    public_url = db.supabase_client.storage.from_('documents').get_public_url(image_url)
+                                                    image_url = public_url
+                                                except:
+                                                    # Use file_path as-is if conversion fails
+                                                    pass
                                         image_urls.append(image_url)
                             
                             if image_urls:
@@ -2118,6 +2173,21 @@ async def get_property_images(property_id: str):
                     # Use 'file_path' if available, otherwise fallback to 'url'
                     image_url = doc.get('file_path') or doc.get('url')
                     if image_url:
+                        # If it's not already a full URL, convert file_path to public URL
+                        if not (image_url.startswith('http://') or image_url.startswith('https://')):
+                            try:
+                                # Property images are in 'property-images' bucket
+                                public_url = db.supabase_client.storage.from_('property-images').get_public_url(image_url)
+                                image_url = public_url
+                            except Exception as url_error:
+                                print(f"[PROPERTIES] Failed to get public URL for {image_url}: {url_error}")
+                                # Try documents bucket as fallback
+                                try:
+                                    public_url = db.supabase_client.storage.from_('documents').get_public_url(image_url)
+                                    image_url = public_url
+                                except:
+                                    # Use file_path as-is if conversion fails
+                                    pass
                         images.append({
                             "id": doc.get('id'),
                             "url": image_url,

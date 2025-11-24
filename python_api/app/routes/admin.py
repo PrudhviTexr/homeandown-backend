@@ -199,8 +199,20 @@ async def update_user(user_id: str, payload: UpdateProfileRequest, request: Requ
                         new_status = update_data.get('status', updated_user.get('status'))
                         new_verification = update_data.get('verification_status', updated_user.get('verification_status'))
                         
-                        # Use the same email logic as PUT method
-                        if new_verification == 'verified' and verification_changed:
+                        # Only send email if this is NOT from the approve_user endpoint
+                        # The approve_user endpoint sends its own comprehensive email
+                        # approve_user always sets both verification_status='verified' AND status='active' together
+                        # So if both are being set together, skip email (approve_user will send it)
+                        is_approval_action = (
+                            verification_changed and 
+                            new_verification == 'verified' and 
+                            status_changed and 
+                            new_status == 'active'
+                        )
+                        
+                        # Use the same email logic as PUT method, but skip if this looks like an approval action
+                        # (approve_user endpoint handles its own emails)
+                        if new_verification == 'verified' and verification_changed and not is_approval_action:
                             subject = "Your Home & Own Account Has Been Verified"
                             html_content = f"""
                             <!DOCTYPE html>
@@ -422,8 +434,20 @@ async def update_user_put(user_id: str, request: Request, _=Depends(require_admi
                     new_status = update_data.get('status', updated_user.get('status'))
                     new_verification = update_data.get('verification_status', updated_user.get('verification_status'))
                     
-                    # Determine email content based on changes
-                    if new_verification == 'verified' and verification_changed:
+                    # Only send email if this is NOT from the approve_user endpoint
+                    # The approve_user endpoint sends its own comprehensive email
+                    # approve_user always sets both verification_status='verified' AND status='active' together
+                    # So if both are being set together, skip email (approve_user will send it)
+                    is_approval_action = (
+                        verification_changed and 
+                        new_verification == 'verified' and 
+                        status_changed and 
+                        new_status == 'active'
+                    )
+                    
+                    # Determine email content based on changes, but skip if this looks like an approval action
+                    # (approve_user endpoint handles its own emails)
+                    if new_verification == 'verified' and verification_changed and not is_approval_action:
                         subject = "Your Home & Own Account Has Been Verified"
                         html_content = f"""
                         <!DOCTYPE html>
@@ -1353,9 +1377,11 @@ async def approve_user(user_id: str, request: Request, _=Depends(require_admin_o
             update_data['license_number'] = None
             print(f"[ADMIN] Cleared license number for {user_type} {user_id}")
         
+        # Mark that this is an approval action to prevent duplicate emails from PUT/PATCH endpoints
+        # We'll add a flag to the update_data to indicate this is from the approve endpoint
         result = await db.update("users", update_data, {"id": user_id})
 
-        # Send comprehensive approval email
+        # Send comprehensive approval email (only from approve_user endpoint, not from PUT/PATCH)
         try:
             updated_user_data = await db.select("users", filters={"id": user_id})
             if updated_user_data:
