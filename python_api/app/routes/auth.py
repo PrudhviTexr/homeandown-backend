@@ -104,12 +104,16 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
             except (ValueError, TypeError):
                 pass
         
-        # Add agent-specific fields
+        # Store agent-specific fields for later use (don't add to user_data - they go to agent_profiles)
+        agent_profile_data = {}
         if payload.role == "agent":
             if hasattr(payload, 'experience_years') and payload.experience_years:
-                user_data["experience_years"] = payload.experience_years
+                try:
+                    agent_profile_data["experience_years"] = int(payload.experience_years) if payload.experience_years else None
+                except (ValueError, TypeError):
+                    agent_profile_data["experience_years"] = None
             if hasattr(payload, 'specialization') and payload.specialization:
-                user_data["specialization"] = payload.specialization
+                agent_profile_data["specialization"] = payload.specialization
         
         # Generate custom ID and license number based on user type
         custom_id = None
@@ -155,6 +159,24 @@ async def signup(payload: SignupRequest, request: Request) -> Dict[str, Any]:
                 print(f"[AUTH] User roles initialized successfully")
             except Exception as role_error:
                 print(f"[AUTH] Failed to initialize user roles: {role_error}")
+            
+            # Create agent profile if user is an agent
+            if payload.role == "agent" and agent_profile_data:
+                try:
+                    agent_profile_insert = {
+                        "user_id": user_id,
+                        "specialization": agent_profile_data.get("specialization", ""),
+                        "bio": "",
+                        "experience_years": agent_profile_data.get("experience_years"),
+                        "license_status": "pending",
+                        "created_at": now_utc,
+                        "updated_at": now_utc
+                    }
+                    await db.insert("agent_profiles", agent_profile_insert)
+                    print(f"[AUTH] Agent profile created for user: {user_id}")
+                except Exception as agent_profile_error:
+                    print(f"[AUTH] Failed to create agent profile: {agent_profile_error}")
+                    # Don't fail signup if agent profile creation fails - it can be created later
                 
         except Exception as create_error:
             print(f"[AUTH] User creation failed: {create_error}")
@@ -409,11 +431,29 @@ async def get_profile(request: Request) -> Dict[str, Any]:
             raise HTTPException(status_code=404, detail="User not found")
         
         user = users[0]
+        user_type = user.get("user_type", "buyer")
         
         # Get user's active roles (skip if slow - use default immediately)
-        active_roles = [user.get("user_type", "buyer")]  # Default to user_type immediately
+        active_roles = [user_type]  # Default to user_type immediately
         # Skip role service call for speed - just use user_type
         # Role service can be slow and is not critical for basic auth
+        
+        # Fetch agent profile data if user is an agent
+        experience_years = None
+        specialization = None
+        if user_type == "agent":
+            try:
+                agent_profiles = await asyncio.wait_for(
+                    db.select("agent_profiles", filters={"user_id": user_id}, limit=1),
+                    timeout=1.0
+                )
+                if agent_profiles and len(agent_profiles) > 0:
+                    agent_profile = agent_profiles[0]
+                    experience_years = agent_profile.get("experience_years")
+                    specialization = agent_profile.get("specialization")
+            except (asyncio.TimeoutError, Exception) as agent_profile_error:
+                print(f"[AUTH] Failed to fetch agent profile (non-critical): {agent_profile_error}")
+                # Continue without agent profile data - don't fail the request
         
         # Build response with ALL fields from the database
         response_data = {
@@ -421,7 +461,7 @@ async def get_profile(request: Request) -> Dict[str, Any]:
             "email": user["email"],
             "first_name": user.get("first_name", ""),
             "last_name": user.get("last_name", ""),
-            "user_type": user.get("user_type", "buyer"),
+            "user_type": user_type,
             "active_roles": active_roles,
             "custom_id": user.get("custom_id"),
             "email_verified": user.get("email_verified", False),
@@ -440,12 +480,12 @@ async def get_profile(request: Request) -> Dict[str, Any]:
             "bio": user.get("bio", ""),
             "profile_image_url": user.get("profile_image_url"),
             "business_name": user.get("business_name", ""),
-            # Agent-specific fields (read-only)
+            # Agent-specific fields (read-only) - fetched from agent_profiles
             "agent_license_number": user.get("agent_license_number") or user.get("license_number") or user.get("custom_id"),
             "license_number": user.get("license_number") or user.get("agent_license_number") or user.get("custom_id"),
             "custom_id": user.get("custom_id"),
-            "experience_years": user.get("experience_years"),
-            "specialization": user.get("specialization"),
+            "experience_years": experience_years,
+            "specialization": specialization,
             # Bank details (read-only for security)
             "bank_account_number": user.get("bank_account_number"),
             "ifsc_code": user.get("ifsc_code"),

@@ -26,6 +26,7 @@ async def get_user_profile(request: Request):
             raise HTTPException(status_code=404, detail="User not found")
         
         user = users[0]
+        user_type = user.get("user_type", "buyer")
         
         # Get user's active roles
         try:
@@ -33,7 +34,21 @@ async def get_user_profile(request: Request):
             active_roles = await UserRoleService.get_active_user_roles(user_id)
         except Exception as role_error:
             print(f"[USERS] Failed to get user roles: {role_error}")
-            active_roles = [user.get("user_type", "buyer")]
+            active_roles = [user_type]
+        
+        # Fetch agent profile data if user is an agent
+        experience_years = None
+        specialization = None
+        if user_type == "agent":
+            try:
+                agent_profiles = await db.select("agent_profiles", filters={"user_id": user_id}, limit=1)
+                if agent_profiles and len(agent_profiles) > 0:
+                    agent_profile = agent_profiles[0]
+                    experience_years = agent_profile.get("experience_years")
+                    specialization = agent_profile.get("specialization")
+            except Exception as agent_profile_error:
+                print(f"[USERS] Failed to fetch agent profile (non-critical): {agent_profile_error}")
+                # Continue without agent profile data - don't fail the request
         
         # Return ALL fields
         return {
@@ -45,7 +60,7 @@ async def get_user_profile(request: Request):
                 "last_name": user.get("last_name", ""),
                 "phone_number": user.get("phone_number", ""),
                 "date_of_birth": user.get("date_of_birth"),
-                "user_type": user.get("user_type", "buyer"),
+                "user_type": user_type,
                 "active_roles": active_roles,
                 "status": user.get("status", "active"),
                 "verification_status": user.get("verification_status", "pending"),
@@ -64,10 +79,10 @@ async def get_user_profile(request: Request):
                 "bio": user.get("bio", ""),
                 "business_name": user.get("business_name", ""),
                 "custom_id": user.get("custom_id"),
-                # Agent-specific fields (read-only)
+                # Agent-specific fields (read-only) - fetched from agent_profiles
                 "agent_license_number": user.get("agent_license_number"),
-                "experience_years": user.get("experience_years"),
-                "specialization": user.get("specialization"),
+                "experience_years": experience_years,
+                "specialization": specialization,
                 # Bank details (read-only for security)
                 "bank_account_number": user.get("bank_account_number"),
                 "ifsc_code": user.get("ifsc_code"),

@@ -564,58 +564,58 @@ class LocationService:
                 print(f"[LOCATION] OpenStreetMap API: Failed for {pincode}")
                 # Fallback to other coordinate methods if OSM fails
                 print(f"[LOCATION] Trying fallback coordinate methods...")
-                    coordinates = await LocationService.get_coordinates_from_pincode(pincode)
+                coordinates = await LocationService.get_coordinates_from_pincode(pincode)
                     
             # If we have location data from postal API, create response
             if post_office:
-                    # Create a comprehensive address from the location data
-                    address_parts = []
-                    if post_office.get('Name'):
-                        address_parts.append(post_office.get('Name'))
-                    if post_office.get('Block'):
-                        address_parts.append(post_office.get('Block'))
-                    if post_office.get('District'):
-                        address_parts.append(post_office.get('District'))
-                    if post_office.get('State'):
-                        address_parts.append(post_office.get('State'))
-                    
-                    suggested_address = ", ".join(address_parts) if address_parts else ""
-                    
-                    location_data = {
-                        "pincode": pincode,
+                # Create a comprehensive address from the location data
+                address_parts = []
+                if post_office.get('Name'):
+                    address_parts.append(post_office.get('Name'))
+                if post_office.get('Block'):
+                    address_parts.append(post_office.get('Block'))
+                if post_office.get('District'):
+                    address_parts.append(post_office.get('District'))
+                if post_office.get('State'):
+                    address_parts.append(post_office.get('State'))
+                
+                suggested_address = ", ".join(address_parts) if address_parts else ""
+                
+                location_data = {
+                    "pincode": pincode,
+                    "country": post_office.get('Country', 'India'),
+                    "state": post_office.get('State', ''),
+                    "district": post_office.get('District', ''),
+                    "mandal": post_office.get('Name', ''),  # Name field is mandal
+                    "city": post_office.get('Name', ''),  # For city field
+                    "address": suggested_address,  # Auto-generated address
+                    "region": post_office.get('Region', ''),
+                    "division": post_office.get('Division', ''),
+                    "circle": post_office.get('Circle', ''),
+                    "block": post_office.get('Block', ''),
+                    # PRIORITY: Use OpenStreetMap coordinates for map marker positioning
+                    "latitude": coordinates[0] if coordinates else None,
+                    "longitude": coordinates[1] if coordinates else None,
+                    "coordinates": coordinates if coordinates else None,
+                    "map_bounds": LocationService.calculate_pincode_bounds(coordinates[0], coordinates[1]) if coordinates else None,
+                    "auto_populated": True,
+                    "editable_fields": True,  # All fields can be edited
+                    "suggested_fields": {
                         "country": post_office.get('Country', 'India'),
                         "state": post_office.get('State', ''),
                         "district": post_office.get('District', ''),
-                        "mandal": post_office.get('Name', ''),  # Name field is mandal
-                        "city": post_office.get('Name', ''),  # For city field
-                        "address": suggested_address,  # Auto-generated address
-                        "region": post_office.get('Region', ''),
-                        "division": post_office.get('Division', ''),
-                        "circle": post_office.get('Circle', ''),
-                        "block": post_office.get('Block', ''),
-                    # PRIORITY: Use OpenStreetMap coordinates for map marker positioning
-                        "latitude": coordinates[0] if coordinates else None,
-                        "longitude": coordinates[1] if coordinates else None,
-                        "coordinates": coordinates if coordinates else None,
-                        "map_bounds": LocationService.calculate_pincode_bounds(coordinates[0], coordinates[1]) if coordinates else None,
-                        "auto_populated": True,
-                        "editable_fields": True,  # All fields can be edited
-                        "suggested_fields": {
-                            "country": post_office.get('Country', 'India'),
-                            "state": post_office.get('State', ''),
-                            "district": post_office.get('District', ''),
-                            "mandal": post_office.get('Name', ''),
-                            "city": post_office.get('Name', ''),
-                            "address": suggested_address,
+                        "mandal": post_office.get('Name', ''),
+                        "city": post_office.get('Name', ''),
+                        "address": suggested_address,
                         # PRIORITY: Use OpenStreetMap coordinates for form fields
-                            "latitude": coordinates[0] if coordinates else None,
-                            "longitude": coordinates[1] if coordinates else None
-                        }
+                        "latitude": coordinates[0] if coordinates else None,
+                        "longitude": coordinates[1] if coordinates else None
                     }
-                    
+                }
+                
                 print(f"[LOCATION] Successfully combined location data and coordinates for pincode {pincode}")
                 print(f"[LOCATION] Final coordinates: {coordinates}")
-                    return location_data
+                return location_data
             else:
                 print(f"[LOCATION] No location data found for pincode {pincode}")
                 
