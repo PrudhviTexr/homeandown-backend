@@ -3067,4 +3067,25 @@ async def test_email_service(request: Request, _=Depends(require_admin_or_api_ke
 
 @router.get("/users/all")
 async def list_all_users(request: Request, _=Depends(require_admin_or_api_key)):
-    """List all users across all roles"""
+    """List all users across all roles - no pagination limit"""
+    try:
+        import asyncio
+        
+        # Fetch all users without limit (or with a very high limit)
+        try:
+            users = await asyncio.wait_for(
+                db.admin_select("users", limit=10000),  # High limit to get all users
+                timeout=5.0  # Longer timeout for large datasets
+            )
+        except asyncio.TimeoutError:
+            print(f"[ADMIN] Users/all query timeout")
+            return []
+        
+        result = users or []
+        print(f"[ADMIN] Users/all fetched {len(result)} users")
+        return result
+    except Exception as e:
+        print(f"[ADMIN] List all users error: {e}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
