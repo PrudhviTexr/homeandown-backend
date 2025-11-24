@@ -212,6 +212,7 @@ async def get_seller_properties(
             
             bookings = bookings_by_property.get(property_id, [])
             bookings_count = len(bookings)
+            confirmed_bookings_count = len([b for b in bookings if (b.get("status") or "").lower() in ["confirmed", "completed"]])
             
             views_count = property_data.get("views_count", 0)
             
@@ -235,6 +236,7 @@ async def get_seller_properties(
                 **property_data,
                 "inquiries_count": inquiries_count,
                 "bookings_count": bookings_count,
+                "confirmed_bookings_count": confirmed_bookings_count,
                 "views_count": views_count,
                 "last_inquiry_date": inquiries[0].get("created_at") if inquiries else None,
                 "last_booking_date": bookings[0].get("created_at") if bookings else None,
@@ -288,8 +290,8 @@ async def get_seller_inquiries(
             # if not properties:
             #     return {"success": True, "inquiries": [], "total": 0}
         else:
-            # Get seller's property IDs (minimal limit for fastest response)
-            properties = await db.select("properties", filters={"added_by": user_id}, limit=20)  # Reduced from 50 to 20
+            # Get seller's property IDs - increase limit to get all properties for inquiries
+            properties = await db.select("properties", filters={"added_by": user_id}, limit=1000)  # Increased to get all properties
             property_ids = [p.get("id") for p in (properties or [])]
             
             if not property_ids:

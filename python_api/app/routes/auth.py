@@ -247,9 +247,14 @@ async def login(payload: LoginRequest, response: Response, role: Optional[str] =
                 timeout=1.5  # Reduced to 1.5 seconds for faster failure
             )
             if not users:
+                print(f"[AUTH] No user found with email: {payload.email.lower()}")
                 raise HTTPException(status_code=401, detail="Invalid email or password")
             
             user: Dict[str, Any] = users[0]
+            print(f"[AUTH] User found: {user.get('email')}, id: {user.get('id')}, status: {user.get('status')}, verification_status: {user.get('verification_status')}")
+            password_hash_field = user.get('password_hash') or user.get('hashed_password')
+            print(f"[AUTH] User has password_hash: {bool(password_hash_field)}, hash length: {len(password_hash_field) if password_hash_field else 0}")
+            print(f"[AUTH] User fields available: {list(user.keys())}")
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="Database timeout - please try again")
         except HTTPException:
@@ -257,12 +262,36 @@ async def login(payload: LoginRequest, response: Response, role: Optional[str] =
         except Exception as db_error:
             raise HTTPException(status_code=500, detail="Login failed due to database error")
         
+        # Check if password_hash exists (try both field names for backward compatibility)
+        password_hash = user.get("password_hash") or user.get("hashed_password")
+        if not password_hash:
+            print(f"[AUTH] User {payload.email} has no password_hash in database")
+            print(f"[AUTH] Available user fields: {list(user.keys())}")
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        # Trim password to handle whitespace issues
+        password = payload.password.strip() if payload.password else ""
+        if not password:
+            print(f"[AUTH] Empty password provided for: {payload.email}")
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        # Trim password_hash in case it has whitespace
+        password_hash = password_hash.strip() if isinstance(password_hash, str) else password_hash
+        
         try:
-            if not verify_password(payload.password, user["password_hash"]):
+            if not verify_password(password, password_hash):
                 print(f"[AUTH] Invalid password for: {payload.email}")
+                print(f"[AUTH] Password hash exists: {bool(password_hash)}, hash length: {len(password_hash) if password_hash else 0}")
+                print(f"[AUTH] Password hash starts with: {password_hash[:20] if password_hash and len(password_hash) > 20 else password_hash}")
                 raise HTTPException(status_code=401, detail="Invalid email or password")
+        except HTTPException:
+            raise
         except Exception as pwd_error:
             print(f"[AUTH] Password verification error: {pwd_error}")
+            print(f"[AUTH] Error type: {type(pwd_error).__name__}")
+            print(f"[AUTH] Error details: {str(pwd_error)}")
+            import traceback
+            print(f"[AUTH] Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=401, detail="Authentication failed")
         
         # Validate user role if specified
@@ -275,6 +304,8 @@ async def login(payload: LoginRequest, response: Response, role: Optional[str] =
             )
         
         # Check if user is approved by admin (for all user types)
+        # NOTE: We check this AFTER password verification to avoid revealing user existence
+        # But we provide specific error messages for status issues
         user_status = user.get("status", "pending")
         verification_status = user.get("verification_status", "pending")
         

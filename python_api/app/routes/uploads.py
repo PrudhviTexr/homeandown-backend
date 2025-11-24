@@ -126,14 +126,15 @@ async def upload_file(
         current_user_id = claims.get("sub") if claims else None
         
         # Check for API key as fallback if no user authentication
+        api_key_valid = False
         if not current_user_id and request:
-            from ..core.security import require_api_key
             try:
                 api_key = request.headers.get("X-API-Key")
                 if api_key:
                     from ..core.config import settings
                     if api_key == settings.PYTHON_API_KEY:
-                        # API key is valid, allow upload but still need entity_id
+                        # API key is valid, allow upload
+                        api_key_valid = True
                         print(f"[UPLOAD] API key authentication used")
                     else:
                         print(f"[UPLOAD] Invalid API key provided")
@@ -145,11 +146,27 @@ async def upload_file(
         # This allows uploading images before the property is created
         if entity_id and entity_id != "0" and entity_id.strip():
             final_entity_id = entity_id
+            print(f"[UPLOAD] Using provided entity_id: {final_entity_id}")
         elif current_user_id:
             # For new properties, use user ID as temporary entity_id
             # The property will be linked later when the property is created
             final_entity_id = current_user_id
             print(f"[UPLOAD] Using authenticated user ID as entity_id for new property upload: {final_entity_id}")
+        elif api_key_valid:
+            # API key is valid - allow uploads
+            # For property images uploaded before property creation, entity_id can be empty
+            # The images will be linked to the property when it's created
+            if entity_id and entity_id.strip() and entity_id != "0":
+                final_entity_id = entity_id
+                print(f"[UPLOAD] Using entity_id with API key authentication: {final_entity_id}")
+            elif entity_type == 'property':
+                # For property images, allow empty entity_id with API key
+                # Use a temporary UUID that will be replaced when property is created
+                import uuid
+                final_entity_id = str(uuid.uuid4())  # Generate temporary UUID for storage
+                print(f"[UPLOAD] API key upload for new property - using temporary entity_id: {final_entity_id}")
+            else:
+                raise HTTPException(status_code=400, detail="entity_id is required for this entity type. Please provide entity_id.")
         else:
             raise HTTPException(status_code=400, detail="entity_id is required for anonymous uploads. Please provide entity_id or ensure you are logged in.")
 

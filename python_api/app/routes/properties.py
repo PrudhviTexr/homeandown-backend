@@ -506,10 +506,18 @@ async def get_properties(
 
 @router.post("")
 @router.post("/")
-async def create_property(property_data: dict, request: Request = None):
+async def create_property(request: Request):
     try:
+        # Parse JSON body from request
+        try:
+            property_data = await request.json()
+        except Exception as json_error:
+            print(f"[PROPERTIES] Failed to parse JSON body: {json_error}")
+            raise HTTPException(status_code=400, detail="Invalid JSON in request body")
+        
         print(f"[PROPERTIES] Creating new property")
         print(f"[PROPERTIES] Received data keys: {list(property_data.keys())}")
+        print(f"[PROPERTIES] Property data sample: title={property_data.get('title')}, type={property_data.get('property_type')}")
         
         # Try to get user_id from authentication if available
         # Whoever creates the property is the owner (owner_id and added_by)
@@ -570,11 +578,27 @@ async def create_property(property_data: dict, request: Request = None):
                     
                     elif user_type == 'admin':
                         # Admin creates property: can assign owner_id and assigned_agent_id from form
-                        # If owner_id not provided, admin becomes the owner
+                        # If owner_id not provided, only set it if user_id is a valid UUID
+                        # For dev-admin (id: 'dev-admin'), don't set owner_id - it must be provided from form
                         if not property_data.get('owner_id'):
-                            property_data['owner_id'] = user_id
+                            # Check if user_id is a valid UUID
+                            try:
+                                uuid.UUID(user_id)
+                                property_data['owner_id'] = user_id
+                                print(f"[PROPERTIES] Admin creating property - using admin user ID as owner_id: {user_id}")
+                            except (ValueError, TypeError):
+                                print(f"[PROPERTIES] ⚠️ Admin user_id is not a valid UUID: {user_id} - owner_id must be provided from form")
+                                # Don't set owner_id - it must be provided from the form or will be null
+                        
+                        # Only set added_by if user_id is a valid UUID
                         if not property_data.get('added_by'):
-                            property_data['added_by'] = user_id
+                            try:
+                                uuid.UUID(user_id)
+                                property_data['added_by'] = user_id
+                            except (ValueError, TypeError):
+                                print(f"[PROPERTIES] ⚠️ Cannot set added_by with invalid UUID: {user_id}")
+                                # Don't set added_by if user_id is not a valid UUID
+                        
                         # assigned_agent_id can be set from form by admin
                         if property_data.get('assigned_agent_id'):
                             property_data['agent_id'] = property_data.get('assigned_agent_id')
@@ -582,18 +606,52 @@ async def create_property(property_data: dict, request: Request = None):
                     
                     else:
                         # Buyer or other user types: user becomes owner
-                        if not property_data.get('owner_id'):
-                            property_data['owner_id'] = user_id
-                        if not property_data.get('added_by'):
-                            property_data['added_by'] = user_id
-                        print(f"[PROPERTIES] {user_type} creating property - set owner_id={property_data.get('owner_id')}, added_by={user_id}")
+                        # Check if user_id is a valid UUID before using it
+                        try:
+                            uuid.UUID(user_id)
+                            if not property_data.get('owner_id'):
+                                property_data['owner_id'] = user_id
+                            if not property_data.get('added_by'):
+                                property_data['added_by'] = user_id
+                            print(f"[PROPERTIES] {user_type} creating property - set owner_id={property_data.get('owner_id')}, added_by={user_id}")
+                        except (ValueError, TypeError):
+                            print(f"[PROPERTIES] ⚠️ User ID is not a valid UUID: {user_id} - cannot set owner_id or added_by")
+                            # Don't set owner_id or added_by if user_id is not a valid UUID
             except Exception as auth_error:
                 print(f"[PROPERTIES] Could not extract user from request: {auth_error}")
                 # Continue without user_id if auth fails
         
+        # Validate that owner_id is provided if it's required
+        # For dev-admin or other cases where owner_id might not be set, check if it's required
+        if not property_data.get('owner_id'):
+            print(f"[PROPERTIES] ⚠️ WARNING: owner_id is not set. Property may fail if owner_id is required in database.")
+            # Try to find a default owner or raise an error
+            # For now, we'll allow it to be None and let the database handle it
+            # If the database requires it, the insert will fail with a clear error
+        
         # Generate unique ID
         property_id = str(uuid.uuid4())
         property_data['id'] = property_id
+        
+        # CRITICAL: Remove empty custom_id from frontend (if any) - we always generate our own
+        # This prevents conflicts with existing properties that have empty custom_id
+        if 'custom_id' in property_data and (not property_data.get('custom_id') or property_data.get('custom_id') == '' or property_data.get('custom_id') is None):
+            del property_data['custom_id']
+            print(f"[PROPERTIES] Removed empty/null custom_id from frontend data")
+        
+        # Generate custom_id for property (required, must be unique)
+        # Always generate a new one for new properties (never reuse frontend's custom_id)
+        try:
+            from ..services.admin_service import generate_property_custom_id
+            custom_id = await generate_property_custom_id()
+            property_data['custom_id'] = custom_id
+            print(f"[PROPERTIES] Generated custom_id for property: {custom_id}")
+        except Exception as cid_error:
+            print(f"[PROPERTIES] Failed to generate custom_id: {cid_error}")
+            # Fallback: use timestamp-based custom_id to ensure uniqueness
+            import time
+            property_data['custom_id'] = f"PROP{int(time.time() * 1000) % 100000000:08d}"
+            print(f"[PROPERTIES] Using fallback custom_id: {property_data['custom_id']}")
         
         # Set timestamps
         now = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -947,7 +1005,8 @@ async def create_property(property_data: dict, request: Request = None):
             'country', 'lift_available', 'power_backup', 'washrooms', 'management_type',
             'parking_spaces', 'total_floors_building', 'floor_number', 'balconies_count',
             'built_up_area', 'carpet_area', 'plot_area', 'rate_per_sqft_value',
-            'rate_per_sqyd_value', 'maintenance_charges_value', 'security_deposit_value',
+            'rate_per_sqyd_value', 'rate_per_acre',  # CRITICAL: rate_per_acre doesn't exist in DB
+            'maintenance_charges_value', 'security_deposit_value',
             'monthly_rent_value', 'price_value', 'area_sqft_value', 'area_sqyd_value',
             'area_acres_value', 'bedrooms_count', 'bathrooms_count', 'total_floors_count',
             'available_floor_number', 'parking_slots_count', 'floor_count_value', 'floor_value',
@@ -964,9 +1023,87 @@ async def create_property(property_data: dict, request: Request = None):
                 del property_data[field]
                 print(f"[PROPERTIES] Removed unsupported field: {field}")
         
+        # CRITICAL: Remove custom_id from frontend if it's empty (we'll generate our own)
+        # This prevents frontend from sending empty custom_id which would conflict with existing empty custom_id
+        if 'custom_id' in property_data and (not property_data.get('custom_id') or property_data.get('custom_id') == ''):
+            del property_data['custom_id']
+            print(f"[PROPERTIES] Removed empty custom_id from frontend - will generate new one")
+        
+        # CRITICAL: Ensure custom_id is set and not empty (required for unique constraint)
+        if not property_data.get('custom_id') or property_data.get('custom_id') == '' or property_data.get('custom_id') is None:
+            try:
+                from ..services.admin_service import generate_property_custom_id
+                custom_id = await generate_property_custom_id()
+                property_data['custom_id'] = custom_id
+                print(f"[PROPERTIES] Generated custom_id for property (before insert): {custom_id}")
+            except Exception as cid_error:
+                print(f"[PROPERTIES] Failed to generate custom_id before insert: {cid_error}")
+                # Fallback: use UUID-based custom_id to ensure uniqueness
+                import time
+                property_data['custom_id'] = f"PROP{int(time.time() * 1000) % 100000000:08d}"
+                print(f"[PROPERTIES] Using fallback custom_id before insert: {property_data['custom_id']}")
+        
+        # CRITICAL: Validate and remove invalid UUID fields before database insert
+        # UUID fields that must be valid UUIDs or None
+        uuid_fields = ['owner_id', 'seller_id', 'assigned_agent_id', 'agent_id', 'added_by']
+        for field in uuid_fields:
+            if field in property_data and property_data[field] is not None:
+                try:
+                    # Try to validate as UUID
+                    uuid.UUID(str(property_data[field]))
+                except (ValueError, TypeError):
+                    # Invalid UUID - remove it or set to None
+                    print(f"[PROPERTIES] ⚠️ Invalid UUID for {field}: {property_data[field]} - removing it")
+                    if field == 'added_by':
+                        # added_by can be None, but other fields should be removed
+                        property_data[field] = None
+                    else:
+                        del property_data[field]
+        
+        # CRITICAL: Handle area fields based on area_unit
+        # Only keep the relevant area field based on area_unit, remove others
+        area_unit = property_data.get('area_unit', 'sqft')
+        
+        if area_unit == 'sqft':
+            # For sqft: ensure area_sqft exists, remove area_sqyd and area_acres
+            if 'area_sqyd' in property_data:
+                del property_data['area_sqyd']
+            if 'area_acres' in property_data:
+                del property_data['area_acres']
+            # Ensure area_sqft is set
+            if 'area_sqft' not in property_data or property_data.get('area_sqft') is None or property_data.get('area_sqft') == '':
+                property_data['area_sqft'] = 0
+                print(f"[PROPERTIES] ⚠️ Set area_sqft to 0 (was missing/None/empty)")
+        elif area_unit == 'sqyd':
+            # For sqyd: ensure area_sqyd exists, remove area_sqft and area_acres
+            if 'area_sqft' in property_data:
+                # Convert area_sqyd to area_sqft for database (1 sqyd = 9 sqft)
+                area_sqyd = property_data.get('area_sqyd', 0)
+                try:
+                    area_sqyd_float = float(area_sqyd) if area_sqyd else 0
+                    property_data['area_sqft'] = area_sqyd_float * 9  # Convert to sqft
+                    print(f"[PROPERTIES] Converted {area_sqyd_float} sqyd to {property_data['area_sqft']} sqft")
+                except (ValueError, TypeError):
+                    property_data['area_sqft'] = 0
+                del property_data['area_sqyd']
+            if 'area_acres' in property_data:
+                del property_data['area_acres']
+        elif area_unit == 'acres':
+            # For acres: convert to area_sqft (1 acre = 43560 sqft), remove area_sqyd
+            if 'area_acres' in property_data:
+                area_acres = property_data.get('area_acres', 0)
+                try:
+                    area_acres_float = float(area_acres) if area_acres else 0
+                    property_data['area_sqft'] = area_acres_float * 43560  # Convert to sqft
+                    print(f"[PROPERTIES] Converted {area_acres_float} acres to {property_data['area_sqft']} sqft")
+                except (ValueError, TypeError):
+                    property_data['area_sqft'] = 0
+                del property_data['area_acres']
+            if 'area_sqyd' in property_data:
+                del property_data['area_sqyd']
+        
         # CRITICAL: Final safety check - ensure area_sqft is never None (database requires NOT NULL)
         # This MUST be the last check before database insert
-        # Check if area_sqft is missing, None, empty string, or invalid
         if 'area_sqft' not in property_data or property_data.get('area_sqft') is None or property_data.get('area_sqft') == '':
             property_data['area_sqft'] = 0
             print(f"[PROPERTIES] ⚠️ Final safety check: Set area_sqft to 0 (was missing/None/empty)")
@@ -1014,183 +1151,179 @@ async def create_property(property_data: dict, request: Request = None):
                 property_data['area_sqft'] = 0.0
                 print(f"[PROPERTIES] ⚠️ PRE-INSERT CHECK: Set area_sqft to 0.0 before database insert")
             
+            # CRITICAL FINAL CHECK: Ensure custom_id is set and not empty before insert
+            # This is the absolute last check before database insert
+            if not property_data.get('custom_id') or property_data.get('custom_id') == '' or property_data.get('custom_id') is None:
+                print(f"[PROPERTIES] ⚠️ CRITICAL: custom_id is empty before insert! Generating now...")
+                try:
+                    from ..services.admin_service import generate_property_custom_id
+                    custom_id = await generate_property_custom_id()
+                    property_data['custom_id'] = custom_id
+                    print(f"[PROPERTIES] ✅ Generated custom_id at final check: {custom_id}")
+                except Exception as cid_error:
+                    print(f"[PROPERTIES] ⚠️ Failed to generate custom_id at final check: {cid_error}")
+                    # Fallback: use timestamp-based ID to ensure uniqueness
+                    import time
+                    property_data['custom_id'] = f"PROP{int(time.time() * 1000) % 100000000:08d}"
+                    print(f"[PROPERTIES] ✅ Using fallback custom_id at final check: {property_data['custom_id']}")
+            else:
+                print(f"[PROPERTIES] ✅ custom_id is set: {property_data.get('custom_id')}")
+            
+            print(f"[PROPERTIES] Attempting to insert property into database...")
+            print(f"[PROPERTIES] Property ID: {property_id}")
+            print(f"[PROPERTIES] Custom ID: {property_data.get('custom_id')}")
+            print(f"[PROPERTIES] Title: {property_data.get('title')}")
+            
             result = await db.insert("properties", property_data)
+            print(f"[PROPERTIES] ✅ Database insert successful! Result: {result}")
             print(f"[PROPERTIES] Property created successfully with ID: {property_id}")
             
             # Verify the property was saved correctly
-            saved_property = await db.select("properties", filters={"id": property_id})
-            if saved_property and len(saved_property) > 0:
-                prop = saved_property[0]
-                print(f"[PROPERTIES] ✅ VERIFICATION - Property saved to database:")
-                print(f"  - Title: {prop.get('title')}")
-                print(f"  - Coordinates: lat={prop.get('latitude')}, lng={prop.get('longitude')}")
-                print(f"  - Images: {len(prop.get('images', []))} images")
-                print(f"  - Location: {prop.get('city')}, {prop.get('state')}")
-            else:
-                print(f"[PROPERTIES] ❌ WARNING: Property not found after creation!")
-        except Exception as verify_error:
-            print(f"[PROPERTIES] ❌ Error verifying saved property: {verify_error}")
-            
-            # Auto-assign agent if property doesn't have one
-            if not property_data.get('agent_id'):
-                try:
-                    from ..services.agent_assignment import AgentAssignmentService
-                    assignment_result = await AgentAssignmentService.assign_agent_to_property(property_id)
-                    if assignment_result.get('success'):
-                        print(f"[PROPERTIES] Agent assigned: {assignment_result.get('message')}")
-                    else:
-                        print(f"[PROPERTIES] Agent assignment failed: {assignment_result.get('error')}")
-                except Exception as agent_error:
-                    print(f"[PROPERTIES] Agent assignment error: {agent_error}")
-            
-            # Handle sections separately if provided
-            if sections_data is not None:
-                if isinstance(sections_data, str):
-                    import json
-                    sections_data = json.loads(sections_data)
-                
-                if sections_data and sections_data != []:
-                    to_insert = []
-                    for i, section in enumerate(sections_data):
-                        section_data = {
-                            'id': str(uuid.uuid4()),
-                            'property_id': property_id,
-                            'title': section.get('title', f'Section {i+1}'),
-                            'content': section.get('content', ''),
-                            'content_type': section.get('content_type', 'text'),
-                            'sort_order': section.get('sort_order', i),
-                            'created_at': now,
-                            'updated_at': now
-                        }
-                        to_insert.append(section_data)
-                    
-                    if to_insert:
-                        for section_data in to_insert:
-                            await db.insert("property_sections", section_data)
-                        print(f"[PROPERTIES] Added {len(to_insert)} sections to property")
-            
-            # Send property submission email to user
             try:
-                # Get user details for email
-                user_data = await db.select("users", filters={"id": property_data.get('added_by')})
-                if user_data:
-                    user = user_data[0]
-                    user_email = user.get('email')
-                    user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-                    
-                    if user_email:
-                        email_html = f"""
-                        <html>
-                        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-                            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                                <h2 style="color: #2563eb;">Property Submitted Successfully!</h2>
-                                <p>Hello {user_name},</p>
-                                <p>Your property "<strong>{property_data.get('title', 'Property')}</strong>" has been submitted successfully and is now waiting for admin approval.</p>
-                                
-                                <div style="background-color: #f9fafb; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                                    <h3 style="margin-top: 0; color: #374151;">Property Details:</h3>
-                                    <p><strong>Title:</strong> {property_data.get('title', 'N/A')}</p>
-                                    <p><strong>Type:</strong> {property_data.get('property_type', 'N/A').replace('_', ' ').title()}</p>
-                                    <p><strong>Listing Type:</strong> {property_data.get('listing_type', 'N/A')}</p>
-                                    <p><strong>Location:</strong> {property_data.get('city', 'N/A')}, {property_data.get('state', 'N/A')}</p>
-                                    <p><strong>Area:</strong> {property_data.get('area_sqft', 'N/A')} sq ft</p>
-                                    {f'<p><strong>Price:</strong> ₹{property_data.get("price", "N/A")}</p>' if property_data.get('listing_type') == 'SALE' and property_data.get('price') else ''}
-                                    {f'<p><strong>Monthly Rent:</strong> ₹{property_data.get("monthly_rent", "N/A")}</p>' if property_data.get('listing_type') == 'RENT' and property_data.get('monthly_rent') else ''}
-                                </div>
-                                
-                                <div style="background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 5px; padding: 15px; margin: 20px 0;">
-                                    <p style="margin: 0; color: #92400e;"><strong>Next Steps:</strong></p>
-                                    <ul style="margin: 10px 0 0 0; color: #92400e;">
-                                        <li>Our admin team will review your property</li>
-                                        <li>You'll receive an email once approved</li>
-                                        <li>Your property will then be visible to buyers</li>
-                                    </ul>
-                                </div>
-                                
-                                <p>Thank you for choosing Home & Own!</p>
-                                <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
-                                <p style="color: #999; font-size: 12px;">© 2025 Home & Own. All rights reserved.</p>
-                            </div>
-                        </body>
-                        </html>
-                        """
-                        
-                        from ..services.email import send_email
-                        await send_email(
-                            to=user_email,
-                            subject=f"Property Submitted - {property_data.get('title', 'Property')} - Home & Own",
-                            html=email_html
-                        )
-                        print(f"[PROPERTIES] Property submission email sent to user: {user_email}")
-            except Exception as email_error:
-                print(f"[PROPERTIES] Failed to send property submission email: {email_error}")
-            
-            # Send admin notification for new property submission
-            try:
-                from ..services.admin_notification_service import AdminNotificationService
-                
-                # Get user data for the property owner
-                user_data = {}
-                if property_data.get('added_by'):
-                    try:
-                        users = await db.select("users", filters={"id": property_data.get('added_by')})
-                        if users:
-                            user_data = users[0]
-                    except Exception as user_error:
-                        print(f"[PROPERTIES] Failed to get user data for admin notification: {user_error}")
-                
-                await AdminNotificationService.notify_property_submission(property_data, user_data)
-                print(f"[PROPERTIES] Admin notification sent for new property: {property_data.get('title')}")
-            except Exception as notify_error:
-                print(f"[PROPERTIES] Failed to send admin notification: {notify_error}")
-                # Don't fail property creation if notification fails
-            
-            return {"id": property_id, "message": "Property created successfully"}
-            
+                saved_property = await db.select("properties", filters={"id": property_id})
+                if saved_property and len(saved_property) > 0:
+                    prop = saved_property[0]
+                    print(f"[PROPERTIES] ✅ VERIFICATION - Property saved to database:")
+                    print(f"  - Title: {prop.get('title')}")
+                    print(f"  - Coordinates: lat={prop.get('latitude')}, lng={prop.get('longitude')}")
+                    print(f"  - Images: {len(prop.get('images', []))} images")
+                    print(f"  - Location: {prop.get('city')}, {prop.get('state')}")
+                    print(f"  - Status: {prop.get('status')}")
+                else:
+                    print(f"[PROPERTIES] ❌ WARNING: Property not found after creation!")
+                    print(f"[PROPERTIES] Attempted to find property with ID: {property_id}")
+            except Exception as verify_error:
+                print(f"[PROPERTIES] ❌ Error verifying saved property: {verify_error}")
+                import traceback
+                print(traceback.format_exc())
+                # Don't fail the request if verification fails - property might still be saved
         except Exception as insert_error:
-            print(f"[PROPERTIES] Property creation failed: {insert_error}")
-            print(f"[PROPERTIES] Property data that failed:")
-            for key, value in property_data.items():
+            print(f"[PROPERTIES] ❌ Database insert failed: {insert_error}")
+            import traceback
+            print(f"[PROPERTIES] Full traceback:")
+            print(traceback.format_exc())
+            print(f"[PROPERTIES] Property data that failed to insert:")
+            for key, value in list(property_data.items())[:10]:  # Print first 10 fields
                 print(f"  {key}: {value} (type: {type(value).__name__})")
-            
-            # Try to save partial data in case of field mismatch
+            # Re-raise the error so it's caught by the outer exception handler
+            raise
+        
+        # Post-insert operations (only if insert succeeded)
+        # Auto-assign agent if property doesn't have one
+        if not property_data.get('agent_id'):
             try:
-                # Create a minimal property record
-                minimal_data = {
-                    "id": property_id,
-                    "title": property_data.get('title', 'Untitled Property'),
-                    "description": property_data.get('description', 'Property description'),
-                    "property_type": property_data.get('property_type', 'independent_house'),
-                    "listing_type": property_data.get('listing_type', 'SALE'),
-                    "area_sqft": property_data.get('area_sqft', 0),
-                    "address": property_data.get('address', 'NA'),
-                    "city": property_data.get('city', 'NA'),
-                    "state": property_data.get('state', 'NA'),
-                    "zip_code": property_data.get('zip_code', 'NA'),
-                    "price": property_data.get('price'),
-                    "monthly_rent": property_data.get('monthly_rent'),
-                    "status": "pending",
-                    "created_at": now,
-                    "updated_at": now
-                }
+                from ..services.agent_assignment import AgentAssignmentService
+                assignment_result = await AgentAssignmentService.assign_agent_to_property(property_id)
+                if assignment_result.get('success'):
+                    print(f"[PROPERTIES] Agent assigned: {assignment_result.get('message')}")
+                else:
+                    print(f"[PROPERTIES] Agent assignment failed: {assignment_result.get('error')}")
+            except Exception as agent_error:
+                print(f"[PROPERTIES] Agent assignment error: {agent_error}")
+        
+        # Handle sections separately if provided
+        if sections_data is not None:
+            if isinstance(sections_data, str):
+                import json
+                sections_data = json.loads(sections_data)
+            
+            if sections_data and sections_data != []:
+                to_insert = []
+                for i, section in enumerate(sections_data):
+                    section_data = {
+                        'id': str(uuid.uuid4()),
+                        'property_id': property_id,
+                        'title': section.get('title', f'Section {i+1}'),
+                        'content': section.get('content', ''),
+                        'content_type': section.get('content_type', 'text'),
+                        'sort_order': section.get('sort_order', i),
+                        'created_at': now,
+                        'updated_at': now
+                    }
+                    to_insert.append(section_data)
                 
-                # Remove None values
-                minimal_data = {k: v for k, v in minimal_data.items() if v is not None}
+                if to_insert:
+                    for section_data in to_insert:
+                        await db.insert("property_sections", section_data)
+                    print(f"[PROPERTIES] Added {len(to_insert)} sections to property")
+        
+        # Send property submission email to user
+        try:
+            # Get user details for email
+            user_data = await db.select("users", filters={"id": property_data.get('added_by')})
+            if user_data:
+                user = user_data[0]
+                user_email = user.get('email')
+                user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
                 
-                result = await db.insert("properties", minimal_data)
-                print(f"[PROPERTIES] Minimal property created with ID: {property_id}")
-                
-                return {
-                    "success": True,
-                    "message": "Property created with minimal data due to field validation issues",
-                    "property_id": property_id,
-                    "data": result,
-                    "warning": "Some fields were not saved due to validation errors"
-                }
-                
-            except Exception as minimal_error:
-                print(f"[PROPERTIES] Minimal property creation also failed: {minimal_error}")
-                raise HTTPException(status_code=500, detail=f"Failed to create property: {str(insert_error)}")
+                if user_email:
+                    email_html = f"""
+                    <html>
+                    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                            <h2 style="color: #2563eb;">Property Submitted Successfully!</h2>
+                            <p>Hello {user_name},</p>
+                            <p>Your property "<strong>{property_data.get('title', 'Property')}</strong>" has been submitted successfully and is now waiting for admin approval.</p>
+                            
+                            <div style="background-color: #f9fafb; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                                <h3 style="margin-top: 0; color: #374151;">Property Details:</h3>
+                                <p><strong>Title:</strong> {property_data.get('title', 'N/A')}</p>
+                                <p><strong>Type:</strong> {property_data.get('property_type', 'N/A').replace('_', ' ').title()}</p>
+                                <p><strong>Listing Type:</strong> {property_data.get('listing_type', 'N/A')}</p>
+                                <p><strong>Location:</strong> {property_data.get('city', 'N/A')}, {property_data.get('state', 'N/A')}</p>
+                                <p><strong>Area:</strong> {property_data.get('area_sqft', 'N/A')} sq ft</p>
+                                {f'<p><strong>Price:</strong> ₹{property_data.get("price", "N/A")}</p>' if property_data.get('listing_type') == 'SALE' and property_data.get('price') else ''}
+                                {f'<p><strong>Monthly Rent:</strong> ₹{property_data.get("monthly_rent", "N/A")}</p>' if property_data.get('listing_type') == 'RENT' and property_data.get('monthly_rent') else ''}
+                            </div>
+                            
+                            <div style="background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 5px; padding: 15px; margin: 20px 0;">
+                                <p style="margin: 0; color: #92400e;"><strong>Next Steps:</strong></p>
+                                <ul style="margin: 10px 0 0 0; color: #92400e;">
+                                    <li>Our admin team will review your property</li>
+                                    <li>You'll receive an email once approved</li>
+                                    <li>Your property will then be visible to buyers</li>
+                                </ul>
+                            </div>
+                            
+                            <p>Thank you for choosing Home & Own!</p>
+                            <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
+                            <p style="color: #999; font-size: 12px;">© 2025 Home & Own. All rights reserved.</p>
+                        </div>
+                    </body>
+                    </html>
+                    """
+                    
+                    from ..services.email import send_email
+                    await send_email(
+                        to=user_email,
+                        subject=f"Property Submitted - {property_data.get('title', 'Property')} - Home & Own",
+                        html=email_html
+                    )
+                    print(f"[PROPERTIES] Property submission email sent to user: {user_email}")
+        except Exception as email_error:
+            print(f"[PROPERTIES] Failed to send property submission email: {email_error}")
+        
+        # Send admin notification for new property submission
+        try:
+            from ..services.admin_notification_service import AdminNotificationService
+            
+            # Get user data for the property owner
+            user_data = {}
+            if property_data.get('added_by'):
+                try:
+                    users = await db.select("users", filters={"id": property_data.get('added_by')})
+                    if users:
+                        user_data = users[0]
+                except Exception as user_error:
+                    print(f"[PROPERTIES] Failed to get user data for admin notification: {user_error}")
+            
+            await AdminNotificationService.notify_property_submission(property_data, user_data)
+            print(f"[PROPERTIES] Admin notification sent for new property: {property_data.get('title')}")
+        except Exception as notify_error:
+            print(f"[PROPERTIES] Failed to send admin notification: {notify_error}")
+            # Don't fail property creation if notification fails
+        
+        return {"id": property_id, "message": "Property created successfully"}
             
     except HTTPException:
         raise

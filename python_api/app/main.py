@@ -116,9 +116,10 @@ async def startup_event():
             print("[DB] Default admin not found, creating...")
             await db.insert('users', {
                 'email': ADMIN_EMAIL,
-                'hashed_password': get_password_hash(ADMIN_PASSWORD),
+                'password_hash': get_password_hash(ADMIN_PASSWORD),  # Fixed: use password_hash not hashed_password
                 'user_type': 'admin',
                 'first_name': 'Admin',
+                'last_name': 'User',
                 'status': 'active',
                 'verification_status': 'verified',
                 'email_verified': True
